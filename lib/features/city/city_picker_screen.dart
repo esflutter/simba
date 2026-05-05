@@ -6,12 +6,17 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
-import '../../core/widgets/app_back_button.dart';
-import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
+import '../../data/models/models.dart';
+
+// Города-миллионники России по убыванию населения
+const _millionCityIds = [
+  'msk', 'spb', 'nsk', 'ekb', 'kzn', 'nn',
+  'krs', 'chl', 'sam', 'ufa', 'rnd', 'krd', 'omk',
+];
 
 class CityPickerScreen extends ConsumerStatefulWidget {
   const CityPickerScreen({super.key});
@@ -20,100 +25,246 @@ class CityPickerScreen extends ConsumerStatefulWidget {
   ConsumerState<CityPickerScreen> createState() => _CityPickerScreenState();
 }
 
-class _CityPickerScreenState extends ConsumerState<CityPickerScreen> {
+class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
+    with SingleTickerProviderStateMixin {
   final _searchCtrl = TextEditingController();
+  late final AnimationController _animCtrl;
+  late final Animation<double> _anim;
   String _query = '';
   String? _selectedId;
+  bool _searching = false;
+
+  List<City> get _allCities =>
+      MockData.cities.where((c) => _millionCityIds.contains(c.id)).toList();
+
+  List<City> get _filtered => _query.isEmpty
+      ? _allCities
+      : _allCities
+          .where((c) => c.name.toLowerCase().contains(_query.toLowerCase()))
+          .toList();
+
+  @override
+  void initState() {
+    super.initState();
+    _animCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 350),
+    );
+    _anim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeInOut);
+  }
+
+  void _onFieldTap() {
+    if (!_searching) {
+      setState(() => _searching = true);
+      _animCtrl.forward();
+    }
+  }
+
+  void _closeSearch() {
+    FocusScope.of(context).unfocus();
+    if (_selectedId == null) _searchCtrl.clear();
+    setState(() {
+      _searching = false;
+      _query = '';
+    });
+    _animCtrl.reverse();
+  }
 
   @override
   void dispose() {
     _searchCtrl.dispose();
+    _animCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final filtered = MockData.cities
-        .where((c) => c.name.toLowerCase().contains(_query.toLowerCase()))
-        .toList();
-
     final canContinue = _selectedId != null;
-
     return Scaffold(
+      backgroundColor: AppColors.background,
       body: SafeArea(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const AppBackButton(),
-              SizedBox(height: 16.h),
-              Center(
-                child: Container(
-                  width: 56.w,
-                  height: 56.r,
-                  decoration: BoxDecoration(
-                    border: Border.all(color: AppColors.primary, width: 3),
-                    shape: BoxShape.circle,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // ── Шапка: скрывается при поиске ──
+            SizeTransition(
+              axisAlignment: 1,
+              sizeFactor: ReverseAnimation(_anim),
+              child: FadeTransition(
+                opacity: ReverseAnimation(_anim),
+                child: Padding(
+                  padding: EdgeInsets.fromLTRB(16.w, 70.h, 16.w, 0),
+                  child: Column(
+                    children: [
+                      Center(
+                        child: Image.asset(
+                          'assets/images/icon_location.webp',
+                          width: 80.r,
+                          height: 80.r,
+                        ),
+                      ),
+                      SizedBox(height: 24.h),
+                      Text(
+                        'Укажите город',
+                        textAlign: TextAlign.center,
+                        style: AppText.h2().copyWith(letterSpacing: -0.10),
+                      ),
+                      SizedBox(height: 9.h),
+                      Text(
+                        'Покажем предложения и исполнителей в вашем городе',
+                        textAlign: TextAlign.center,
+                        style: AppText.body().copyWith(
+                          color: Colors.black.withValues(alpha: 0.60),
+                          height: 1.38,
+                        ),
+                      ),
+                      SizedBox(height: 28.h),
+                    ],
                   ),
-                  child: Icon(IconsaxPlusLinear.location, color: AppColors.primary, size: 36.r),
                 ),
               ),
-              SizedBox(height: 16.h),
-              Center(child: Text('Укажите город', style: AppText.h2())),
-              SizedBox(height: 8.h),
-              Text(
-                'Покажем предложения и исполнителей в вашем городе',
-                textAlign: TextAlign.center,
-                style: AppText.body(color: AppColors.textSecondary),
-              ),
-              SizedBox(height: 24.h),
-              AppTextField(
+            ),
+
+            // ── Строка поиска: кнопка «назад» + поле ──
+            AnimatedBuilder(
+              animation: _anim,
+              builder: (context, child) {
+                return Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16.w),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(height: _anim.value * 8.h),
+                      ClipRect(
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          heightFactor: _anim.value,
+                          child: Opacity(
+                            opacity: _anim.value,
+                            child: GestureDetector(
+                              onTap: _closeSearch,
+                              child: Padding(
+                                padding: EdgeInsets.only(bottom: 16.h),
+                                child: Icon(
+                                  Icons.arrow_back_ios_new_rounded,
+                                  size: 20.r,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      child!,
+                    ],
+                  ),
+                );
+              },
+              child: AppTextField(
                 label: 'Город или населённый пункт',
                 controller: _searchCtrl,
-                onChanged: (v) => setState(() => _query = v),
+                onTap: _onFieldTap,
+                onChanged: (v) => setState(() {
+                  if (!_searching) {
+                    _searching = true;
+                    _animCtrl.forward();
+                  }
+                  _query = v;
+                  _selectedId = null;
+                }),
               ),
-              SizedBox(height: 16.h),
-              Expanded(
-                child: filtered.isEmpty
-                    ? _NoCityFound(
-                        onRequest: () => _showRequestSheet(context),
-                      )
-                    : ListView.separated(
-                        padding: EdgeInsets.zero,
-                        itemCount: filtered.length,
-                        separatorBuilder: (_, _) => SizedBox(height: 8.h),
-                        itemBuilder: (_, i) {
-                          final c = filtered[i];
-                          final selected = c.id == _selectedId;
-                          return AppCard(
-                            color: selected ? AppColors.primarySoft : AppColors.surface,
-                            onTap: () => setState(() => _selectedId = c.id),
-                            padding: EdgeInsets.symmetric(horizontal: 20.w, vertical: 18.h),
-                            child: Row(
-                              children: [
-                                Expanded(child: Text(c.name, style: AppText.bodyLarge())),
-                                if (selected)
-                                  Icon(IconsaxPlusLinear.tick_circle,
-                                      color: AppColors.primary, size: 22.r),
-                              ],
-                            ),
-                          );
-                        },
+            ),
+
+            // ── Список городов: появляется снизу ──
+            Expanded(
+              child: FadeTransition(
+                opacity: _anim,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0, 0.08),
+                    end: Offset.zero,
+                  ).animate(_anim),
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 0),
+                    child: _filtered.isEmpty
+                        ? _NoCityFound(
+                            onRequest: () => _showRequestSheet(context))
+                        : ListView.separated(
+                            padding: EdgeInsets.only(bottom: 16.h),
+                            itemCount: _filtered.length,
+                            separatorBuilder: (context, index) =>
+                                SizedBox(height: 8.h),
+                            itemBuilder: (_, i) {
+                              final c = _filtered[i];
+                              final selected = c.id == _selectedId;
+                              return Material(
+                                color: selected
+                                    ? AppColors.primarySoft
+                                    : AppColors.surface,
+                                borderRadius: BorderRadius.circular(16.r),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(16.r),
+                                  onTap: () {
+                                    _searchCtrl.text = c.name;
+                                    setState(() => _selectedId = c.id);
+                                    _closeSearch();
+                                  },
+                                  child: SizedBox(
+                                    height: 48.h,
+                                    child: Padding(
+                                      padding: EdgeInsets.symmetric(
+                                          horizontal: 16.w),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            child: Text(
+                                              c.name,
+                                              style: AppText.body()
+                                                  .copyWith(height: 1.50),
+                                            ),
+                                          ),
+                                          if (selected)
+                                            Icon(
+                                              IconsaxPlusLinear.tick_circle,
+                                              color: AppColors.primary,
+                                              size: 22.r,
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ),
+              ),
+            ),
+
+            // ── Кнопка «Далее» ──
+            AnimatedSize(
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeInOut,
+              child: (_searching && !canContinue)
+                  ? const SizedBox.shrink()
+                  : Padding(
+                      padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
+                      child: PrimaryButton(
+                        label: 'Далее',
+                        onPressed: canContinue
+                            ? () {
+                                ref
+                                    .read(appControllerProvider.notifier)
+                                    .setCity(_selectedId!);
+                                context.go('/auth/phone');
+                              }
+                            : null,
                       ),
-              ),
-              SizedBox(height: 8.h),
-              PrimaryButton(
-                label: 'Далее',
-                onPressed: canContinue
-                    ? () {
-                        ref.read(appControllerProvider.notifier).setCity(_selectedId!);
-                        context.go('/auth/phone');
-                      }
-                    : null,
-              ),
-            ],
-          ),
+                    ),
+            ),
+          ],
         ),
       ),
     );
@@ -132,6 +283,7 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen> {
   }
 }
 
+
 class _NoCityFound extends StatelessWidget {
   const _NoCityFound({required this.onRequest});
   final VoidCallback onRequest;
@@ -143,6 +295,7 @@ class _NoCityFound extends StatelessWidget {
         padding: EdgeInsets.symmetric(horizontal: 16.w),
         child: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Icon(IconsaxPlusLinear.search_zoom_out,
                 size: 48.r, color: AppColors.textTertiary),
@@ -159,7 +312,7 @@ class _NoCityFound extends StatelessWidget {
               textAlign: TextAlign.center,
             ),
             SizedBox(height: 16.h),
-            SecondaryButton(label: 'Оставить заявку', onPressed: onRequest),
+            PrimaryButton(label: 'Оставить заявку', onPressed: onRequest),
           ],
         ),
       ),

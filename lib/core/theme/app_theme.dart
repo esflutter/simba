@@ -29,6 +29,8 @@ class AppTheme {
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.dark,
           statusBarBrightness: Brightness.light,
+          systemNavigationBarColor: AppColors.background,
+          systemNavigationBarIconBrightness: Brightness.dark,
         ),
       ),
       textTheme: TextTheme(

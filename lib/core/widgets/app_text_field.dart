@@ -17,15 +17,14 @@ class AppTextField extends StatefulWidget {
     this.suffix,
     this.inputFormatters,
     this.onChanged,
+    this.onTap,
     this.autofocus = false,
     this.enabled = true,
-    this.hint,
     this.textInputAction,
     this.onSubmitted,
   });
 
   final String label;
-  final String? hint;
   final TextEditingController? controller;
   final TextInputType? keyboardType;
   final int maxLines;
@@ -34,6 +33,7 @@ class AppTextField extends StatefulWidget {
   final Widget? suffix;
   final List<TextInputFormatter>? inputFormatters;
   final ValueChanged<String>? onChanged;
+  final VoidCallback? onTap;
   final bool autofocus;
   final bool enabled;
   final TextInputAction? textInputAction;
@@ -66,10 +66,11 @@ class _AppTextFieldState extends State<AppTextField> {
   @override
   Widget build(BuildContext context) {
     final hasFocus = _focus.hasFocus;
-    final hasText = _ctrl.text.isNotEmpty;
-    final showFloating = hasFocus || hasText;
+    const showFloating = true;
+    final labelColor = hasFocus ? AppColors.primary : const Color(0x99000000);
 
     return Container(
+      constraints: BoxConstraints(minHeight: 56.h),
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(16.r),
@@ -87,10 +88,8 @@ class _AppTextFieldState extends State<AppTextField> {
                   child: AnimatedDefaultTextStyle(
                     duration: const Duration(milliseconds: 150),
                     style: showFloating
-                        ? AppText.caption(
-                            color: hasFocus ? AppColors.primary : AppColors.textSecondary,
-                          )
-                        : AppText.bodyLarge(color: AppColors.textTertiary),
+                        ? AppText.caption(color: labelColor)
+                        : AppText.bodyLarge(color: labelColor),
                     child: Text(widget.label),
                   ),
                 ),
@@ -107,15 +106,14 @@ class _AppTextFieldState extends State<AppTextField> {
                     minLines: widget.minLines,
                     inputFormatters: widget.inputFormatters,
                     onChanged: widget.onChanged,
+                    onTap: widget.onTap,
                     textInputAction: widget.textInputAction,
                     onSubmitted: widget.onSubmitted,
                     cursorColor: AppColors.primary,
-                    style: AppText.bodyLarge(),
-                    decoration: InputDecoration(
+                    style: AppText.bodyLarge(color: AppColors.textPrimary),
+                    decoration: const InputDecoration(
                       isCollapsed: true,
                       border: InputBorder.none,
-                      hintText: showFloating ? widget.hint : null,
-                      hintStyle: AppText.bodyLarge(color: AppColors.textTertiary),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),

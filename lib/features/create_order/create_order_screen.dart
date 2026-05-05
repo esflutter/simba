@@ -116,7 +116,6 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                   SizedBox(height: 12.h),
                   AppTextField(
                     label: 'Комментарий',
-                    hint: 'Опишите, что конкретно нужно сделать',
                     controller: _descCtrl,
                     minLines: 3,
                     maxLines: 6,
@@ -126,7 +125,6 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                   SizedBox(height: 12.h),
                   AppTextField(
                     label: 'Номер телефона заказчика',
-                    hint: 'Если заказ для другого человека',
                     controller: _phoneCtrl,
                     keyboardType: TextInputType.phone,
                     textInputAction: TextInputAction.next,

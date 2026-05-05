@@ -45,26 +45,36 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
         statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.light,
         statusBarBrightness: Brightness.dark,
+        systemNavigationBarColor: AppColors.primarySplash,
+        systemNavigationBarIconBrightness: Brightness.light,
       ),
       child: Scaffold(
         backgroundColor: AppColors.primarySplash,
-        body: SafeArea(
-          child: Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Spacer(flex: 3),
-                Image.asset(
-                  'assets/images/logo_handshake.webp',
-                  width: 240.r,
-                  fit: BoxFit.contain,
-                ),
-                SizedBox(height: 24.h),
-                Text('SimbA', style: AppText.splashTitle),
-                const Spacer(flex: 4),
-              ],
+        body: Column(
+          children: [
+            const Spacer(flex: 3),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 32.w),
+              child: Image.asset(
+                'assets/images/logo_handshake.webp',
+                width: double.infinity,
+                height: 244.h,
+                fit: BoxFit.contain,
+              ),
             ),
-          ),
+            SizedBox(height: 26.h),
+            Text('SimbA', style: AppText.splashTitle),
+            const Spacer(flex: 2),
+            SizedBox(
+              width: 44.r,
+              height: 44.r,
+              child: const CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 3,
+              ),
+            ),
+            SizedBox(height: 48.h),
+          ],
         ),
       ),
     );

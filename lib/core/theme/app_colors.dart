@@ -4,7 +4,7 @@ class AppColors {
   AppColors._();
 
   static const Color primary = Color(0xFF1369CD);
-  static const Color primarySplash = Color(0xFF136BCD);
+  static const Color primarySplash = Color(0xFF1369CD);
   static const Color primarySoft = Color(0xFFE3EDFA);
 
   static const Color background = Color(0xFFF5F5F5);

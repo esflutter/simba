@@ -53,5 +53,5 @@ class AppText {
       _i(size: 11, weight: weight, color: color, height: 1.2);
 
   static TextStyle get splashTitle =>
-      GoogleFonts.inter(fontSize: 64.sp, fontWeight: FontWeight.w700, color: AppColors.textOnPrimary, height: 1.0);
+      GoogleFonts.jost(fontSize: 64.sp, fontWeight: FontWeight.w700, color: AppColors.textOnPrimary, height: 1.10);
 }
