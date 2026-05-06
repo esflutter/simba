@@ -4,12 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
-import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
-import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
@@ -49,7 +47,6 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const AppBackButton(),
               Expanded(
                 child: SingleChildScrollView(
                   child: Column(
@@ -66,43 +63,24 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                       Center(
                         child: GestureDetector(
                           onTap: _pickPhoto,
-                          child: Stack(
-                            children: [
-                              Container(
-                                width: 130.r,
-                                height: 130.r,
-                                decoration: const BoxDecoration(
-                                  color: AppColors.surface,
-                                  shape: BoxShape.circle,
+                          child: _photoPath != null
+                              ? Container(
+                                  width: 100.r,
+                                  height: 100.r,
+                                  decoration: const BoxDecoration(shape: BoxShape.circle),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: Image.file(File(_photoPath!), fit: BoxFit.cover),
+                                )
+                              : Image.asset(
+                                  'assets/images/avatar_photo.webp',
+                                  width: 100.r,
+                                  height: 100.r,
                                 ),
-                                clipBehavior: Clip.antiAlias,
-                                child: _photoPath != null
-                                    ? Image.file(File(_photoPath!), fit: BoxFit.cover)
-                                    : Center(
-                                        child: Icon(IconsaxPlusLinear.user,
-                                            size: 76.r, color: AppColors.primary),
-                                      ),
-                              ),
-                              Positioned(
-                                right: 4,
-                                bottom: 4,
-                                child: Container(
-                                  width: 36.r,
-                                  height: 36.r,
-                                  decoration: const BoxDecoration(
-                                    color: AppColors.primary,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: Icon(IconsaxPlusLinear.camera, size: 20.r, color: Colors.white),
-                                ),
-                              ),
-                            ],
-                          ),
                         ),
                       ),
                       SizedBox(height: 24.h),
                       AppTextField(
-                        label: 'Имя / Nickname',
+                        label: 'Имя / Никнейм',
                         controller: _ctrl,
                         onChanged: (_) => setState(() {}),
                       ),

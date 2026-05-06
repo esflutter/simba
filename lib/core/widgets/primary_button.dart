@@ -69,12 +69,14 @@ class SecondaryButton extends StatelessWidget {
     required this.onPressed,
     this.icon,
     this.color,
+    this.height,
   });
 
   final String label;
   final VoidCallback? onPressed;
   final Widget? icon;
   final Color? color;
+  final double? height;
 
   @override
   Widget build(BuildContext context) {
@@ -87,7 +89,7 @@ class SecondaryButton extends StatelessWidget {
         onTap: onPressed,
         child: Container(
           width: double.infinity,
-          height: 50.h,
+          height: height ?? 50.h,
           alignment: Alignment.center,
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
