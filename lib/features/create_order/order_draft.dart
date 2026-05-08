@@ -20,6 +20,7 @@ class OrderDraft {
     this.asap = true,
     this.photoPaths = const [],
     this.forOtherPhone,
+    this.paymentMethod,
   });
 
   final String? categoryId;
@@ -32,6 +33,7 @@ class OrderDraft {
   final bool asap;
   final List<String> photoPaths;
   final String? forOtherPhone;
+  final String? paymentMethod;
 
   Map<String, dynamic> toJson() => {
         if (categoryId != null) 'categoryId': categoryId,
@@ -45,6 +47,7 @@ class OrderDraft {
         'asap': asap,
         'photoPaths': photoPaths,
         if (forOtherPhone != null) 'forOtherPhone': forOtherPhone,
+        if (paymentMethod != null) 'paymentMethod': paymentMethod,
       };
 
   static OrderDraft fromJson(Map<String, dynamic> j) {
@@ -66,6 +69,7 @@ class OrderDraft {
       asap: (j['asap'] as bool?) ?? true,
       photoPaths: photos,
       forOtherPhone: j['forOtherPhone'] as String?,
+      paymentMethod: j['paymentMethod'] as String?,
     );
   }
 
@@ -79,7 +83,8 @@ class OrderDraft {
       scheduledAt == null &&
       asap == true &&
       photoPaths.isEmpty &&
-      forOtherPhone == null;
+      forOtherPhone == null &&
+      paymentMethod == null;
 
   bool get isReady =>
       categoryId != null &&
@@ -99,6 +104,7 @@ class OrderDraft {
     bool? asap,
     List<String>? photoPaths,
     String? forOtherPhone,
+    String? paymentMethod,
     bool clearScheduled = false,
     bool clearForOther = false,
   }) =>
@@ -113,6 +119,7 @@ class OrderDraft {
         asap: asap ?? this.asap,
         photoPaths: photoPaths ?? this.photoPaths,
         forOtherPhone: clearForOther ? null : forOtherPhone ?? this.forOtherPhone,
+        paymentMethod: paymentMethod ?? this.paymentMethod,
       );
 }
 
@@ -158,6 +165,7 @@ class OrderDraftController extends Notifier<OrderDraft> {
     bool? asap,
     List<String>? photoPaths,
     String? forOtherPhone,
+    String? paymentMethod,
     bool clearScheduled = false,
     bool clearForOther = false,
   }) {
@@ -172,6 +180,7 @@ class OrderDraftController extends Notifier<OrderDraft> {
       asap: asap,
       photoPaths: photoPaths,
       forOtherPhone: forOtherPhone,
+      paymentMethod: paymentMethod,
       clearScheduled: clearScheduled,
       clearForOther: clearForOther,
     );

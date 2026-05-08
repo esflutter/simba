@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -9,7 +10,6 @@ import '../../features/auth/role_picker_screen.dart';
 import '../../features/auth/sms_code_screen.dart';
 import '../../features/city/city_picker_screen.dart';
 import '../../features/create_order/create_order_screen.dart';
-import '../../features/create_order/order_created_screen.dart';
 import '../../features/create_order/order_summary_screen.dart';
 import '../../features/create_order/select_address_screen.dart';
 import '../../features/create_order/select_category_screen.dart';
@@ -25,6 +25,8 @@ import '../../features/profile/support_screen.dart';
 import '../../features/reviews/leave_review_screen.dart';
 import '../../features/reviews/reviews_screen.dart';
 
+final routerProvider = Provider<GoRouter>((ref) => _buildRouter(ref));
+
 /// Returns the next route to send a user to, depending on how complete their
 /// onboarding is. Used both by Splash and by go_router's redirect.
 String? nextOnboardingRoute(AppState state) {
@@ -35,9 +37,9 @@ String? nextOnboardingRoute(AppState state) {
   return null;
 }
 
-GoRouter buildRouter(WidgetRef ref) {
+GoRouter _buildRouter(Ref ref) {
   return GoRouter(
-    initialLocation: '/splash',
+    initialLocation: kDebugMode ? '/onboarding' : '/splash',
     routes: [
       GoRoute(path: '/splash', builder: (_, _) => const SplashScreen()),
       GoRoute(path: '/onboarding', builder: (_, _) => const OnboardingScreen()),
@@ -55,12 +57,15 @@ GoRouter buildRouter(WidgetRef ref) {
       ),
       GoRoute(
         path: '/create',
-        builder: (_, _) => const CreateOrderScreen(),
+        pageBuilder: (_, s) => NoTransitionPage(
+          child: CreateOrderScreen(
+            forOther: s.uri.queryParameters['for'] == 'other',
+          ),
+        ),
         routes: [
           GoRoute(path: 'category', builder: (_, _) => const SelectCategoryScreen()),
           GoRoute(path: 'address', builder: (_, _) => const SelectAddressScreen()),
           GoRoute(path: 'summary', builder: (_, _) => const OrderSummaryScreen()),
-          GoRoute(path: 'done', builder: (_, _) => const OrderCreatedScreen()),
         ],
       ),
       GoRoute(

@@ -34,20 +34,19 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: Column(
-          children: [
-            _Header(
-              title: isExecutor ? 'Заказы' : 'Лента',
-              onSwitchRole: () {
-                ref.read(appControllerProvider.notifier).setRole(
-                      isExecutor ? UserRole.customer : UserRole.executor,
-                    );
-              },
-              roleCta: isExecutor ? 'Готов помочь' : 'Нужна помощь',
-              roleActive: isExecutor,
-            ),
-            Expanded(
+      body: Column(
+        children: [
+          _Header(
+            title: 'Заказы',
+            onSwitchRole: () {
+              ref.read(appControllerProvider.notifier).setRole(
+                    isExecutor ? UserRole.customer : UserRole.executor,
+                  );
+            },
+            roleCta: isExecutor ? 'Готов помочь' : 'Нужна помощь',
+            roleActive: isExecutor,
+          ),
+          Expanded(
               child: Stack(
                 children: [
                   if (!_mapMode)
@@ -70,7 +69,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
             ),
           ],
         ),
-      ),
     );
   }
 }
@@ -90,37 +88,51 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 12.h),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Material(
-            color: roleActive ? AppColors.primary : AppColors.surface,
-            borderRadius: BorderRadius.circular(12.r),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(12.r),
-              onTap: onSwitchRole,
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
-                child: Text(
-                  roleCta,
-                  style: AppText.body(
-                    color: roleActive ? Colors.white : AppColors.primary,
-                    weight: FontWeight.w600,
+    return Container(
+      color: AppColors.surface,
+      child: SafeArea(
+        bottom: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 8.h),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Material(
+                color: roleActive ? AppColors.primary : AppColors.primarySoft,
+                borderRadius: BorderRadius.circular(12.r),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(12.r),
+                  onTap: onSwitchRole,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
+                    child: Text(
+                      roleCta,
+                      style: AppText.body(
+                        color: roleActive ? Colors.white : AppColors.primary,
+                        weight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
               ),
-            ),
-          ),
-          SizedBox(height: 4.h),
-          Row(
-            children: [
-              Expanded(child: Text(title, style: AppText.h1())),
-              Icon(IconsaxPlusLinear.search_normal_1, size: 26.r, color: AppColors.primary),
+              SizedBox(height: 4.h),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      style: AppText.h1().copyWith(
+                        height: 1.21,
+                        letterSpacing: 0.40,
+                      ),
+                    ),
+                  ),
+                  Icon(IconsaxPlusLinear.search_normal_1, size: 26.r, color: AppColors.primary),
+                ],
+              ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }

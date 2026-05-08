@@ -9,6 +9,7 @@ class AppTextField extends StatefulWidget {
   const AppTextField({
     super.key,
     required this.label,
+    this.hint,
     this.controller,
     this.keyboardType,
     this.maxLines = 1,
@@ -25,6 +26,7 @@ class AppTextField extends StatefulWidget {
   });
 
   final String label;
+  final String? hint;
   final TextEditingController? controller;
   final TextInputType? keyboardType;
   final int maxLines;
@@ -69,14 +71,20 @@ class _AppTextFieldState extends State<AppTextField> {
     const showFloating = true;
     final labelColor = hasFocus ? AppColors.primary : const Color(0x99000000);
 
-    return Container(
-      constraints: BoxConstraints(minHeight: 56.h),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16.r),
-      ),
-      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-      child: Row(
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () {
+        _focus.requestFocus();
+        widget.onTap?.call();
+      },
+      child: Container(
+        constraints: BoxConstraints(minHeight: 56.h),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(16.r),
+        ),
+        padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
+        child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Expanded(
@@ -111,10 +119,13 @@ class _AppTextFieldState extends State<AppTextField> {
                     onSubmitted: widget.onSubmitted,
                     cursorColor: AppColors.primary,
                     style: AppText.bodyLarge(color: AppColors.textPrimary),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       isCollapsed: true,
                       border: InputBorder.none,
                       contentPadding: EdgeInsets.zero,
+                      hintText: widget.hint,
+                      hintStyle: AppText.body(color: Colors.black.withValues(alpha: 0.60))
+                          .copyWith(height: 1.50, letterSpacing: -0.31),
                     ),
                   ),
                 ),
@@ -126,6 +137,7 @@ class _AppTextFieldState extends State<AppTextField> {
             widget.suffix!,
           ],
         ],
+        ),
       ),
     );
   }

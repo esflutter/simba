@@ -71,13 +71,19 @@ class MockData {
   ];
 
   static const List<Category> categories = [
-    Category(id: 'home', name: 'Бытовые работы', icon: 'spanner'),
-    Category(id: 'snow', name: 'Уборка снега', icon: 'gallery'),
-    Category(id: 'delivery', name: 'Срочная доставка', icon: 'truck'),
-    Category(id: 'garden', name: 'Сад и огород', icon: 'spanner'),
-    Category(id: 'cleaning', name: 'Уборка и клининг', icon: 'gallery'),
-    Category(id: 'repair', name: 'Мелкий ремонт', icon: 'spanner'),
-    Category(id: 'help_old', name: 'Помощь пожилым', icon: 'support'),
+    Category(id: 'delivery', name: 'Курьер и доставка', icon: 'truck_fast'),
+    Category(id: 'garden', name: 'Сад и огород', icon: 'tree'),
+    Category(id: 'cleaning', name: 'Уборка квартиры', icon: 'broom'),
+    Category(id: 'furniture', name: 'Сборка мебели', icon: 'box'),
+    Category(id: 'moving', name: 'Грузоперевозки', icon: 'truck'),
+    Category(id: 'repair', name: 'Мелкий ремонт', icon: 'hammer'),
+    Category(id: 'plumbing', name: 'Сантехника', icon: 'drop'),
+    Category(id: 'electric', name: 'Электрика', icon: 'flash'),
+    Category(id: 'elderly', name: 'Помощь пожилым', icon: 'support'),
+    Category(id: 'pets', name: 'Уход за животными', icon: 'pet'),
+    Category(id: 'auto', name: 'Авто-помощь', icon: 'car'),
+    Category(id: 'computer', name: 'Компьютерная помощь', icon: 'monitor'),
+    Category(id: 'snow', name: 'Уборка снега', icon: 'snowflake'),
     Category(id: 'other', name: 'Другое', icon: 'add'),
   ];
 
@@ -134,7 +140,7 @@ class MockData {
       Order(
         id: 'o3',
         customerId: 'u3',
-        categoryId: 'home',
+        categoryId: 'garden',
         title: 'Собрать каркас теплицы',
         description: 'Каркас из профильной трубы, всё уже куплено и лежит в огороде.',
         address: 'СНТ Берёзка, 14',

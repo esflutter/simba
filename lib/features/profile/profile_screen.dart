@@ -23,13 +23,30 @@ class ProfileScreen extends ConsumerWidget {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: ListView(
-          padding: EdgeInsets.fromLTRB(16.w, 12.h, 16.w, 16.h),
-          children: [
-            Text('Профиль', style: AppText.h1()),
-            SizedBox(height: 16.h),
-            AppCard(
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            color: AppColors.surface,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16.w, 47.h, 16.w, 8.h),
+                child: Text(
+                  'Профиль',
+                  style: AppText.h1().copyWith(
+                    height: 1.21,
+                    letterSpacing: 0.40,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 16.h),
+              children: [
+                AppCard(
               padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 20.h),
               child: Column(
                 children: [
@@ -90,8 +107,10 @@ class ProfileScreen extends ConsumerWidget {
               label: 'Выйти из аккаунта',
               onTap: () => _confirmLogout(context, ref),
             ),
-          ],
-        ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

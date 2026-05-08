@@ -188,8 +188,11 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 0),
                     child: _filtered.isEmpty
-                        ? _NoCityFound(
-                            onRequest: () => _showRequestSheet(context))
+                        ? Padding(
+                            padding: EdgeInsets.only(bottom: 16.h),
+                            child: _NoCityFound(
+                                onRequest: () => _showRequestSheet(context)),
+                          )
                         : ListView.separated(
                             padding: EdgeInsets.only(bottom: 16.h),
                             itemCount: _filtered.length,
@@ -291,30 +294,35 @@ class _NoCityFound extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 16.w),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Icon(IconsaxPlusLinear.search_zoom_out,
-                size: 48.r, color: AppColors.textTertiary),
-            SizedBox(height: 16.h),
-            Text(
-              'Города пока нет в списке',
-              style: AppText.h4(),
-              textAlign: TextAlign.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Image.asset(
+              'assets/images/icon_location.webp',
+              width: 80.r,
+              height: 80.r,
             ),
-            SizedBox(height: 8.h),
-            Text(
-              'Оставьте заявку — добавим ваш населённый пункт',
-              style: AppText.body(color: AppColors.textSecondary),
-              textAlign: TextAlign.center,
+          ),
+          SizedBox(height: 24.h),
+          Text(
+            'Города пока нет в списке',
+            textAlign: TextAlign.center,
+            style: AppText.h2().copyWith(letterSpacing: -0.10),
+          ),
+          SizedBox(height: 9.h),
+          Text(
+            'Оставьте заявку — добавим ваш населённый пункт',
+            textAlign: TextAlign.center,
+            style: AppText.body().copyWith(
+              color: Colors.black.withValues(alpha: 0.60),
+              height: 1.38,
             ),
-            SizedBox(height: 16.h),
-            PrimaryButton(label: 'Оставить заявку', onPressed: onRequest),
-          ],
-        ),
+          ),
+          SizedBox(height: 28.h),
+          PrimaryButton(label: 'Оставить заявку', onPressed: onRequest),
+        ],
       ),
     );
   }

@@ -46,7 +46,7 @@ class SimbaApp extends ConsumerWidget {
           title: 'SimbA',
           debugShowCheckedModeBanner: false,
           theme: AppTheme.light(),
-          routerConfig: buildRouter(ref),
+          routerConfig: ref.watch(routerProvider),
           locale: const Locale('ru', 'RU'),
           localizationsDelegates: const [
             GlobalMaterialLocalizations.delegate,

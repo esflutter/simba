@@ -30,35 +30,44 @@ class MyOrdersScreen extends ConsumerWidget {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(height: 12.h),
-              Text('Мои заказы', style: AppText.h1()),
-              SizedBox(height: 16.h),
-              Expanded(
-                child: orders.isEmpty
-                    ? const _EmptyMyOrders()
-                    : ListView.separated(
-                        padding: EdgeInsets.only(bottom: 16.h),
-                        itemCount: orders.length,
-                        separatorBuilder: (_, _) => SizedBox(height: 12.h),
-                        itemBuilder: (_, i) {
-                          final o = orders[i];
-                          return OrderCard(
-                            order: o,
-                            categoryName: _categoryName(o.categoryId),
-                            onTap: () => context.push('/order/${o.id}?mode=mine'),
-                          );
-                        },
-                      ),
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            color: AppColors.surface,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(16.w, 47.h, 16.w, 8.h),
+                child: Text(
+                  'Мои заказы',
+                  style: AppText.h1().copyWith(
+                    height: 1.21,
+                    letterSpacing: 0.40,
+                  ),
+                ),
               ),
-            ],
+            ),
           ),
-        ),
+          SizedBox(height: 16.h),
+          Expanded(
+            child: orders.isEmpty
+                ? const _EmptyMyOrders()
+                : ListView.separated(
+                    padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.h),
+                    itemCount: orders.length,
+                    separatorBuilder: (_, _) => SizedBox(height: 12.h),
+                    itemBuilder: (_, i) {
+                      final o = orders[i];
+                      return OrderCard(
+                        order: o,
+                        categoryName: _categoryName(o.categoryId),
+                        onTap: () => context.push('/order/${o.id}?mode=mine'),
+                      );
+                    },
+                  ),
+          ),
+        ],
       ),
     );
   }

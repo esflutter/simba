@@ -6,11 +6,15 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
-import '../../data/mock/mock_data.dart';
 import 'order_draft.dart';
 
-class SelectCategoryScreen extends ConsumerWidget {
-  const SelectCategoryScreen({super.key});
+const paymentMethods = <String>[
+  'Безналичным переводом на месте',
+  'Наличными исполнителю',
+];
+
+class SelectPaymentMethodScreen extends ConsumerWidget {
+  const SelectPaymentMethodScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -41,7 +45,7 @@ class SelectCategoryScreen extends ConsumerWidget {
                     children: [
                       Center(
                         child: Text(
-                          'Категория',
+                          'Способ оплаты',
                           style: AppText.bodyLarge(weight: FontWeight.w600).copyWith(
                             letterSpacing: -0.43,
                             height: 1.29,
@@ -71,17 +75,17 @@ class SelectCategoryScreen extends ConsumerWidget {
                 16.w,
                 16.h + MediaQuery.viewPaddingOf(context).bottom,
               ),
-              itemCount: MockData.categories.length,
+              itemCount: paymentMethods.length,
               separatorBuilder: (_, _) => SizedBox(height: 8.h),
               itemBuilder: (_, i) {
-                final c = MockData.categories[i];
+                final m = paymentMethods[i];
                 return Material(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(16.r),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(16.r),
                     onTap: () {
-                      ref.read(orderDraftProvider.notifier).update(categoryId: c.id);
+                      ref.read(orderDraftProvider.notifier).update(paymentMethod: m);
                       context.pop();
                     },
                     child: SizedBox(
@@ -90,7 +94,7 @@ class SelectCategoryScreen extends ConsumerWidget {
                         padding: EdgeInsets.symmetric(horizontal: 20.w),
                         child: Align(
                           alignment: Alignment.centerLeft,
-                          child: Text(c.name, style: AppText.bodyLarge()),
+                          child: Text(m, style: AppText.bodyLarge()),
                         ),
                       ),
                     ),
