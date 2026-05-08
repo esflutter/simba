@@ -49,8 +49,27 @@ class CategoryChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (dense) {
+      // Figma «Мои заказы» style: компактный чип внутри карточки.
+      return Container(
+        padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceVariant,
+          borderRadius: BorderRadius.circular(16.r),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 12.sp,
+            fontWeight: FontWeight.w400,
+            color: AppColors.primary,
+            height: 1.33,
+          ),
+        ),
+      );
+    }
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: dense ? 4.h : 6.h),
+      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
       decoration: BoxDecoration(
         color: AppColors.surfaceVariant,
         borderRadius: BorderRadius.circular(40.r),

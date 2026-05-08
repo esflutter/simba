@@ -54,11 +54,11 @@ class ResponsesScreen extends ConsumerWidget {
                               InkWell(
                                 onTap: () => context.push('/order/$orderId/user/${u.id}'),
                                 borderRadius: BorderRadius.only(
-                                  topLeft: Radius.circular(20.r),
-                                  topRight: Radius.circular(20.r),
+                                  topLeft: Radius.circular(16.r),
+                                  topRight: Radius.circular(16.r),
                                 ),
                                 child: Padding(
-                                  padding: EdgeInsets.fromLTRB(16.w, 14.h, 16.w, 14.h),
+                                  padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 8.h),
                                   child: Row(
                                     children: [
                                       _Avatar(),
@@ -67,46 +67,43 @@ class ResponsesScreen extends ConsumerWidget {
                                         child: Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
                                           children: [
-                                            Text(u.name, style: AppText.h4()),
-                                            SizedBox(height: 4.h),
-                                            Row(
-                                              children: [
-                                                Icon(IconsaxPlusBold.star_1, color: AppColors.star, size: 16.r),
-                                                SizedBox(width: 4.w),
-                                                Text(
-                                                  u.rating
-                                                      .toStringAsFixed(1)
-                                                      .replaceAll('.', ','),
-                                                  style: AppText.body(weight: FontWeight.w600),
-                                                ),
-                                              ],
+                                            Text(
+                                              u.name,
+                                              style: AppText.body(weight: FontWeight.w600)
+                                                  .copyWith(height: 1.50),
                                             ),
+                                            SizedBox(height: 4.h),
+                                            _StarsRow(rating: u.rating, size: 14.r),
                                           ],
                                         ),
                                       ),
-                                      Icon(IconsaxPlusLinear.arrow_right_3,
-                                          color: AppColors.primary, size: 22.r),
+                                      Icon(
+                                        IconsaxPlusLinear.arrow_right_3,
+                                        color: AppColors.primary,
+                                        size: 20.r,
+                                      ),
                                     ],
                                   ),
                                 ),
                               ),
-                              Container(height: 1, color: AppColors.divider),
                               Padding(
-                                padding: EdgeInsets.fromLTRB(12.w, 12.h, 12.w, 12.h),
+                                padding: EdgeInsets.fromLTRB(16.w, 4.h, 16.w, 16.h),
                                 child: Row(
                                   children: [
                                     Expanded(
                                       child: _ResponseAction(
                                         label: 'Отклонить',
+                                        icon: IconsaxPlusLinear.user_remove,
                                         background: AppColors.surfaceVariant,
                                         color: AppColors.error,
                                         onTap: () {},
                                       ),
                                     ),
-                                    SizedBox(width: 12.w),
+                                    SizedBox(width: 8.w),
                                     Expanded(
                                       child: _ResponseAction(
                                         label: 'Принять',
+                                        icon: IconsaxPlusLinear.user_tick,
                                         background: AppColors.primary,
                                         color: Colors.white,
                                         onTap: () {
@@ -137,13 +134,38 @@ class _Avatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 48.r,
-      height: 48.r,
+      width: 56.r,
+      height: 56.r,
       decoration: const BoxDecoration(
         color: AppColors.background,
         shape: BoxShape.circle,
       ),
-      child: Icon(IconsaxPlusLinear.user, color: AppColors.primary, size: 28.r),
+      child: Icon(IconsaxPlusLinear.user, color: AppColors.primary, size: 32.r),
+    );
+  }
+}
+
+class _StarsRow extends StatelessWidget {
+  const _StarsRow({required this.rating, required this.size});
+  final double rating;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final filled = rating.round();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: List.generate(
+        5,
+        (i) => Padding(
+          padding: EdgeInsets.only(right: i < 4 ? 2.w : 0),
+          child: Icon(
+            IconsaxPlusBold.star_1,
+            size: size,
+            color: i < filled ? AppColors.star : AppColors.divider,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -151,12 +173,14 @@ class _Avatar extends StatelessWidget {
 class _ResponseAction extends StatelessWidget {
   const _ResponseAction({
     required this.label,
+    required this.icon,
     required this.background,
     required this.color,
     required this.onTap,
   });
 
   final String label;
+  final IconData icon;
   final Color background;
   final Color color;
   final VoidCallback onTap;
@@ -165,14 +189,24 @@ class _ResponseAction extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: background,
-      borderRadius: BorderRadius.circular(14.r),
+      borderRadius: BorderRadius.circular(10.r),
       child: InkWell(
-        borderRadius: BorderRadius.circular(14.r),
+        borderRadius: BorderRadius.circular(10.r),
         onTap: onTap,
-        child: Container(
-          height: 48.h,
-          alignment: Alignment.center,
-          child: Text(label, style: AppText.button(color: color)),
+        child: SizedBox(
+          height: 36.h,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: color, size: 18.r),
+              SizedBox(width: 6.w),
+              Text(
+                label,
+                style: AppText.bodyLarge(color: color, weight: FontWeight.w600)
+                    .copyWith(letterSpacing: -0.40),
+              ),
+            ],
+          ),
         ),
       ),
     );

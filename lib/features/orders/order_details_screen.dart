@@ -63,10 +63,17 @@ class OrderDetailsScreen extends ConsumerWidget {
               child: ListView(
                 padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
                 children: [
-                  Text(order.title, style: AppText.h2()),
-                  SizedBox(height: 8.h),
-                  Text('${order.priceRub} ₽',
-                      style: AppText.h4(color: AppColors.primary)),
+                  Text(order.title, style: AppText.h2().copyWith(height: 1.20)),
+                  SizedBox(height: 16.h),
+                  Text(
+                    '${NumberFormat('#,###').format(order.priceRub).replaceAll(',', ' ')} ₽',
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontSize: 20.sp,
+                      fontWeight: FontWeight.w600,
+                      height: 1.20,
+                    ),
+                  ),
                   SizedBox(height: 16.h),
                   _Field('Способ оплаты', 'Наличные'),
                   SizedBox(height: 12.h),
@@ -144,15 +151,13 @@ class OrderDetailsScreen extends ConsumerWidget {
     if (isMine) {
       switch (order.status) {
         case OrderStatus.open:
-          widgets.add(PrimaryButton(
-            label: 'Смотреть отклики (${order.responses.length})',
-            onPressed: () => context.push('/order/${order.id}/responses'),
+          widgets.add(_ResponsesButton(
+            count: order.responses.length,
+            onTap: () => context.push('/order/${order.id}/responses'),
           ));
           widgets.add(SizedBox(height: 12.h));
-          widgets.add(SecondaryButton(
-            label: 'Отменить заказ',
-            color: AppColors.error,
-            onPressed: () => _confirmCancel(context, ctrl, order.id),
+          widgets.add(_CancelOrderButton(
+            onTap: () => _confirmCancel(context, ctrl, order.id),
           ));
           break;
         case OrderStatus.accepted:
@@ -245,59 +250,169 @@ class OrderDetailsScreen extends ConsumerWidget {
   void _confirmCancel(BuildContext context, AppController ctrl, String id) {
     showDialog<void>(
       context: context,
-      barrierDismissible: true,
+      barrierColor: Colors.black.withValues(alpha: 0.40),
       builder: (dialogCtx) => Dialog(
-        backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24.r)),
-        insetPadding: EdgeInsets.symmetric(horizontal: 32.w),
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(20.w, 24.h, 20.w, 16.h),
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.symmetric(horizontal: 24.w),
+        child: Container(
+          width: 313.w,
+          padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 16.h),
+          decoration: BoxDecoration(
+            color: AppColors.background,
+            borderRadius: BorderRadius.circular(24.r),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 64.r,
-                height: 64.r,
+                width: 56.r,
+                height: 56.r,
                 decoration: BoxDecoration(
                   color: AppColors.error,
-                  borderRadius: BorderRadius.circular(16.r),
+                  borderRadius: BorderRadius.circular(14.r),
                 ),
-                child: Icon(IconsaxPlusLinear.close_circle, color: Colors.white, size: 38.r),
+                child: Icon(Icons.close_rounded, color: Colors.white, size: 36.r),
               ),
               SizedBox(height: 16.h),
-              Text('Отменить заказ?', style: AppText.h4(), textAlign: TextAlign.center),
+              Text(
+                'Отменить заказ?',
+                textAlign: TextAlign.center,
+                style: AppText.h3().copyWith(height: 1.40),
+              ),
               SizedBox(height: 8.h),
               Text(
                 'Все данные о заказе будут потеряны',
-                style: AppText.body(color: AppColors.textSecondary),
                 textAlign: TextAlign.center,
+                style: AppText.body().copyWith(
+                  fontSize: 15.sp,
+                  color: Colors.black.withValues(alpha: 0.60),
+                  height: 1.33,
+                ),
               ),
-              SizedBox(height: 20.h),
-              PrimaryButton(
-                label: 'Отменить заказ',
-                onPressed: () {
-                  ctrl.cancelOrder(id);
-                  Navigator.of(dialogCtx).pop();
-                  context.pop();
-                },
-              ),
-              SizedBox(height: 8.h),
-              SizedBox(
-                width: double.infinity,
+              SizedBox(height: 16.h),
+              Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.h),
                 child: Material(
-                  color: AppColors.surfaceVariant,
-                  borderRadius: BorderRadius.circular(16.r),
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(10.r),
                   child: InkWell(
-                    borderRadius: BorderRadius.circular(16.r),
-                    onTap: () => Navigator.of(dialogCtx).pop(),
-                    child: Container(
-                      height: 56.h,
-                      alignment: Alignment.center,
-                      child: Text('Отмена',
-                          style: AppText.button(color: AppColors.textPrimary)),
+                    borderRadius: BorderRadius.circular(10.r),
+                    onTap: () {
+                      ctrl.cancelOrder(id);
+                      Navigator.of(dialogCtx).pop();
+                      context.pop();
+                    },
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 36.h,
+                      child: Center(
+                        child: Text(
+                          'Отменить заказ',
+                          textAlign: TextAlign.center,
+                          style: AppText.bodyLarge(
+                            color: AppColors.background,
+                            weight: FontWeight.w600,
+                          ).copyWith(height: 1.29, letterSpacing: -0.40),
+                        ),
+                      ),
                     ),
                   ),
                 ),
+              ),
+              GestureDetector(
+                onTap: () => Navigator.of(dialogCtx).pop(),
+                behavior: HitTestBehavior.opaque,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8.h),
+                  child: Text(
+                    'Отмена',
+                    style: AppText.bodyLarge(
+                      color: AppColors.primary,
+                      weight: FontWeight.w400,
+                    ).copyWith(letterSpacing: -0.40),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ResponsesButton extends StatelessWidget {
+  const _ResponsesButton({required this.count, required this.onTap});
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.primary,
+      borderRadius: BorderRadius.circular(16.r),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16.r),
+        onTap: onTap,
+        child: SizedBox(
+          width: double.infinity,
+          height: 50.h,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(IconsaxPlusLinear.profile_2user, color: Colors.white, size: 22.r),
+              SizedBox(width: 8.w),
+              Text(
+                'Смотреть отклики',
+                style: AppText.bodyLarge(color: Colors.white, weight: FontWeight.w600)
+                    .copyWith(letterSpacing: -0.40),
+              ),
+              if (count > 0) ...[
+                SizedBox(width: 8.w),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12.r),
+                  ),
+                  child: Text(
+                    '$count',
+                    style: AppText.bodySmall(color: AppColors.primary, weight: FontWeight.w600),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CancelOrderButton extends StatelessWidget {
+  const _CancelOrderButton({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.surfaceVariant,
+      borderRadius: BorderRadius.circular(16.r),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16.r),
+        onTap: onTap,
+        child: SizedBox(
+          width: double.infinity,
+          height: 50.h,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(IconsaxPlusLinear.user_remove, color: AppColors.error, size: 22.r),
+              SizedBox(width: 8.w),
+              Text(
+                'Отменить заказ',
+                style: AppText.bodyLarge(color: AppColors.error, weight: FontWeight.w600)
+                    .copyWith(letterSpacing: -0.40),
               ),
             ],
           ),
@@ -317,9 +432,17 @@ class _Field extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: AppText.body(color: AppColors.textSecondary)),
+        Text(
+          label,
+          style: TextStyle(
+            color: AppColors.primary,
+            fontSize: 13.sp,
+            fontWeight: FontWeight.w600,
+            height: 1.54,
+          ),
+        ),
         SizedBox(height: 4.h),
-        Text(value, style: AppText.bodyLarge()),
+        Text(value, style: AppText.body().copyWith(height: 1.50)),
       ],
     );
   }
