@@ -70,7 +70,8 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
   Widget build(BuildContext context) {
     final draft = ref.watch(orderDraftProvider);
     final price = int.tryParse(_priceCtrl.text.replaceAll(RegExp(r'\D'), '')) ?? 0;
-    final canContinue = price >= _minPrice;
+    final canContinue =
+        price >= _minPrice && (draft.paymentMethod?.isNotEmpty ?? false);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -91,7 +92,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
                   Padding(
                     padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 8.h),
                     child: Text(
-                      'Создать услугу',
+                      'Создать заказ',
                       style: AppText.h1().copyWith(
                         height: 1.21,
                         letterSpacing: 0.40,
@@ -180,7 +181,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
             child: Padding(
               padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.h),
               child: PrimaryButton(
-                label: 'Создать услугу',
+                label: 'Создать заказ',
                 onPressed: canContinue ? () => _publish(context, ref, draft) : null,
               ),
             ),

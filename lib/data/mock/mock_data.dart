@@ -95,17 +95,17 @@ class MockData {
   static final AppUser demoCurrentUser = AppUser(
     id: 'me',
     name: 'Иван Иванов',
-    phone: '+7(900) 123-45-67',
+    phone: '+7 (900) 123-45-67',
     rating: 4.9,
     reviewsCount: 23,
     cityId: 'msk',
   );
 
   static final List<AppUser> otherUsers = [
-    const AppUser(id: 'u1', name: 'Алексей К.', phone: '+7(900) 111-22-33', rating: 4.8, reviewsCount: 14),
-    const AppUser(id: 'u2', name: 'Мария С.', phone: '+7(900) 222-33-44', rating: 4.7, reviewsCount: 9),
-    const AppUser(id: 'u3', name: 'Дмитрий П.', phone: '+7(900) 333-44-55', rating: 5.0, reviewsCount: 31),
-    const AppUser(id: 'u4', name: 'Елена В.', phone: '+7(900) 444-55-66', rating: 4.6, reviewsCount: 6),
+    const AppUser(id: 'u1', name: 'Алексей К.', phone: '+7 (900) 111-22-33', rating: 4.8, reviewsCount: 14),
+    const AppUser(id: 'u2', name: 'Мария С.', phone: '+7 (900) 222-33-44', rating: 4.7, reviewsCount: 9),
+    const AppUser(id: 'u3', name: 'Дмитрий П.', phone: '+7 (900) 333-44-55', rating: 5.0, reviewsCount: 31),
+    const AppUser(id: 'u4', name: 'Елена В.', phone: '+7 (900) 444-55-66', rating: 4.6, reviewsCount: 6),
   ];
 
   static List<Order> seedOrders(LatLng cityCenter) {
@@ -442,6 +442,78 @@ class MockData {
           id: 'r3', fromUserId: 'u3', toUserId: 'me', orderId: 'm3',
           rating: 4, comment: 'Всё хорошо, но чуть задержался.', tags: const ['Аккуратный'],
           createdAt: DateTime.now().subtract(const Duration(days: 14)),
+        ),
+        Review(
+          id: 'r6', fromUserId: 'u4', toUserId: 'me', orderId: 'm3',
+          rating: 5, comment: 'Чисто и аккуратно, прибрал за собой.',
+          tags: const ['Аккуратный', 'Вежливый'],
+          createdAt: DateTime.now().subtract(const Duration(days: 18)),
+        ),
+        Review(
+          id: 'r7', fromUserId: 'u1', toUserId: 'me', orderId: 'm3',
+          rating: 5, comment: 'Хороший мастер, рекомендую.',
+          tags: const ['Профессионал'],
+          createdAt: DateTime.now().subtract(const Duration(days: 22)),
+        ),
+        Review(
+          id: 'r8', fromUserId: 'u2', toUserId: 'me', orderId: 'm3',
+          rating: 4, comment: 'Сделал хорошо, но чуть дольше планируемого.',
+          tags: const ['Аккуратный'],
+          createdAt: DateTime.now().subtract(const Duration(days: 28)),
+        ),
+        Review(
+          id: 'r9', fromUserId: 'u3', toUserId: 'me', orderId: 'm3',
+          rating: 5, comment: 'Всё отлично, советую всем!',
+          tags: const ['Профессионал', 'Пунктуальный'],
+          createdAt: DateTime.now().subtract(const Duration(days: 31)),
+        ),
+        Review(
+          id: 'r10', fromUserId: 'u4', toUserId: 'me', orderId: 'm3',
+          rating: 5, comment: 'Договорились без проблем, выполнил быстро.',
+          tags: const ['Надёжный'],
+          createdAt: DateTime.now().subtract(const Duration(days: 35)),
+        ),
+        Review(
+          id: 'r11', fromUserId: 'u1', toUserId: 'me', orderId: 'm3',
+          rating: 3, comment: 'Нормально, но качество могло быть лучше.',
+          tags: const [],
+          createdAt: DateTime.now().subtract(const Duration(days: 42)),
+        ),
+        Review(
+          id: 'r12', fromUserId: 'u2', toUserId: 'me', orderId: 'm3',
+          rating: 5, comment: 'Профи. Спасибо за работу.',
+          tags: const ['Профессионал'],
+          createdAt: DateTime.now().subtract(const Duration(days: 48)),
+        ),
+        Review(
+          id: 'r13', fromUserId: 'u3', toUserId: 'me', orderId: 'm3',
+          rating: 5, comment: 'Сделал всё в срок, претензий нет.',
+          tags: const ['Пунктуальный', 'Аккуратный'],
+          createdAt: DateTime.now().subtract(const Duration(days: 56)),
+        ),
+        Review(
+          id: 'r14', fromUserId: 'u4', toUserId: 'me', orderId: 'm3',
+          rating: 4, comment: 'В целом хорошо.',
+          tags: const ['Вежливый'],
+          createdAt: DateTime.now().subtract(const Duration(days: 64)),
+        ),
+        Review(
+          id: 'r15', fromUserId: 'u1', toUserId: 'me', orderId: 'm3',
+          rating: 5, comment: 'Замечательно, буду обращаться ещё.',
+          tags: const ['Профессионал', 'Надёжный'],
+          createdAt: DateTime.now().subtract(const Duration(days: 71)),
+        ),
+        Review(
+          id: 'r16', fromUserId: 'u2', toUserId: 'me', orderId: 'm3',
+          rating: 5, comment: 'Очень доволен результатом.',
+          tags: const [],
+          createdAt: DateTime.now().subtract(const Duration(days: 80)),
+        ),
+        Review(
+          id: 'r17', fromUserId: 'u3', toUserId: 'me', orderId: 'm3',
+          rating: 2, comment: 'Не понравилось — переделывал сам потом.',
+          tags: const [],
+          createdAt: DateTime.now().subtract(const Duration(days: 95)),
         ),
         // Отзывы «от me» — выполнены, отзыв уже оставлен
         Review(

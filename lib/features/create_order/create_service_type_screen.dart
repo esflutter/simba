@@ -23,7 +23,7 @@ class CreateServiceTypeScreen extends StatelessWidget {
               child: Padding(
                 padding: EdgeInsets.fromLTRB(16.w, 47.h, 16.w, 8.h),
                 child: Text(
-                  'Создать услугу',
+                  'Создать заказ',
                   style: AppText.h1().copyWith(
                     height: 1.21,
                     letterSpacing: 0.40,

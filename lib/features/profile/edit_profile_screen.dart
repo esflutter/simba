@@ -18,18 +18,8 @@ class EditProfileScreen extends ConsumerStatefulWidget {
   ConsumerState<EditProfileScreen> createState() => _EditProfileScreenState();
 }
 
-const _educationNotSpecified = 'Не указано';
-const _educationOptions = [
-  'Среднее общее',
-  'Среднее профессиональное',
-  'Неполное высшее',
-  'Высшее',
-  _educationNotSpecified,
-];
-
 class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   late TextEditingController _name;
-  String _education = '';
   String? _photoPath;
   bool _hasTools = false;
   bool _hasTransport = false;
@@ -39,7 +29,6 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     super.initState();
     final u = ref.read(appControllerProvider).user!;
     _name = TextEditingController(text: u.name);
-    _education = u.education;
     _photoPath = u.photoPath;
     _hasTools = u.hasTools;
     _hasTransport = u.hasTransport;
@@ -51,7 +40,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     super.dispose();
   }
 
-  Future<void> _pickPhoto() async {
+  Future<void> _pickFromGallery() async {
     try {
       final picker = ImagePicker();
       final f = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
@@ -59,39 +48,39 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     } catch (_) {}
   }
 
-  bool _educationOpen = false;
-
-  void _toggleEducation() {
-    setState(() => _educationOpen = !_educationOpen);
-  }
-
-  void _pickEducationOption(String option) {
-    setState(() {
-      _education = option;
-      _educationOpen = false;
-    });
+  Future<void> _onAvatarTap() async {
+    if (_photoPath == null) {
+      await _pickFromGallery();
+      return;
+    }
+    final action = await showModalBottomSheet<_AvatarAction>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const _AvatarSheet(),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case _AvatarAction.change:
+        await _pickFromGallery();
+      case _AvatarAction.remove:
+        setState(() => _photoPath = null);
+    }
   }
 
   bool get _canSave {
     final user = ref.read(appControllerProvider).user;
     if (user == null) return false;
     final nameChanged = _name.text.trim() != user.name && _name.text.trim().isNotEmpty;
-    final eduChanged = _education != user.education;
     final photoChanged = _photoPath != user.photoPath;
     final toolsChanged = _hasTools != user.hasTools;
     final transportChanged = _hasTransport != user.hasTransport;
-    return nameChanged ||
-        eduChanged ||
-        photoChanged ||
-        toolsChanged ||
-        transportChanged;
+    return nameChanged || photoChanged || toolsChanged || transportChanged;
   }
 
   void _save() {
     ref.read(appControllerProvider.notifier).completeProfile(
           name: _name.text,
           photoPath: _photoPath,
-          education: _education,
           hasTools: _hasTools,
           hasTransport: _hasTransport,
         );
@@ -142,26 +131,47 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
               padding: EdgeInsets.fromLTRB(16.w, 24.h, 16.w, 16.h),
               child: Column(
                 children: [
-                  // Avatar 100×100 (камера уже встроена в webp)
+                  // Avatar 100×100 + камера-бейдж всегда поверх в правом-нижнем
+                  // углу (и для фото, и для дефолтной user-иконки).
                   Center(
                     child: GestureDetector(
-                      onTap: _pickPhoto,
-                      child: _photoPath != null
-                          ? Container(
+                      onTap: _onAvatarTap,
+                      child: SizedBox(
+                        width: 100.r,
+                        height: 100.r,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            Container(
                               width: 100.r,
                               height: 100.r,
                               decoration: const BoxDecoration(
+                                color: AppColors.surfaceVariant,
                                 shape: BoxShape.circle,
                               ),
                               clipBehavior: Clip.antiAlias,
-                              child: Image.file(File(_photoPath!), fit: BoxFit.cover),
-                            )
-                          : Image.asset(
-                              'assets/images/avatar_default.webp',
-                              width: 100.r,
-                              height: 100.r,
-                              fit: BoxFit.contain,
+                              child: _photoPath != null
+                                  ? Image.file(
+                                      File(_photoPath!),
+                                      fit: BoxFit.cover,
+                                    )
+                                  : Image.asset(
+                                      'assets/images/avatar_default.webp',
+                                      fit: BoxFit.contain,
+                                    ),
                             ),
+                            Positioned(
+                              right: 0,
+                              bottom: 0,
+                              child: Image.asset(
+                                'assets/images/icon_camera.webp',
+                                width: 24.r,
+                                height: 24.r,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                   SizedBox(height: 16.h),
@@ -169,13 +179,8 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                     label: 'Имя / Никнейм',
                     controller: _name,
                     onChanged: (_) => setState(() {}),
-                  ),
-                  SizedBox(height: 16.h),
-                  _EducationField(
-                    value: _education,
-                    expanded: _educationOpen,
-                    onTap: _toggleEducation,
-                    onPick: _pickEducationOption,
+                    maxLength: 50,
+                    textCapitalization: TextCapitalization.words,
                   ),
                   SizedBox(height: 16.h),
                   _CheckRow(
@@ -284,130 +289,86 @@ class _CheckBox extends StatelessWidget {
   }
 }
 
-class _EducationField extends StatelessWidget {
-  const _EducationField({
-    required this.value,
-    required this.expanded,
-    required this.onTap,
-    required this.onPick,
-  });
-  final String value;
-  final bool expanded;
-  final VoidCallback onTap;
-  final ValueChanged<String> onPick;
+enum _AvatarAction { change, remove }
+
+class _AvatarSheet extends StatelessWidget {
+  const _AvatarSheet();
 
   @override
   Widget build(BuildContext context) {
-    final hasValue = value.isNotEmpty;
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16.r),
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(15.r)),
       ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          InkWell(
-            onTap: onTap,
-            child: Container(
-              constraints: BoxConstraints(minHeight: 56.h),
-              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Образование',
-                          style: TextStyle(
-                            color: Colors.black.withValues(alpha: 0.60),
-                            fontSize: 12.sp,
-                            fontWeight: FontWeight.w400,
-                            height: 1.33,
-                          ),
-                        ),
-                        SizedBox(height: 2.h),
-                        Text(
-                          hasValue ? value : 'Выберите уровень',
-                          style: TextStyle(
-                            color: hasValue
-                                ? Colors.black
-                                : Colors.black.withValues(alpha: 0.30),
-                            fontSize: 16.sp,
-                            fontWeight: FontWeight.w400,
-                            height: 1.31,
-                            letterSpacing: -0.31,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  AnimatedRotation(
-                    turns: expanded ? 0.5 : 0,
-                    duration: const Duration(milliseconds: 150),
-                    child: Icon(
-                      Icons.keyboard_arrow_down_rounded,
-                      size: 24.r,
-                      color: AppColors.primary,
-                    ),
-                  ),
-                ],
-              ),
+      child: SafeArea(
+        top: false,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(height: 8.h),
+            _AvatarSheetItem(
+              icon: Icons.photo_camera_rounded,
+              label: 'Сменить фото',
+              onTap: () => Navigator.of(context).pop(_AvatarAction.change),
             ),
+            Container(
+              height: 1,
+              margin: EdgeInsets.symmetric(horizontal: 16.w),
+              color: AppColors.divider,
+            ),
+            _AvatarSheetItem(
+              icon: Icons.delete_outline_rounded,
+              label: 'Удалить фото',
+              destructive: true,
+              onTap: () => Navigator.of(context).pop(_AvatarAction.remove),
+            ),
+            SizedBox(height: 8.h),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AvatarSheetItem extends StatelessWidget {
+  const _AvatarSheetItem({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.destructive = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool destructive;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = destructive ? AppColors.error : AppColors.primary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 14.h),
+          child: Row(
+            children: [
+              Icon(icon, color: color, size: 24.r),
+              SizedBox(width: 16.w),
+              Text(
+                label,
+                style: TextStyle(
+                  color: destructive ? AppColors.error : Colors.black,
+                  fontSize: 16.sp,
+                  fontWeight: FontWeight.w500,
+                  height: 1.50,
+                ),
+              ),
+            ],
           ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 180),
-            curve: Curves.easeOut,
-            child: expanded
-                ? Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(height: 1, color: AppColors.divider),
-                      for (final option in _educationOptions)
-                        InkWell(
-                          onTap: () => onPick(option),
-                          child: Padding(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 16.w,
-                              vertical: 12.h,
-                            ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    option,
-                                    style: TextStyle(
-                                      color: Colors.black,
-                                      fontSize: 16.sp,
-                                      fontWeight: option == value
-                                          ? FontWeight.w600
-                                          : FontWeight.w400,
-                                      height: 1.31,
-                                      letterSpacing: -0.31,
-                                    ),
-                                  ),
-                                ),
-                                if (option == value)
-                                  Icon(
-                                    Icons.check_rounded,
-                                    color: AppColors.primary,
-                                    size: 20.r,
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
-                  )
-                : const SizedBox.shrink(),
-          ),
-        ],
+        ),
       ),
     );
   }

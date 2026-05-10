@@ -11,6 +11,16 @@ import '../../data/models/models.dart';
 class RolePickerScreen extends ConsumerWidget {
   const RolePickerScreen({super.key});
 
+  void _pickCustomer(BuildContext context, WidgetRef ref) {
+    ref.read(appControllerProvider.notifier).setRole(UserRole.customer);
+    context.go('/home/create');
+  }
+
+  void _pickExecutor(BuildContext context, WidgetRef ref) {
+    ref.read(appControllerProvider.notifier).setRole(UserRole.executor);
+    context.go('/home/orders');
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
@@ -25,9 +35,36 @@ class RolePickerScreen extends ConsumerWidget {
                   padding: EdgeInsets.symmetric(horizontal: 4.w),
                   child: AspectRatio(
                     aspectRatio: 1,
-                    child: Image.asset(
-                      'assets/images/role_hero.webp',
-                      fit: BoxFit.contain,
+                    child: Stack(
+                      children: [
+                        Positioned.fill(
+                          child: Image.asset(
+                            'assets/images/role_hero.webp',
+                            fit: BoxFit.contain,
+                          ),
+                        ),
+                        Positioned.fill(
+                          child: Row(
+                            children: [
+                              Expanded(
+                                flex: 42,
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () => _pickCustomer(context, ref),
+                                ),
+                              ),
+                              const Spacer(flex: 16),
+                              Expanded(
+                                flex: 42,
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: () => _pickExecutor(context, ref),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -41,19 +78,13 @@ class RolePickerScreen extends ConsumerWidget {
                   _RoleCard(
                     title: 'Нужна помощь',
                     subtitle: 'Разместить заказ на услугу',
-                    onTap: () {
-                      ref.read(appControllerProvider.notifier).setRole(UserRole.customer);
-                      context.go('/home/my');
-                    },
+                    onTap: () => _pickCustomer(context, ref),
                   ),
                   SizedBox(height: 8.h),
                   _RoleCard(
                     title: 'Готов помочь',
                     subtitle: 'Найти заказ на услугу',
-                    onTap: () {
-                      ref.read(appControllerProvider.notifier).setRole(UserRole.executor);
-                      context.go('/home/orders');
-                    },
+                    onTap: () => _pickExecutor(context, ref),
                   ),
                   SizedBox(height: 66.h),
                 ],

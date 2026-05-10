@@ -1,23 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:go_router/go_router.dart';
-import 'package:iconsax_plus/iconsax_plus.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/mock_data.dart';
 
-class LeaveReviewScreen extends ConsumerStatefulWidget {
-  const LeaveReviewScreen({super.key, required this.orderId});
+/// Открывает шторку «Оставить отзыв» снизу экрана.
+Future<void> showLeaveReviewSheet(BuildContext context, String orderId) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.black.withValues(alpha: 0.40),
+    builder: (_) => _LeaveReviewSheet(orderId: orderId),
+  );
+}
+
+class _LeaveReviewSheet extends ConsumerStatefulWidget {
+  const _LeaveReviewSheet({required this.orderId});
   final String orderId;
 
   @override
-  ConsumerState<LeaveReviewScreen> createState() => _LeaveReviewScreenState();
+  ConsumerState<_LeaveReviewSheet> createState() => _LeaveReviewSheetState();
 }
 
-class _LeaveReviewScreenState extends ConsumerState<LeaveReviewScreen> {
+class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
   int _rating = 0;
   final Set<String> _tags = {};
   final _ctrl = TextEditingController();
@@ -87,7 +96,7 @@ class _LeaveReviewScreenState extends ConsumerState<LeaveReviewScreen> {
                     borderRadius: BorderRadius.circular(10.r),
                     onTap: () {
                       Navigator.of(dialogCtx).pop();
-                      context.pop();
+                      Navigator.of(context).pop();
                     },
                     child: SizedBox(
                       width: double.infinity,
@@ -118,139 +127,141 @@ class _LeaveReviewScreenState extends ConsumerState<LeaveReviewScreen> {
   @override
   Widget build(BuildContext context) {
     final canSubmit = _rating > 0;
-    return Scaffold(
-      backgroundColor: AppColors.surface,
-      body: SafeArea(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(height: 16.h),
-              Stack(
-                alignment: Alignment.center,
-                children: [
-                  Text(
-                    'Как вам заказ?',
-                    style: TextStyle(
-                      color: Colors.black,
-                      fontSize: 17.sp,
-                      fontWeight: FontWeight.w600,
-                      height: 1.29,
-                      letterSpacing: -0.43,
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  Positioned(
-                    right: 0,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => context.pop(),
-                      child: Padding(
-                        padding: EdgeInsets.all(8.r),
-                        child: Icon(
-                          Icons.close_rounded,
-                          color: AppColors.primary,
-                          size: 24.r,
-                        ),
+    final viewInsets = MediaQuery.of(context).viewInsets.bottom;
+    return Padding(
+      // Поднимаем шторку над клавиатурой.
+      padding: EdgeInsets.only(bottom: viewInsets),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(15.r)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(height: 8.h),
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Text(
+                      'Как вам заказ?',
+                      style: TextStyle(
+                        color: Colors.black,
+                        fontSize: 17.sp,
+                        fontWeight: FontWeight.w600,
+                        height: 1.29,
+                        letterSpacing: -0.43,
                       ),
+                      textAlign: TextAlign.center,
                     ),
-                  ),
-                ],
-              ),
-              Expanded(
-                child: SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      SizedBox(height: 24.h),
-                      Center(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
-                          children: List.generate(5, (i) {
-                            final filled = i < _rating;
-                            return GestureDetector(
-                              onTap: () => setState(() => _rating = i + 1),
-                              child: Padding(
-                                padding: EdgeInsets.symmetric(horizontal: 6.w),
-                                child: Icon(
-                                  filled
-                                      ? IconsaxPlusBold.star_1
-                                      : IconsaxPlusLinear.star_1,
-                                  size: 56.r,
-                                  color: filled
-                                      ? AppColors.star
-                                      : Colors.black.withValues(alpha: 0.30),
-                                ),
-                              ),
-                            );
-                          }),
-                        ),
-                      ),
-                      SizedBox(height: 24.h),
-                      Container(
-                        height: 140.h,
-                        padding: EdgeInsets.all(16.w),
-                        decoration: BoxDecoration(
-                          color: AppColors.background,
-                          borderRadius: BorderRadius.circular(16.r),
-                        ),
-                        child: TextField(
-                          controller: _ctrl,
-                          maxLines: null,
-                          expands: true,
-                          textAlignVertical: TextAlignVertical.top,
-                          cursorColor: AppColors.primary,
-                          style: AppText.bodyLarge(),
-                          decoration: InputDecoration(
-                            border: InputBorder.none,
-                            isCollapsed: true,
-                            hintText: 'Поделитесь впечатлением о заказе',
-                            hintStyle: AppText.bodyLarge(color: AppColors.textTertiary),
+                    Positioned(
+                      right: 0,
+                      child: GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () => Navigator.of(context).pop(),
+                        child: Padding(
+                          padding: EdgeInsets.all(6.r),
+                          child: Icon(
+                            Icons.close_rounded,
+                            color: AppColors.primary,
+                            size: 20.r,
                           ),
                         ),
                       ),
-                      SizedBox(height: 16.h),
-                      Wrap(
-                        spacing: 8.w,
-                        runSpacing: 8.h,
-                        children: MockData.reviewTags.map((t) {
-                          final selected = _tags.contains(t);
-                          return GestureDetector(
-                            onTap: () => setState(() {
-                              selected ? _tags.remove(t) : _tags.add(t);
-                            }),
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 150),
-                              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
-                              decoration: BoxDecoration(
-                                color: selected
-                                    ? AppColors.primary
-                                    : AppColors.background,
-                                borderRadius: BorderRadius.circular(40.r),
-                              ),
-                              child: Text(
-                                t,
-                                style: AppText.body(
-                                  color: selected ? Colors.white : AppColors.textPrimary,
-                                  weight: FontWeight.w500,
-                                ),
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                      SizedBox(height: 16.h),
-                    ],
+                    ),
+                  ],
+                ),
+                SizedBox(height: 24.h),
+                Center(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    mainAxisSize: MainAxisSize.min,
+                    children: List.generate(5, (i) {
+                      final filled = i < _rating;
+                      return GestureDetector(
+                        onTap: () => setState(() => _rating = i + 1),
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 4.w),
+                          child: Image.asset(
+                            filled
+                                ? 'assets/images/icon_review_star_filled.webp'
+                                : 'assets/images/icon_review_star_empty.webp',
+                            width: 48.r,
+                            height: 48.r,
+                          ),
+                        ),
+                      );
+                    }),
                   ),
                 ),
-              ),
-              PrimaryButton(
-                label: 'Оставить отзыв',
-                onPressed: canSubmit ? () => _submit(context) : null,
-              ),
-            ],
+                SizedBox(height: 24.h),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
+                  decoration: BoxDecoration(
+                    color: AppColors.background,
+                    borderRadius: BorderRadius.circular(16.r),
+                  ),
+                  child: TextField(
+                    controller: _ctrl,
+                    minLines: 3,
+                    maxLines: 6,
+                    maxLength: 1000,
+                    textCapitalization: TextCapitalization.sentences,
+                    cursorColor: AppColors.primary,
+                    style: AppText.bodyLarge(color: AppColors.textPrimary),
+                    decoration: InputDecoration(
+                      border: InputBorder.none,
+                      isCollapsed: true,
+                      counterText: '',
+                      hintText: 'Поделитесь впечатлением о заказе',
+                      hintStyle: AppText.body(
+                        color: Colors.black.withValues(alpha: 0.30),
+                      ).copyWith(height: 1.31, letterSpacing: -0.31),
+                    ),
+                  ),
+                ),
+                SizedBox(height: 16.h),
+                Wrap(
+                  spacing: 8.w,
+                  runSpacing: 8.h,
+                  children: MockData.reviewTags.map((t) {
+                    final selected = _tags.contains(t);
+                    return GestureDetector(
+                      onTap: () => setState(() {
+                        selected ? _tags.remove(t) : _tags.add(t);
+                      }),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 150),
+                        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? AppColors.primary
+                              : AppColors.background,
+                          borderRadius: BorderRadius.circular(8.r),
+                        ),
+                        child: Text(
+                          t,
+                          style: AppText.bodySmall(
+                            color: selected ? Colors.white : AppColors.textPrimary,
+                            weight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                SizedBox(height: 16.h),
+                PrimaryButton(
+                  label: 'Оставить отзыв',
+                  onPressed: canSubmit ? () => _submit(context) : null,
+                ),
+              ],
+            ),
           ),
         ),
       ),

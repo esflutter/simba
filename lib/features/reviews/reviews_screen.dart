@@ -21,8 +21,10 @@ class ReviewsScreen extends ConsumerWidget {
         .reviews
         .where((r) => r.toUserId == 'me')
         .toList();
-    final ratingDistribution = <int, int>{5: 1350, 4: 25, 3: 1, 2: 0, 1: 0};
-    final maxCount = ratingDistribution.values.fold<int>(0, (p, c) => c > p ? c : p);
+    final ratingDistribution = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
+    for (final r in reviews) {
+      ratingDistribution[r.rating] = (ratingDistribution[r.rating] ?? 0) + 1;
+    }
     final avgRating = reviews.isEmpty
         ? 0.0
         : reviews.map((r) => r.rating).reduce((a, b) => a + b) / reviews.length;
@@ -67,13 +69,17 @@ class ReviewsScreen extends ConsumerWidget {
           // ── Body ──
           Expanded(
             child: ListView(
-              padding: EdgeInsets.all(16.w),
+              padding: EdgeInsets.fromLTRB(
+                16.w,
+                16.h,
+                16.w,
+                MediaQuery.of(context).viewPadding.bottom,
+              ),
               children: [
                 _RatingSummaryCard(
                   average: avgRating,
                   total: reviews.length,
                   distribution: ratingDistribution,
-                  maxCount: maxCount,
                 ),
                 SizedBox(height: 8.h),
                 if (reviews.isEmpty)
@@ -119,13 +125,11 @@ class _RatingSummaryCard extends StatelessWidget {
     required this.average,
     required this.total,
     required this.distribution,
-    required this.maxCount,
   });
 
   final double average;
   final int total;
   final Map<int, int> distribution;
-  final int maxCount;
 
   @override
   Widget build(BuildContext context) {
@@ -160,17 +164,13 @@ class _RatingSummaryCard extends StatelessWidget {
                   5,
                   (i) => Padding(
                     padding: EdgeInsets.only(right: i == 4 ? 0 : 2.w),
-                    child: i < filledStars
-                        ? Image.asset(
-                            'assets/images/icon_ranking.webp',
-                            width: 20.r,
-                            height: 20.r,
-                          )
-                        : Icon(
-                            IconsaxPlusBold.star_1,
-                            size: 20.r,
-                            color: AppColors.divider,
-                          ),
+                    child: Image.asset(
+                      i < filledStars
+                          ? 'assets/images/icon_ranking.webp'
+                          : 'assets/images/icon_star_empty.webp',
+                      width: 20.r,
+                      height: 20.r,
+                    ),
                   ),
                 ),
             ],
@@ -190,7 +190,7 @@ class _RatingSummaryCard extends StatelessWidget {
             _DistributionRow(
               filled: stars,
               count: distribution[stars] ?? 0,
-              maxCount: maxCount,
+              total: total,
             ),
             if (stars > 1) SizedBox(height: 8.h),
           ],
@@ -213,12 +213,12 @@ class _DistributionRow extends StatelessWidget {
   const _DistributionRow({
     required this.filled,
     required this.count,
-    required this.maxCount,
+    required this.total,
   });
 
   final int filled;
   final int count;
-  final int maxCount;
+  final int total;
 
   @override
   Widget build(BuildContext context) {
@@ -229,17 +229,13 @@ class _DistributionRow extends StatelessWidget {
           5,
           (i) => Padding(
             padding: EdgeInsets.only(right: i == 4 ? 0 : 1.w),
-            child: i < filled
-                ? Image.asset(
-                    'assets/images/icon_ranking.webp',
-                    width: 14.r,
-                    height: 14.r,
-                  )
-                : Icon(
-                    IconsaxPlusBold.star_1,
-                    size: 14.r,
-                    color: AppColors.divider,
-                  ),
+            child: Image.asset(
+              i < filled
+                  ? 'assets/images/icon_ranking.webp'
+                  : 'assets/images/icon_star_empty.webp',
+              width: 14.r,
+              height: 14.r,
+            ),
           ),
         ),
         SizedBox(width: 8.w),
@@ -247,7 +243,7 @@ class _DistributionRow extends StatelessWidget {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12.r),
             child: LinearProgressIndicator(
-              value: maxCount == 0 ? 0 : count / maxCount,
+              value: total == 0 ? 0 : count / total,
               minHeight: 8.h,
               backgroundColor: AppColors.surfaceVariant,
               color: AppColors.star,
@@ -330,17 +326,13 @@ class _ReviewCard extends StatelessWidget {
                 5,
                 (i) => Padding(
                   padding: EdgeInsets.only(right: i == 4 ? 0 : 1.w),
-                  child: i < review.rating
-                      ? Image.asset(
-                          'assets/images/icon_ranking.webp',
-                          width: 14.r,
-                          height: 14.r,
-                        )
-                      : Icon(
-                          IconsaxPlusBold.star_1,
-                          size: 14.r,
-                          color: AppColors.divider,
-                        ),
+                  child: Image.asset(
+                    i < review.rating
+                        ? 'assets/images/icon_ranking.webp'
+                        : 'assets/images/icon_star_empty.webp',
+                    width: 14.r,
+                    height: 14.r,
+                  ),
                 ),
               ),
               SizedBox(width: 4.w),

@@ -15,10 +15,18 @@ class ProfileScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final user = ref.watch(appControllerProvider.select((s) => s.user));
+    final state = ref.watch(appControllerProvider);
+    final user = state.user;
     if (user == null) {
       return const Scaffold(body: SizedBox.shrink());
     }
+    // Считаем рейтинг из реальных отзывов на «me», а не из user.rating
+    // (он у новых пользователей 0).
+    final myReviews = state.reviews.where((r) => r.toUserId == 'me').toList();
+    final computedRating = myReviews.isEmpty
+        ? 0.0
+        : myReviews.map((r) => r.rating).reduce((a, b) => a + b) /
+            myReviews.length;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -49,6 +57,8 @@ class ProfileScreen extends ConsumerWidget {
               children: [
                 _ProfileCard(
                   user: user,
+                  rating: computedRating,
+                  reviewsCount: myReviews.length,
                   onEdit: () => context.push('/profile/edit'),
                 ),
                 SizedBox(height: 16.h),
@@ -106,10 +116,10 @@ class ProfileScreen extends ConsumerWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Image.asset(
-                'assets/images/icon_logout.webp',
-                width: 56.r,
-                height: 56.r,
+              Icon(
+                IconsaxPlusLinear.logout,
+                color: AppColors.primary,
+                size: 56.r,
               ),
               SizedBox(height: 16.h),
               Text(
@@ -178,7 +188,7 @@ class ProfileScreen extends ConsumerWidget {
               Icon(
                 IconsaxPlusLinear.trash,
                 color: AppColors.primary,
-                size: 72.r,
+                size: 56.r,
               ),
               SizedBox(height: 16.h),
               Text(
@@ -234,14 +244,19 @@ class ProfileScreen extends ConsumerWidget {
 }
 
 class _ProfileCard extends StatelessWidget {
-  const _ProfileCard({required this.user, required this.onEdit});
+  const _ProfileCard({
+    required this.user,
+    required this.rating,
+    required this.reviewsCount,
+    required this.onEdit,
+  });
   final dynamic user;
+  final double rating;
+  final int reviewsCount;
   final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
-    final education = (user.education as String? ?? '').trim();
-    final showEducation = education.isNotEmpty && education != 'Не указано';
     final hasTools = user.hasTools as bool;
     final hasTransport = user.hasTransport as bool;
     return Container(
@@ -261,10 +276,10 @@ class _ProfileCard extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: AppText.h3().copyWith(height: 1.10),
               ),
-              if (showEducation) ...[
+              if ((user.phone as String).isNotEmpty) ...[
                 SizedBox(height: 4.h),
                 Text(
-                  _educationLabel(education),
+                  user.phone as String,
                   textAlign: TextAlign.center,
                   style: AppText.bodySmall().copyWith(
                     color: Colors.black.withValues(alpha: 0.60),
@@ -300,7 +315,9 @@ class _ProfileCard extends StatelessWidget {
                   ),
                   SizedBox(width: 8.w),
                   Text(
-                    (user.rating as double).toStringAsFixed(1).replaceAll('.', ','),
+                    reviewsCount == 0
+                        ? '—'
+                        : rating.toStringAsFixed(1).replaceAll('.', ','),
                     textAlign: TextAlign.center,
                     style: AppText.bodySmall(weight: FontWeight.w500),
                   ),
@@ -332,8 +349,6 @@ class _ProfileCard extends StatelessWidget {
       ),
     );
   }
-
-  static String _educationLabel(String e) => '$e образование';
 }
 
 class _Avatar extends StatelessWidget {

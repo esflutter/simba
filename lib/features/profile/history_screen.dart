@@ -34,11 +34,17 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     // Размещённые: я разместил, в истории, и работа НЕ выполнена
     // (отменены / просрочены / не приняты исполнителем)
     final posted = state.myOrders
-        .where((o) => o.isHistorical && o.status != OrderStatus.completed)
+        .where((o) =>
+            o.isHistorical &&
+            o.status != OrderStatus.completed &&
+            o.status != OrderStatus.awaitingPayment)
         .toList();
-    // Выполненные: я разместил, и работа завершена.
+    // Выполненные с моей стороны как заказчика: я нажал «Работа выполнена»
+    // (статус awaitingPayment) или заказ полностью завершён (completed).
     final completed = state.myOrders
-        .where((o) => o.status == OrderStatus.completed)
+        .where((o) =>
+            o.status == OrderStatus.awaitingPayment ||
+            o.status == OrderStatus.completed)
         .toList();
     final list = _tab == _Tab.posted ? posted : completed;
     final groups = _groupByDate(list);
@@ -97,7 +103,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                       16.w,
                       16.h,
                       16.w,
-                      16.h + MediaQuery.of(context).viewPadding.bottom,
+                      MediaQuery.of(context).viewPadding.bottom,
                     ),
                     itemCount: groups.length,
                     itemBuilder: (_, gi) {

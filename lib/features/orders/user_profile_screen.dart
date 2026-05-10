@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -9,6 +11,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 
@@ -36,6 +39,10 @@ class UserProfileScreen extends ConsumerWidget {
         order.status == OrderStatus.open &&
         order.responses.contains(userId);
     final accepted = isAcceptedExecutor;
+    final canContact = order != null &&
+        (order.status == OrderStatus.accepted ||
+            order.status == OrderStatus.awaitingPayment) &&
+        (order.customerId == userId || order.executorId == userId);
 
     final ratingDistribution = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
     for (final r in reviews) {
@@ -68,7 +75,14 @@ class UserProfileScreen extends ConsumerWidget {
           ),
           Expanded(
               child: ListView(
-                padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
+                padding: EdgeInsets.fromLTRB(
+                  16.w,
+                  8.h,
+                  16.w,
+                  isPendingCandidate
+                      ? 0
+                      : 16.h + MediaQuery.of(context).viewPadding.bottom,
+                ),
                 children: [
                   AppCard(
                     padding: EdgeInsets.all(16.w),
@@ -79,91 +93,106 @@ class UserProfileScreen extends ConsumerWidget {
                           width: 56.r,
                           height: 56.r,
                           decoration: const BoxDecoration(
-                            color: AppColors.surfaceVariant,
+                            color: AppColors.background,
                             shape: BoxShape.circle,
                           ),
-                          child: Icon(
-                            IconsaxPlusLinear.user,
-                            color: AppColors.primary,
-                            size: 32.r,
-                          ),
+                          clipBehavior: Clip.antiAlias,
+                          child: user.photoPath != null
+                              ? (user.photoPath!.startsWith('http')
+                                  ? Image.network(user.photoPath!,
+                                      fit: BoxFit.cover)
+                                  : Image.file(File(user.photoPath!),
+                                      fit: BoxFit.cover))
+                              : Icon(
+                                  IconsaxPlusLinear.user,
+                                  color: AppColors.primary,
+                                  size: 32.r,
+                                ),
                         ),
                         SizedBox(width: 16.w),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              if (accepted)
-                                Container(
-                                  margin: EdgeInsets.only(bottom: 4.h),
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: 8.w,
-                                    vertical: 2.h,
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      user.name,
+                                      style: TextStyle(
+                                        color: Colors.black,
+                                        fontSize: 20.sp,
+                                        fontWeight: FontWeight.w600,
+                                        height: 1.20,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primary,
-                                    borderRadius: BorderRadius.circular(16.r),
-                                  ),
-                                  child: Text(
-                                    'Исполнитель принят',
-                                    style: AppText.caption(
-                                      color: Colors.white,
-                                      weight: FontWeight.w500,
-                                    ).copyWith(height: 1.33),
-                                  ),
-                                ),
-                              Text(
-                                user.name,
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 20.sp,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.20,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                  if (user.hasTools) ...[
+                                    SizedBox(width: 8.w),
+                                    Image.asset(
+                                      'assets/images/icon_tools.png',
+                                      width: 16.r,
+                                      height: 16.r,
+                                    ),
+                                  ],
+                                  if (user.hasTransport) ...[
+                                    SizedBox(width: 8.w),
+                                    Image.asset(
+                                      'assets/images/icon_transport.png',
+                                      width: 20.r,
+                                      height: 16.r,
+                                    ),
+                                  ],
+                                ],
                               ),
-                              SizedBox(height: 4.h),
-                              Text(
-                                user.phone,
-                                style: TextStyle(
-                                  color: Colors.black,
-                                  fontSize: 16.sp,
-                                  fontWeight: FontWeight.w600,
-                                  height: 1.50,
+                              if (canContact) ...[
+                                SizedBox(height: 4.h),
+                                Text(
+                                  user.phone,
+                                  style: TextStyle(
+                                    color: Colors.black,
+                                    fontSize: 16.sp,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.50,
+                                  ),
                                 ),
-                              ),
+                              ],
                             ],
                           ),
                         ),
                       ],
                     ),
                   ),
-                  SizedBox(height: 8.h),
-                  Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8.h),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: _ContactButton(
-                            label: 'Написать',
-                            background: AppColors.surface,
-                            color: Colors.black,
-                            onTap: () => _showContactSheet(context, user.phone),
+                  if (canContact) ...[
+                    SizedBox(height: 8.h),
+                    Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8.h),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _ContactButton(
+                              label: 'Написать',
+                              background: AppColors.surface,
+                              color: Colors.black,
+                              onTap: () => _showContactSheet(context, user.phone),
+                            ),
                           ),
-                        ),
-                        SizedBox(width: 8.w),
-                        Expanded(
-                          child: _ContactButton(
-                            label: 'Позвонить',
-                            background: AppColors.primary,
-                            color: const Color(0xFFF5F5F5),
-                            onTap: () => _callPhone(user.phone),
+                          SizedBox(width: 8.w),
+                          Expanded(
+                            child: _ContactButton(
+                              label: 'Позвонить',
+                              background: AppColors.primary,
+                              color: const Color(0xFFF5F5F5),
+                              onTap: () => _callPhone(user.phone),
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
+                  ],
                   SizedBox(height: 8.h),
                   Text(
                     'Отзывы',
@@ -176,107 +205,48 @@ class UserProfileScreen extends ConsumerWidget {
                   ),
                   SizedBox(height: 4.h),
                   if (reviews.isEmpty)
-                    AppCard(
-                      child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 32.h),
-                        child: Column(
-                          children: [
-                            Icon(
-                              IconsaxPlusLinear.star,
-                              size: 56.r,
-                              color: AppColors.textTertiary,
+                    Padding(
+                      padding: EdgeInsets.symmetric(vertical: 64.h),
+                      child: Column(
+                        children: [
+                          Icon(
+                            IconsaxPlusLinear.star_1,
+                            size: 80.r,
+                            color: AppColors.star,
+                          ),
+                          SizedBox(height: 24.h),
+                          Text(
+                            'Нет отзывов',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.black,
+                              fontSize: 20.sp,
+                              fontWeight: FontWeight.w600,
+                              height: 1.25,
+                              letterSpacing: -0.45,
                             ),
-                            SizedBox(height: 12.h),
-                            Text(
-                              'Нет отзывов',
-                              style: AppText.body(color: AppColors.textSecondary),
-                              textAlign: TextAlign.center,
-                            ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     )
                   else ...[
                     AppCard(
+                      padding: EdgeInsets.all(12.w),
+                      borderRadius: BorderRadius.circular(10.r),
                       child: _RatingSummary(
                         average: avgRating,
                         total: reviews.length,
                         distribution: ratingDistribution,
-                        maxCount: maxCount,
                       ),
                     ),
-                    SizedBox(height: 12.h),
+                    SizedBox(height: 8.h),
                     ...reviews.map(
                       (r) => Padding(
                         padding: EdgeInsets.only(bottom: 8.h),
                         child: AppCard(
                           padding: EdgeInsets.all(12.w),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  CircleAvatar(
-                                    radius: 16.r,
-                                    backgroundColor: AppColors.surfaceVariant,
-                                    child: Icon(
-                                      IconsaxPlusLinear.user,
-                                      color: AppColors.primary,
-                                      size: 18.r,
-                                    ),
-                                  ),
-                                  SizedBox(width: 8.w),
-                                  Text(
-                                    userById(r.fromUserId).name,
-                                    style: TextStyle(
-                                      color: AppColors.textPrimary,
-                                      fontSize: 15.sp,
-                                      fontWeight: FontWeight.w600,
-                                      height: 1.40,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 8.h),
-                              Row(
-                                children: [
-                                  ...List.generate(
-                                    5,
-                                    (i) => Padding(
-                                      padding: EdgeInsets.only(right: 2.w),
-                                      child: Icon(
-                                        IconsaxPlusBold.star_1,
-                                        size: 14.r,
-                                        color: i < r.rating
-                                            ? AppColors.star
-                                            : AppColors.divider,
-                                      ),
-                                    ),
-                                  ),
-                                  SizedBox(width: 8.w),
-                                  Text(
-                                    DateFormat('dd.MM.yyyy').format(r.createdAt),
-                                    style: AppText.caption(color: AppColors.textSecondary),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 8.h),
-                              Text(
-                                r.comment,
-                                style: AppText.bodySmall(
-                                  color: AppColors.textSecondary,
-                                ).copyWith(height: 1.40),
-                              ),
-                              if (r.tags.isNotEmpty) ...[
-                                SizedBox(height: 8.h),
-                                Wrap(
-                                  spacing: 8.w,
-                                  runSpacing: 6.h,
-                                  children: r.tags.map((t) => CategoryChip(t)).toList(),
-                                ),
-                              ],
-                            ],
-                          ),
+                          borderRadius: BorderRadius.circular(12.r),
+                          child: _ReviewItem(review: r),
                         ),
                       ),
                     ),
@@ -290,13 +260,20 @@ class UserProfileScreen extends ConsumerWidget {
                 ref
                     .read(appControllerProvider.notifier)
                     .acceptResponse(orderId!, userId);
-                Navigator.of(context).pop();
+                AppToast.show(context, 'Исполнитель принят');
+                final route = ModalRoute.of(context);
+                if (route != null) {
+                  Navigator.of(context).removeRouteBelow(route);
+                }
               },
               onDecline: () {
+                final wasLast = order!.responses.length == 1;
                 ref
                     .read(appControllerProvider.notifier)
                     .declineResponse(orderId!, userId);
+                AppToast.show(context, 'Исполнитель отклонён');
                 Navigator.of(context).pop();
+                if (wasLast) Navigator.of(context).pop();
               },
             ),
         ],
@@ -463,7 +440,7 @@ class _ContactSheet extends StatelessWidget {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(15.r)),
       ),
       child: SafeArea(
         top: false,
@@ -473,22 +450,21 @@ class _ContactSheet extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header
               Row(
                 children: [
-                  Icon(
-                    IconsaxPlusLinear.message_text_1,
-                    color: AppColors.primary,
-                    size: 24.r,
+                  Image.asset(
+                    'assets/images/icon_messages.webp',
+                    width: 24.r,
+                    height: 24.r,
                   ),
                   SizedBox(width: 8.w),
                   Text(
                     'Написать',
                     style: TextStyle(
                       color: Colors.black,
-                      fontSize: 20.sp,
+                      fontSize: 17.sp,
                       fontWeight: FontWeight.w600,
-                      height: 1.20,
+                      height: 1.29,
                     ),
                   ),
                   const Spacer(),
@@ -496,11 +472,11 @@ class _ContactSheet extends StatelessWidget {
                     behavior: HitTestBehavior.opaque,
                     onTap: () => Navigator.of(context).pop(),
                     child: Padding(
-                      padding: EdgeInsets.all(4.r),
+                      padding: EdgeInsets.all(6.r),
                       child: Icon(
                         Icons.close_rounded,
                         color: AppColors.primary,
-                        size: 24.r,
+                        size: 20.r,
                       ),
                     ),
                   ),
@@ -508,54 +484,25 @@ class _ContactSheet extends StatelessWidget {
               ),
               SizedBox(height: 16.h),
               Container(height: 1, color: AppColors.divider),
-              SizedBox(height: 24.h),
-              // Messengers
+              SizedBox(height: 22.h),
               Row(
                 children: [
                   _Messenger(
-                    label: "What's App",
-                    onTap: () => _openMessenger(context, 'whatsapp'),
-                    builder: (s) => Container(
-                      width: s,
-                      height: s,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF25D366),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(Icons.phone, color: Colors.white, size: s * 0.5),
-                    ),
+                    label: 'WhatsApp',
+                    asset: 'assets/images/icon_whatsapp.webp',
+                    onTap: () => Navigator.of(context).pop(),
                   ),
-                  SizedBox(width: 24.w),
+                  SizedBox(width: 28.w),
                   _Messenger(
                     label: 'Telegram',
-                    onTap: () => _openMessenger(context, 'telegram'),
-                    builder: (s) => Container(
-                      width: s,
-                      height: s,
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF26A5E4),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(Icons.send_rounded, color: Colors.white, size: s * 0.5),
-                    ),
+                    asset: 'assets/images/icon_telegram.webp',
+                    onTap: () => Navigator.of(context).pop(),
                   ),
-                  SizedBox(width: 24.w),
+                  SizedBox(width: 28.w),
                   _Messenger(
                     label: 'MAX',
-                    onTap: () => _openMessenger(context, 'max'),
-                    builder: (s) => Container(
-                      width: s,
-                      height: s,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0xFF7B45FF), Color(0xFF26A5E4)],
-                        ),
-                        borderRadius: BorderRadius.circular(s * 0.25),
-                      ),
-                      child: Icon(Icons.chat_bubble, color: Colors.white, size: s * 0.45),
-                    ),
+                    asset: 'assets/images/icon_max.webp',
+                    onTap: () => Navigator.of(context).pop(),
                   ),
                 ],
               ),
@@ -566,42 +513,36 @@ class _ContactSheet extends StatelessWidget {
       ),
     );
   }
-
-  void _openMessenger(BuildContext context, String app) {
-    // TODO: deep-links на конкретные мессенджеры — пока заглушка.
-    Navigator.of(context).pop();
-  }
 }
 
 class _Messenger extends StatelessWidget {
   const _Messenger({
     required this.label,
-    required this.builder,
+    required this.asset,
     required this.onTap,
   });
 
   final String label;
-  final Widget Function(double size) builder;
+  final String asset;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    final iconSize = 64.r;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          builder(iconSize),
-          SizedBox(height: 8.h),
+          Image.asset(asset, width: 60.r, height: 60.r),
+          SizedBox(height: 5.h),
           Text(
             label,
             style: TextStyle(
               color: Colors.black,
-              fontSize: 13.sp,
+              fontSize: 11.sp,
               fontWeight: FontWeight.w600,
-              height: 1.38,
+              height: 1.18,
             ),
           ),
         ],
@@ -615,13 +556,11 @@ class _RatingSummary extends StatelessWidget {
     required this.average,
     required this.total,
     required this.distribution,
-    required this.maxCount,
   });
 
   final double average;
   final int total;
   final Map<int, int> distribution;
-  final int maxCount;
 
   @override
   Widget build(BuildContext context) {
@@ -630,25 +569,28 @@ class _RatingSummary extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Text(
               average.toStringAsFixed(1).replaceAll('.', ','),
               style: TextStyle(
-                color: AppColors.textPrimary,
+                color: Colors.black,
                 fontSize: 20.sp,
                 fontWeight: FontWeight.w700,
                 height: 1.20,
               ),
             ),
-            SizedBox(width: 8.w),
+            SizedBox(width: 4.w),
             ...List.generate(
               5,
               (i) => Padding(
-                padding: EdgeInsets.only(right: 2.w),
-                child: Icon(
-                  IconsaxPlusBold.star_1,
-                  size: 18.r,
-                  color: i < filledStars ? AppColors.star : AppColors.divider,
+                padding: EdgeInsets.only(right: i == 4 ? 0 : 2.w),
+                child: Image.asset(
+                  i < filledStars
+                      ? 'assets/images/icon_ranking.webp'
+                      : 'assets/images/icon_star_empty.webp',
+                  width: 20.r,
+                  height: 20.r,
                 ),
               ),
             ),
@@ -657,51 +599,62 @@ class _RatingSummary extends StatelessWidget {
         SizedBox(height: 4.h),
         Text(
           '$total ${_pluralReviews(total)}',
-          style: AppText.bodySmall(color: AppColors.textSecondary)
-              .copyWith(height: 1.38),
-        ),
-        SizedBox(height: 12.h),
-        for (final stars in [5, 4, 3, 2, 1])
-          Padding(
-            padding: EdgeInsets.only(bottom: 6.h),
-            child: Row(
-              children: [
-                ...List.generate(
-                  5,
-                  (i) => Icon(
-                    IconsaxPlusBold.star_1,
-                    size: 12.r,
-                    color: i < stars ? AppColors.star : AppColors.divider,
-                  ),
-                ),
-                SizedBox(width: 8.w),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(4.r),
-                    child: LinearProgressIndicator(
-                      value: maxCount == 0 ? 0 : (distribution[stars] ?? 0) / maxCount,
-                      minHeight: 8.h,
-                      backgroundColor: AppColors.surfaceVariant,
-                      color: AppColors.star,
-                    ),
-                  ),
-                ),
-                SizedBox(width: 8.w),
-                SizedBox(
-                  width: 24.w,
-                  child: Text(
-                    '${distribution[stars] ?? 0}',
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 13.sp,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    textAlign: TextAlign.right,
-                  ),
-                ),
-              ],
-            ),
+          style: TextStyle(
+            color: Colors.black.withValues(alpha: 0.60),
+            fontSize: 13.sp,
+            fontWeight: FontWeight.w400,
+            height: 1.38,
           ),
+        ),
+        SizedBox(height: 8.h),
+        for (final stars in [5, 4, 3, 2, 1]) ...[
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              ...List.generate(
+                5,
+                (i) => Padding(
+                  padding: EdgeInsets.only(right: i == 4 ? 0 : 1.w),
+                  child: Image.asset(
+                    i < stars
+                        ? 'assets/images/icon_ranking.webp'
+                        : 'assets/images/icon_star_empty.webp',
+                    width: 14.r,
+                    height: 14.r,
+                  ),
+                ),
+              ),
+              SizedBox(width: 8.w),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12.r),
+                  child: LinearProgressIndicator(
+                    value: total == 0 ? 0 : (distribution[stars] ?? 0) / total,
+                    minHeight: 8.h,
+                    backgroundColor: AppColors.surfaceVariant,
+                    color: AppColors.star,
+                  ),
+                ),
+              ),
+              SizedBox(width: 8.w),
+              SizedBox(
+                width: 24.w,
+                child: Text(
+                  '${distribution[stars] ?? 0}',
+                  softWrap: false,
+                  overflow: TextOverflow.visible,
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontSize: 13.sp,
+                    fontWeight: FontWeight.w500,
+                    height: 1.38,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (stars > 1) SizedBox(height: 8.h),
+        ],
       ],
     );
   }
@@ -713,5 +666,120 @@ class _RatingSummary extends StatelessWidget {
     if (last == 1) return 'отзыв';
     if (last >= 2 && last <= 4) return 'отзыва';
     return 'отзывов';
+  }
+}
+
+class _ReviewItem extends StatelessWidget {
+  const _ReviewItem({required this.review});
+  final Review review;
+
+  @override
+  Widget build(BuildContext context) {
+    final author = userById(review.fromUserId);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 32.r,
+              height: 32.r,
+              decoration: const BoxDecoration(
+                color: AppColors.surfaceVariant,
+                shape: BoxShape.circle,
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: author.photoPath != null
+                  ? (author.photoPath!.startsWith('http')
+                      ? Image.network(author.photoPath!, fit: BoxFit.cover)
+                      : Image.file(File(author.photoPath!),
+                          fit: BoxFit.cover))
+                  : Icon(
+                      IconsaxPlusLinear.user,
+                      color: AppColors.primary,
+                      size: 20.r,
+                    ),
+            ),
+            SizedBox(width: 12.w),
+            Expanded(
+              child: Text(
+                author.name,
+                style: TextStyle(
+                  color: Colors.black,
+                  fontSize: 15.sp,
+                  fontWeight: FontWeight.w600,
+                  height: 1.33,
+                ),
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 8.h),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            ...List.generate(
+              5,
+              (i) => Padding(
+                padding: EdgeInsets.only(right: i == 4 ? 0 : 1.w),
+                child: Image.asset(
+                  i < review.rating
+                      ? 'assets/images/icon_ranking.webp'
+                      : 'assets/images/icon_star_empty.webp',
+                  width: 14.r,
+                  height: 14.r,
+                ),
+              ),
+            ),
+            SizedBox(width: 4.w),
+            Text(
+              DateFormat('dd.MM.yyyy').format(review.createdAt),
+              style: TextStyle(
+                color: Colors.black.withValues(alpha: 0.60),
+                fontSize: 12.sp,
+                fontWeight: FontWeight.w400,
+                height: 1.33,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 8.h),
+        Text(
+          review.comment,
+          style: TextStyle(
+            color: Colors.black.withValues(alpha: 0.60),
+            fontSize: 13.sp,
+            fontWeight: FontWeight.w400,
+            height: 1.38,
+          ),
+        ),
+        if (review.tags.isNotEmpty) ...[
+          SizedBox(height: 8.h),
+          Wrap(
+            spacing: 8.w,
+            runSpacing: 6.h,
+            children: review.tags
+                .map(
+                  (t) => Container(
+                    padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceVariant,
+                      borderRadius: BorderRadius.circular(8.r),
+                    ),
+                    child: Text(
+                      t,
+                      style: TextStyle(
+                        fontSize: 13.sp,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.primary,
+                      ),
+                    ),
+                  ),
+                )
+                .toList(),
+          ),
+        ],
+      ],
+    );
   }
 }

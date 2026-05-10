@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -18,11 +17,11 @@ import '../../features/onboarding/onboarding_screen.dart';
 import '../../features/onboarding/splash_screen.dart';
 import '../../features/orders/order_details_screen.dart';
 import '../../features/orders/responses_screen.dart';
+import '../../features/orders/search_screen.dart';
 import '../../features/orders/user_profile_screen.dart';
 import '../../features/profile/edit_profile_screen.dart';
 import '../../features/profile/history_screen.dart';
 import '../../features/profile/support_screen.dart';
-import '../../features/reviews/leave_review_screen.dart';
 import '../../features/reviews/reviews_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) => _buildRouter(ref));
@@ -39,7 +38,7 @@ String? nextOnboardingRoute(AppState state) {
 
 GoRouter _buildRouter(Ref ref) {
   return GoRouter(
-    initialLocation: kDebugMode ? '/onboarding' : '/splash',
+    initialLocation: '/splash',
     routes: [
       GoRoute(path: '/splash', builder: (_, _) => const SplashScreen()),
       GoRoute(path: '/onboarding', builder: (_, _) => const OnboardingScreen()),
@@ -86,12 +85,9 @@ GoRouter _buildRouter(Ref ref) {
               orderId: s.pathParameters['id'],
             ),
           ),
-          GoRoute(
-            path: 'review',
-            builder: (_, s) => LeaveReviewScreen(orderId: s.pathParameters['id']!),
-          ),
         ],
       ),
+      GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
       GoRoute(path: '/profile/edit', builder: (_, _) => const EditProfileScreen()),
       GoRoute(path: '/profile/history', builder: (_, _) => const HistoryScreen()),
       GoRoute(path: '/profile/reviews', builder: (_, _) => const ReviewsScreen()),
@@ -111,5 +107,5 @@ GoRouter _buildRouter(Ref ref) {
 
 extension AppRoles on UserRole {
   String get title => this == UserRole.customer ? 'Заказчик' : 'Исполнитель';
-  String get cta => this == UserRole.customer ? 'Нужна помощь' : 'Готов помочь';
+  String get cta => this == UserRole.customer ? 'Не готов помочь' : 'Готов помочь';
 }

@@ -23,6 +23,8 @@ class AppTextField extends StatefulWidget {
     this.enabled = true,
     this.textInputAction,
     this.onSubmitted,
+    this.maxLength,
+    this.textCapitalization = TextCapitalization.none,
   });
 
   final String label;
@@ -40,6 +42,8 @@ class AppTextField extends StatefulWidget {
   final bool enabled;
   final TextInputAction? textInputAction;
   final ValueChanged<String>? onSubmitted;
+  final int? maxLength;
+  final TextCapitalization textCapitalization;
 
   @override
   State<AppTextField> createState() => _AppTextFieldState();
@@ -112,6 +116,8 @@ class _AppTextFieldState extends State<AppTextField> {
                     obscureText: widget.obscure,
                     maxLines: widget.maxLines,
                     minLines: widget.minLines,
+                    maxLength: widget.maxLength,
+                    textCapitalization: widget.textCapitalization,
                     inputFormatters: widget.inputFormatters,
                     onChanged: widget.onChanged,
                     onTap: widget.onTap,
@@ -123,6 +129,7 @@ class _AppTextFieldState extends State<AppTextField> {
                       isCollapsed: true,
                       border: InputBorder.none,
                       contentPadding: EdgeInsets.zero,
+                      counterText: '',
                       hintText: widget.hint,
                       hintStyle: AppText.body(color: Colors.black.withValues(alpha: 0.30))
                           .copyWith(height: 1.31, letterSpacing: -0.31),

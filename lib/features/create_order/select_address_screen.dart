@@ -103,6 +103,8 @@ class _SearchFieldState extends State<_SearchField> {
                     focusNode: _focus,
                     controller: widget.controller,
                     onChanged: widget.onChanged,
+                    maxLength: 200,
+                    textCapitalization: TextCapitalization.sentences,
                     cursorColor: AppColors.primary,
                     style: AppText.body(color: AppColors.textPrimary)
                         .copyWith(height: 1.50),
@@ -110,6 +112,7 @@ class _SearchFieldState extends State<_SearchField> {
                       isCollapsed: true,
                       border: InputBorder.none,
                       contentPadding: EdgeInsets.zero,
+                      counterText: '',
                     ),
                   );
                 },
@@ -227,7 +230,7 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
                   bottom: 0,
                   child: ClipRect(
                     child: Image.asset(
-                      'assets/images/map_mock.webp',
+                      'assets/images/map_address_mock.webp',
                       fit: BoxFit.cover,
                     ),
                   ),
@@ -265,7 +268,7 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
                   Positioned(
                     left: 0,
                     right: 0,
-                    top: 8.h,
+                    top: 4.h,
                     child: Padding(
                       padding: EdgeInsets.symmetric(horizontal: 16.w),
                       child: ClipRRect(

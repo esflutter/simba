@@ -110,7 +110,6 @@ class AppController extends Notifier<AppState> {
   void completeProfile({
     required String name,
     String? photoPath,
-    String? education,
     bool? hasTools,
     bool? hasTransport,
   }) {
@@ -119,7 +118,6 @@ class AppController extends Notifier<AppState> {
     final updated = u.copyWith(
       name: name.trim().isEmpty ? 'Пользователь' : name,
       photoPath: photoPath,
-      education: education,
       hasTools: hasTools,
       hasTransport: hasTransport,
     );
@@ -145,10 +143,9 @@ class AppController extends Notifier<AppState> {
   }
 
   void cancelOrder(String id) {
+    // Отменённый заказ удаляется навсегда — из истории не показывается.
     state = state.copyWith(
-      myOrders: state.myOrders
-          .map((o) => o.id == id ? o.copyWith(status: OrderStatus.cancelled) : o)
-          .toList(),
+      myOrders: state.myOrders.where((o) => o.id != id).toList(),
     );
   }
 

@@ -39,7 +39,6 @@ class AppUser {
     this.rating = 0.0,
     this.reviewsCount = 0,
     this.cityId,
-    this.education = '',
     this.hasTools = false,
     this.hasTransport = false,
   });
@@ -51,18 +50,16 @@ class AppUser {
   final double rating;
   final int reviewsCount;
   final String? cityId;
-  final String education;
   final bool hasTools;
   final bool hasTransport;
 
   AppUser copyWith({
     String? name,
     String? phone,
-    String? photoPath,
+    Object? photoPath = _sentinel,
     double? rating,
     int? reviewsCount,
     String? cityId,
-    String? education,
     bool? hasTools,
     bool? hasTransport,
   }) {
@@ -70,16 +67,20 @@ class AppUser {
       id: id,
       name: name ?? this.name,
       phone: phone ?? this.phone,
-      photoPath: photoPath ?? this.photoPath,
+      // photoPath: явный `null` очищает фото, sentinel — оставляет как было.
+      photoPath: identical(photoPath, _sentinel)
+          ? this.photoPath
+          : photoPath as String?,
       rating: rating ?? this.rating,
       reviewsCount: reviewsCount ?? this.reviewsCount,
       cityId: cityId ?? this.cityId,
-      education: education ?? this.education,
       hasTools: hasTools ?? this.hasTools,
       hasTransport: hasTransport ?? this.hasTransport,
     );
   }
 }
+
+const _sentinel = Object();
 
 @immutable
 class Order {

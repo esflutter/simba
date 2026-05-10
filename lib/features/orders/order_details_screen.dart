@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -11,10 +13,11 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/widgets/app_back_button.dart';
-import '../../core/widgets/app_card.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../reviews/leave_review_screen.dart';
 
 class OrderDetailsScreen extends ConsumerWidget {
   const OrderDetailsScreen({super.key, required this.orderId, required this.mode});
@@ -33,8 +36,7 @@ class OrderDetailsScreen extends ConsumerWidget {
     final isCustomer = order.customerId == 'me';
     final isMine = isCustomer;
     final hasMyResponse = order.responses.contains('me');
-    final statusBadge =
-        _badgeForStatus(order, isCustomer: isCustomer, hasMyResponse: hasMyResponse);
+    final statusBadge = _badgeForStatus(order, isCustomer: isCustomer);
 
     final isCompleted = order.status == OrderStatus.completed;
     final isCancelled = order.status == OrderStatus.cancelled;
@@ -76,7 +78,7 @@ class OrderDetailsScreen extends ConsumerWidget {
           // ── Gray scrollable content ──
           Expanded(
             child: ListView(
-              padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 16.h),
+              padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 8.h),
               children: [
                 Text(order.title, style: AppText.h2().copyWith(height: 1.20)),
                 SizedBox(height: 16.h),
@@ -109,20 +111,32 @@ class OrderDetailsScreen extends ConsumerWidget {
                       scrollDirection: Axis.horizontal,
                       itemCount: order.photoPaths.length,
                       separatorBuilder: (_, _) => SizedBox(width: 8.w),
-                      itemBuilder: (_, i) => ClipRRect(
-                        borderRadius: BorderRadius.circular(12.r),
-                        child: Image.network(order.photoPaths[i], width: 96.w, fit: BoxFit.cover),
-                      ),
+                      itemBuilder: (_, i) {
+                        final path = order.photoPaths[i];
+                        final isUrl = path.startsWith('http://') ||
+                            path.startsWith('https://');
+                        return ClipRRect(
+                          borderRadius: BorderRadius.circular(12.r),
+                          child: isUrl
+                              ? Image.network(path, width: 96.w, fit: BoxFit.cover)
+                              : Image.file(File(path), width: 96.w, fit: BoxFit.cover),
+                        );
+                      },
                     ),
                   ),
                 ],
                 if (order.executorId != null && order.executorId != 'me' && isMine) ...[
                   SizedBox(height: 16.h),
                   _FieldLabel('Исполнитель'),
-                  SizedBox(height: 8.h),
-                  _ExecutorCard(executorId: order.executorId!, orderId: order.id),
+                  SizedBox(height: 4.h),
+                  _PartyCard(userId: order.executorId!, orderId: order.id),
                 ],
-                SizedBox(height: 16.h),
+                if (!isMine) ...[
+                  SizedBox(height: 16.h),
+                  _FieldLabel('Заказчик'),
+                  SizedBox(height: 4.h),
+                  _PartyCard(userId: order.customerId, orderId: order.id),
+                ],
               ],
             ),
           ),
@@ -165,21 +179,10 @@ class OrderDetailsScreen extends ConsumerWidget {
           ));
           break;
         case OrderStatus.awaitingPayment:
-          widgets.add(PrimaryButton(
-            label: 'Подтвердить оплату',
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Передайте наличные исполнителю. Он подтвердит получение.'),
-                ),
-              );
-            },
-          ));
-          break;
         case OrderStatus.completed:
           widgets.add(PrimaryButton(
             label: 'Оставить отзыв',
-            onPressed: () => context.push('/order/${order.id}/review'),
+            onPressed: () => showLeaveReviewSheet(context, order.id),
           ));
           break;
         case OrderStatus.cancelled:
@@ -197,25 +200,24 @@ class OrderDetailsScreen extends ConsumerWidget {
             widgets.add(_StatusBanner(
               color: AppColors.primarySoft,
               textColor: AppColors.primary,
-              label: 'Отклик отправлен. Дождитесь решения заказчика.',
+              label: 'Отклик отправлен',
             ));
           } else {
             widgets.add(PrimaryButton(
               label: 'Откликнуться на заказ',
               onPressed: () {
                 ctrl.takeOrderAsExecutor(order.id);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Отклик отправлен')),
-                );
+                AppToast.show(context, 'Отклик отправлен');
               },
             ));
           }
           break;
         case OrderStatus.accepted:
           if (order.executorId == 'me') {
-            widgets.add(PrimaryButton(
-              label: 'Работа выполнена',
-              onPressed: () => ctrl.markWorkDone(order.id, inMyOrders: false),
+            widgets.add(_StatusBanner(
+              color: AppColors.primarySoft,
+              textColor: AppColors.primary,
+              label: 'Дождитесь подтверждения работы от заказчика',
             ));
           } else {
             widgets.add(_StatusBanner(
@@ -226,15 +228,17 @@ class OrderDetailsScreen extends ConsumerWidget {
           }
           break;
         case OrderStatus.awaitingPayment:
-          widgets.add(PrimaryButton(
-            label: 'Оплата получена',
-            onPressed: () => ctrl.confirmPayment(order.id, inMyOrders: false),
-          ));
+          if (order.executorId == 'me') {
+            widgets.add(PrimaryButton(
+              label: 'Подтвердите оплату',
+              onPressed: () => ctrl.confirmPayment(order.id, inMyOrders: false),
+            ));
+          }
           break;
         case OrderStatus.completed:
           widgets.add(PrimaryButton(
             label: 'Оставить отзыв',
-            onPressed: () => context.push('/order/${order.id}/review'),
+            onPressed: () => showLeaveReviewSheet(context, order.id),
           ));
           break;
         case OrderStatus.cancelled:
@@ -270,8 +274,8 @@ class OrderDetailsScreen extends ConsumerWidget {
                 ),
                 child: Center(
                   child: CustomPaint(
-                    size: Size(28.r, 28.r),
-                    painter: _XPainter(color: Colors.white, strokeWidth: 4.5.r),
+                    size: Size(18.r, 18.r),
+                    painter: _XPainter(color: Colors.white, strokeWidth: 3.r),
                   ),
                 ),
               ),
@@ -534,7 +538,7 @@ class _AddressBlock extends StatelessWidget {
         ClipRRect(
           borderRadius: BorderRadius.circular(10.r),
           child: Image.asset(
-            'assets/images/map_mock.webp',
+            'assets/images/map_order_mock.webp',
             width: double.infinity,
             height: 170.h,
             fit: BoxFit.cover,
@@ -633,21 +637,17 @@ class _Field extends StatelessWidget {
 Widget? _badgeForStatus(
   Order order, {
   required bool isCustomer,
-  required bool hasMyResponse,
 }) {
   switch (order.status) {
     case OrderStatus.accepted:
-      return const _StatusBadge('Исполнитель найден');
+      return null;
     case OrderStatus.awaitingPayment:
-      return _StatusBadge(isCustomer ? 'Подтвердите оплату' : 'Ожидает оплаты');
+      return null;
     case OrderStatus.completed:
       return const _StatusBadge('Завершён');
     case OrderStatus.cancelled:
       return const _StatusBadge('Отменён', color: AppColors.error);
     case OrderStatus.open:
-      if (!isCustomer && hasMyResponse) {
-        return const _StatusBadge('Отклик отправлен');
-      }
       return null;
   }
 }
@@ -673,52 +673,64 @@ class _StatusBadge extends StatelessWidget {
   }
 }
 
-class _ExecutorCard extends StatelessWidget {
-  const _ExecutorCard({required this.executorId, required this.orderId});
-  final String executorId;
+class _PartyCard extends StatelessWidget {
+  const _PartyCard({required this.userId, required this.orderId});
+  final String userId;
   final String orderId;
 
   @override
   Widget build(BuildContext context) {
-    final user = userById(executorId);
-    return AppCard(
-      onTap: () => context.push('/order/$orderId/user/$executorId'),
-      padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 12.h),
-      child: Row(
-        children: [
-          Container(
-            width: 56.r,
-            height: 56.r,
-            decoration: const BoxDecoration(
-              color: AppColors.surfaceVariant,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(IconsaxPlusLinear.user, color: AppColors.primary, size: 32.r),
-          ),
-          SizedBox(width: 12.w),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(user.name, style: AppText.h4()),
-                SizedBox(height: 2.h),
-                Text(user.phone, style: AppText.body(color: AppColors.textSecondary)),
-                SizedBox(height: 4.h),
-                Row(
-                  children: [
-                    Icon(IconsaxPlusBold.star_1, color: AppColors.star, size: 14.r),
-                    SizedBox(width: 4.w),
-                    Text(
-                      user.rating.toStringAsFixed(1).replaceAll('.', ','),
-                      style: AppText.bodySmall(weight: FontWeight.w600),
-                    ),
-                  ],
+    final user = userById(userId);
+    return InkWell(
+      onTap: () => context.push('/order/$orderId/user/$userId'),
+      child: SizedBox(
+        height: 64.h,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(0, 4.h, 16.w, 4.h),
+          child: Row(
+            children: [
+              Container(
+                width: 56.r,
+                height: 56.r,
+                decoration: const BoxDecoration(
+                  color: AppColors.surface,
+                  shape: BoxShape.circle,
                 ),
-              ],
-            ),
+                clipBehavior: Clip.antiAlias,
+                child: user.photoPath != null
+                    ? (user.photoPath!.startsWith('http')
+                        ? Image.network(user.photoPath!, fit: BoxFit.cover)
+                        : Image.file(File(user.photoPath!),
+                            fit: BoxFit.cover))
+                    : Icon(
+                        IconsaxPlusLinear.user,
+                        color: AppColors.primary,
+                        size: 32.r,
+                      ),
+              ),
+              SizedBox(width: 16.w),
+              Expanded(
+                child: Text(
+                  user.name,
+                  style: TextStyle(
+                    color: Colors.black,
+                    fontSize: 16.sp,
+                    fontWeight: FontWeight.w600,
+                    height: 1.50,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              SizedBox(width: 16.w),
+              Icon(
+                IconsaxPlusLinear.arrow_right_3,
+                color: AppColors.primary,
+                size: 24.r,
+              ),
+            ],
           ),
-          Icon(IconsaxPlusLinear.arrow_right_3, color: AppColors.primary, size: 22.r),
-        ],
+        ),
       ),
     );
   }

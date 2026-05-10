@@ -108,7 +108,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                   Padding(
                     padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 8.h),
                     child: Text(
-                      'Создать услугу',
+                      'Создать заказ',
                       style: AppText.h1().copyWith(
                         height: 1.21,
                         letterSpacing: 0.40,
@@ -122,7 +122,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
           SizedBox(height: 16.h),
           Expanded(
               child: ListView(
-                padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 24.h),
+                padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 12.h),
                 children: [
                   _Pickable(
                     label: 'Категория работ',

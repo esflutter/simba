@@ -7,6 +7,7 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_text_field.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
@@ -51,6 +52,15 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
       duration: const Duration(milliseconds: 350),
     );
     _anim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeInOut);
+    // В режиме смены города (пользователь уже создан) сразу разворачиваем
+    // экран в режим поиска с пустым полем и полным списком городов.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final hasUser = ref.read(appControllerProvider).user != null;
+      if (!hasUser) return;
+      setState(() => _searching = true);
+      _animCtrl.value = 1.0;
+    });
   }
 
   void _onFieldTap() {
@@ -143,7 +153,16 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                           child: Opacity(
                             opacity: _anim.value,
                             child: GestureDetector(
-                              onTap: _closeSearch,
+                              onTap: () {
+                                final hasUser =
+                                    ref.read(appControllerProvider).user !=
+                                        null;
+                                if (hasUser && context.canPop()) {
+                                  context.pop();
+                                } else {
+                                  _closeSearch();
+                                }
+                              },
                               child: Padding(
                                 padding: EdgeInsets.only(bottom: 16.h),
                                 child: Icon(
@@ -165,6 +184,8 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                 label: 'Город или населённый пункт',
                 controller: _searchCtrl,
                 onTap: _onFieldTap,
+                maxLength: 50,
+                textCapitalization: TextCapitalization.words,
                 onChanged: (v) => setState(() {
                   if (!_searching) {
                     _searching = true;
@@ -209,6 +230,19 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                 child: InkWell(
                                   borderRadius: BorderRadius.circular(16.r),
                                   onTap: () {
+                                    final ctrl = ref
+                                        .read(appControllerProvider.notifier);
+                                    final hasUser = ref
+                                            .read(appControllerProvider)
+                                            .user !=
+                                        null;
+                                    // Режим смены города (юзер уже создан) —
+                                    // сохраняем выбор и сразу возвращаемся.
+                                    if (hasUser) {
+                                      ctrl.setCity(c.id);
+                                      context.pop();
+                                      return;
+                                    }
                                     _searchCtrl.text = c.name;
                                     setState(() => _selectedId = c.id);
                                     _closeSearch();
@@ -258,10 +292,18 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                         label: 'Далее',
                         onPressed: canContinue
                             ? () {
-                                ref
-                                    .read(appControllerProvider.notifier)
-                                    .setCity(_selectedId!);
-                                context.go('/auth/phone');
+                                final ctrl = ref
+                                    .read(appControllerProvider.notifier);
+                                final hasUser = ref
+                                        .read(appControllerProvider)
+                                        .user !=
+                                    null;
+                                ctrl.setCity(_selectedId!);
+                                if (hasUser) {
+                                  context.pop();
+                                } else {
+                                  context.go('/auth/phone');
+                                }
                               }
                             : null,
                       ),
@@ -273,16 +315,19 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
     );
   }
 
-  void _showRequestSheet(BuildContext context) {
-    showModalBottomSheet(
+  Future<void> _showRequestSheet(BuildContext context) async {
+    final submitted = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       backgroundColor: AppColors.background,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28.r)),
       ),
-      builder: (_) => const _RequestCitySheet(),
+      builder: (_) => _RequestCitySheet(initialName: _query),
     );
+    if (!mounted || submitted != true) return;
+    _closeSearch();
+    AppToast.show(context, 'Заявка отправлена. Спасибо!');
   }
 }
 
@@ -329,14 +374,17 @@ class _NoCityFound extends StatelessWidget {
 }
 
 class _RequestCitySheet extends StatefulWidget {
-  const _RequestCitySheet();
+  const _RequestCitySheet({this.initialName = ''});
+
+  final String initialName;
 
   @override
   State<_RequestCitySheet> createState() => _RequestCitySheetState();
 }
 
 class _RequestCitySheetState extends State<_RequestCitySheet> {
-  final _ctrl = TextEditingController();
+  late final TextEditingController _ctrl =
+      TextEditingController(text: widget.initialName);
   bool get _enabled => _ctrl.text.trim().isNotEmpty;
 
   @override
@@ -347,14 +395,16 @@ class _RequestCitySheetState extends State<_RequestCitySheet> {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        16.w,
-        16.h,
-        16.w,
-        MediaQuery.of(context).viewInsets.bottom + 16.h,
-      ),
-      child: Column(
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          16.w,
+          16.h,
+          16.w,
+          MediaQuery.of(context).viewInsets.bottom + 16.h,
+        ),
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -375,23 +425,18 @@ class _RequestCitySheetState extends State<_RequestCitySheet> {
             label: 'Название города',
             controller: _ctrl,
             onChanged: (_) => setState(() {}),
+            maxLength: 50,
+            textCapitalization: TextCapitalization.words,
           ),
           SizedBox(height: 16.h),
           PrimaryButton(
             label: 'Отправить',
             onPressed: _enabled
-                ? () {
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Заявка отправлена. Спасибо!'),
-                        behavior: SnackBarBehavior.floating,
-                      ),
-                    );
-                  }
+                ? () => Navigator.of(context).pop(true)
                 : null,
           ),
-        ],
+          ],
+        ),
       ),
     );
   }

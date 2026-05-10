@@ -7,7 +7,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
-import '../../core/widgets/openfreemap_view.dart';
+import '../../core/widgets/city_pill.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
@@ -38,34 +38,40 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         children: [
           _Header(
             title: 'Заказы',
+            cityName: state.selectedCity.name,
             onSwitchRole: () {
               ref.read(appControllerProvider.notifier).setRole(
                     isExecutor ? UserRole.customer : UserRole.executor,
                   );
             },
-            roleCta: isExecutor ? 'Готов помочь' : 'Нужна помощь',
+            roleCta: isExecutor ? 'Готов помочь' : 'Не готов помочь',
             roleActive: isExecutor,
           ),
           Expanded(
-              child: Stack(
-                children: [
-                  if (!_mapMode)
-                    _ListView(orders: orders, categoryNameOf: _categoryName)
-                  else
-                    _MapView(orders: orders, center: state.selectedCity.center),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 16.h,
-                    child: Center(
-                      child: _ToggleViewButton(
-                        isMap: _mapMode,
-                        onTap: () => setState(() => _mapMode = !_mapMode),
-                      ),
+              child: !isExecutor
+                  ? const _PausedState()
+                  : Stack(
+                      children: [
+                        if (!_mapMode)
+                          _ListView(orders: orders, categoryNameOf: _categoryName)
+                        else
+                          _MapView(
+                            orders: orders,
+                            center: state.selectedCity.center,
+                          ),
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 8.h,
+                          child: Center(
+                            child: _ToggleViewButton(
+                              isMap: _mapMode,
+                              onTap: () => setState(() => _mapMode = !_mapMode),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
-              ),
             ),
           ],
         ),
@@ -76,12 +82,14 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
 class _Header extends StatelessWidget {
   const _Header({
     required this.title,
+    required this.cityName,
     required this.onSwitchRole,
     required this.roleCta,
     required this.roleActive,
   });
 
   final String title;
+  final String cityName;
   final VoidCallback onSwitchRole;
   final String roleCta;
   final bool roleActive;
@@ -95,25 +103,57 @@ class _Header extends StatelessWidget {
         child: Padding(
           padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 8.h),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Material(
-                color: roleActive ? AppColors.primary : AppColors.primarySoft,
-                borderRadius: BorderRadius.circular(12.r),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(12.r),
-                  onTap: onSwitchRole,
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 10.h),
-                    child: Text(
-                      roleCta,
-                      style: AppText.body(
-                        color: roleActive ? Colors.white : AppColors.primary,
-                        weight: FontWeight.w600,
+              Row(
+                children: [
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: CityPill(cityName: cityName),
+                    ),
+                  ),
+                  SizedBox(width: 8.w),
+                  DecoratedBox(
+                decoration: BoxDecoration(
+                  color: roleActive ? AppColors.primary : AppColors.primarySoft,
+                  borderRadius: BorderRadius.circular(8.r),
+                  boxShadow: roleActive
+                      ? [
+                          BoxShadow(
+                            color: const Color(0x11000000),
+                            blurRadius: 20,
+                            offset: const Offset(0, 4),
+                          ),
+                        ]
+                      : null,
+                ),
+                child: Material(
+                  color: Colors.transparent,
+                  borderRadius: BorderRadius.circular(8.r),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(8.r),
+                    onTap: onSwitchRole,
+                    child: Padding(
+                      padding:
+                          EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+                      child: Text(
+                        roleCta,
+                        style: TextStyle(
+                          color: roleActive
+                              ? AppColors.background
+                              : AppColors.primary,
+                          fontSize: 14.sp,
+                          fontWeight: FontWeight.w500,
+                          height: 1.43,
+                          letterSpacing: 0.10,
+                        ),
                       ),
                     ),
                   ),
                 ),
+              ),
+                ],
               ),
               SizedBox(height: 4.h),
               Row(
@@ -127,7 +167,19 @@ class _Header extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Icon(IconsaxPlusLinear.search_normal_1, size: 26.r, color: AppColors.primary),
+                  if (roleActive)
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => context.push('/search'),
+                      child: Padding(
+                        padding: EdgeInsets.all(4.r),
+                        child: Icon(
+                          IconsaxPlusLinear.search_normal_1,
+                          size: 26.r,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ],
@@ -168,7 +220,7 @@ class _ListView extends StatelessWidget {
       );
     }
     return ListView.separated(
-      padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 100.h),
+      padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 56.h),
       itemCount: orders.length,
       separatorBuilder: (_, _) => SizedBox(height: 12.h),
       itemBuilder: (_, i) {
@@ -190,32 +242,12 @@ class _MapView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return OpenFreeMapView(
-      initialCenter: center,
-      initialZoom: 12,
-      markers: [
-        for (final o in orders)
-          OpenFreeMapMarker(
-            id: o.id,
-            point: o.location,
-            color: _markerColor(o),
-          ),
-      ],
-      onMarkerTap: (id) => context.push('/order/$id?mode=feed'),
+    return Image.asset(
+      'assets/images/map_mock.webp',
+      fit: BoxFit.cover,
+      width: double.infinity,
+      height: double.infinity,
     );
-  }
-
-  Color _markerColor(Order o) {
-    switch (o.status) {
-      case OrderStatus.open:
-        return AppColors.markerRed;
-      case OrderStatus.accepted:
-        return AppColors.markerOrange;
-      case OrderStatus.completed:
-        return AppColors.markerGreen;
-      default:
-        return AppColors.textSecondary;
-    }
   }
 }
 
@@ -226,25 +258,99 @@ class _ToggleViewButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.primary,
-      borderRadius: BorderRadius.circular(28.r),
-      elevation: 4,
-      shadowColor: Colors.black26,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(28.r),
-        onTap: onTap,
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: 24.w, vertical: 14.h),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(isMap ? IconsaxPlusLinear.menu : IconsaxPlusLinear.map, size: 20.r, color: Colors.white),
-              SizedBox(width: 8.w),
-              Text(isMap ? 'Список' : 'Карта',
-                  style: AppText.button(color: Colors.white)),
-            ],
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(8.r),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0x11000000),
+            blurRadius: 20,
+            offset: const Offset(0, 4),
           ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(8.r),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8.r),
+          onTap: onTap,
+          child: SizedBox(
+            width: 183.w,
+            height: 32.h,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Image.asset(
+                  isMap
+                      ? 'assets/images/icon_list.webp'
+                      : 'assets/images/icon_map.webp',
+                  width: 20.r,
+                  height: 20.r,
+                ),
+                SizedBox(width: 6.w),
+                Text(
+                  isMap ? 'Список' : 'Карта',
+                  style: TextStyle(
+                    color: AppColors.background,
+                    fontSize: 14.sp,
+                    fontWeight: FontWeight.w500,
+                    height: 1.43,
+                    letterSpacing: 0.10,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PausedState extends StatelessWidget {
+  const _PausedState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 32.w),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              IconsaxPlusLinear.pause,
+              size: 80.r,
+              color: AppColors.primary,
+            ),
+            SizedBox(height: 24.h),
+            Text(
+              'Поиск заказов отключён',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.black,
+                fontSize: 20.sp,
+                fontWeight: FontWeight.w600,
+                height: 1.25,
+                letterSpacing: -0.45,
+              ),
+            ),
+            SizedBox(height: 4.h),
+            Text(
+              'Нажмите кнопку вверху экрана, чтобы включить поиск заказов.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.black.withValues(alpha: 0.60),
+                fontSize: 17.sp,
+                fontWeight: FontWeight.w400,
+                height: 1.29,
+                letterSpacing: -0.40,
+              ),
+            ),
+          ],
         ),
       ),
     );

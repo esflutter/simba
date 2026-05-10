@@ -63,19 +63,42 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                       Center(
                         child: GestureDetector(
                           onTap: _pickPhoto,
-                          child: _photoPath != null
-                              ? Container(
+                          child: SizedBox(
+                            width: 100.r,
+                            height: 100.r,
+                            child: Stack(
+                              clipBehavior: Clip.none,
+                              children: [
+                                Container(
                                   width: 100.r,
                                   height: 100.r,
-                                  decoration: const BoxDecoration(shape: BoxShape.circle),
+                                  decoration: const BoxDecoration(
+                                    color: AppColors.surfaceVariant,
+                                    shape: BoxShape.circle,
+                                  ),
                                   clipBehavior: Clip.antiAlias,
-                                  child: Image.file(File(_photoPath!), fit: BoxFit.cover),
-                                )
-                              : Image.asset(
-                                  'assets/images/avatar_photo.webp',
-                                  width: 100.r,
-                                  height: 100.r,
+                                  child: _photoPath != null
+                                      ? Image.file(
+                                          File(_photoPath!),
+                                          fit: BoxFit.cover,
+                                        )
+                                      : Image.asset(
+                                          'assets/images/avatar_default.webp',
+                                          fit: BoxFit.contain,
+                                        ),
                                 ),
+                                Positioned(
+                                  right: 0,
+                                  bottom: 0,
+                                  child: Image.asset(
+                                    'assets/images/icon_camera.webp',
+                                    width: 24.r,
+                                    height: 24.r,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                       SizedBox(height: 24.h),
@@ -83,12 +106,14 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                         label: 'Имя / Никнейм',
                         controller: _ctrl,
                         onChanged: (_) => setState(() {}),
+                        maxLength: 50,
+                        textCapitalization: TextCapitalization.words,
                       ),
-                      SizedBox(height: 24.h),
                     ],
                   ),
                 ),
               ),
+              SizedBox(height: 16.h),
               PrimaryButton(
                 label: 'Далее',
                 onPressed: canContinue

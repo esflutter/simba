@@ -18,7 +18,6 @@ class PreferencesStore {
   static const _kUserPhoto = 'simba.user.photo';
   static const _kUserRating = 'simba.user.rating';
   static const _kUserReviews = 'simba.user.reviews';
-  static const _kUserEducation = 'simba.user.education';
   static const _kUserHasTools = 'simba.user.hasTools';
   static const _kUserHasTransport = 'simba.user.hasTransport';
   static const _kDraft = 'simba.draft.v1';
@@ -46,7 +45,6 @@ class PreferencesStore {
       rating: _prefs.getDouble(_kUserRating) ?? 0.0,
       reviewsCount: _prefs.getInt(_kUserReviews) ?? 0,
       cityId: _prefs.getString(_kCityId),
-      education: _prefs.getString(_kUserEducation) ?? '',
       hasTools: _prefs.getBool(_kUserHasTools) ?? false,
       hasTransport: _prefs.getBool(_kUserHasTransport) ?? false,
     );
@@ -63,7 +61,6 @@ class PreferencesStore {
     }
     await _prefs.setDouble(_kUserRating, u.rating);
     await _prefs.setInt(_kUserReviews, u.reviewsCount);
-    await _prefs.setString(_kUserEducation, u.education);
     await _prefs.setBool(_kUserHasTools, u.hasTools);
     await _prefs.setBool(_kUserHasTransport, u.hasTransport);
   }
@@ -75,7 +72,6 @@ class PreferencesStore {
     await _prefs.remove(_kUserPhoto);
     await _prefs.remove(_kUserRating);
     await _prefs.remove(_kUserReviews);
-    await _prefs.remove(_kUserEducation);
     await _prefs.remove(_kUserHasTools);
     await _prefs.remove(_kUserHasTransport);
   }

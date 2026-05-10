@@ -37,70 +37,69 @@ class OrderCard extends StatelessWidget {
       onTap: onTap,
       padding: EdgeInsets.all(16.w),
       borderRadius: BorderRadius.circular(12.r),
-      child: SizedBox(
-        height: 142.h - 32.h, // 142.h total − vertical padding (16.h × 2)
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: CategoryChip(categoryName, dense: true),
-                  ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: CategoryChip(categoryName, dense: true),
                 ),
-                SizedBox(width: 8.w),
-                Text(
-                  '→',
-                  style: AppText.body(color: AppColors.primary)
-                      .copyWith(height: 1.0, fontSize: 18.sp),
-                ),
-              ],
-            ),
-            Text(
-              order.title,
-              style: AppText.h3().copyWith(height: 1.20),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            Text(
-              order.address,
-              style: AppText.bodySmall(
-                color: Colors.black.withValues(alpha: 0.60),
-              ).copyWith(height: 1.40),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Expanded(
-                  child: showTime
-                      ? Text(
-                          _whenLabel,
-                          style: AppText.body(weight: FontWeight.w500)
-                              .copyWith(height: 1.40),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        )
-                      : const SizedBox.shrink(),
-                ),
-                SizedBox(width: 8.w),
-                Text(
-                  _priceLabel,
-                  style: AppText.body(
-                    color: AppColors.primary,
-                    weight: FontWeight.w600,
-                  ).copyWith(height: 1.40),
-                ),
-              ],
-            ),
-          ],
-        ),
+              ),
+              SizedBox(width: 8.w),
+              Text(
+                '→',
+                style: AppText.body(color: AppColors.primary)
+                    .copyWith(height: 1.0, fontSize: 18.sp),
+              ),
+            ],
+          ),
+          SizedBox(height: 8.h),
+          Text(
+            order.title,
+            style: AppText.h3().copyWith(height: 1.20),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          SizedBox(height: 8.h),
+          Text(
+            order.address,
+            style: AppText.bodySmall(
+              color: Colors.black.withValues(alpha: 0.60),
+            ).copyWith(height: 1.40),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          SizedBox(height: 8.h),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Expanded(
+                child: showTime
+                    ? Text(
+                        _whenLabel,
+                        style: AppText.body(weight: FontWeight.w500)
+                            .copyWith(height: 1.40),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              SizedBox(width: 8.w),
+              Text(
+                _priceLabel,
+                style: AppText.body(
+                  color: AppColors.primary,
+                  weight: FontWeight.w600,
+                ).copyWith(height: 1.40),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

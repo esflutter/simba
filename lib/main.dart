@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -22,6 +23,11 @@ Future<void> main() async {
     systemNavigationBarIconBrightness: Brightness.dark,
   ));
   final prefs = await SharedPreferences.getInstance();
+  // В debug-режиме очищаем сохранённое состояние при каждом hot restart /
+  // cold start, чтобы поток splash → онбординг прогонялся целиком.
+  if (kDebugMode) {
+    await prefs.clear();
+  }
   runApp(
     ProviderScope(
       overrides: [
