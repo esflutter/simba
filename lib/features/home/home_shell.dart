@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/widgets/bottom_tab_bar.dart';
 import '../create_order/create_service_type_screen.dart';
@@ -24,17 +25,19 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     _index = _tabFromName(widget.initialTab);
   }
 
-  int _tabFromName(String t) {
-    switch (t) {
-      case 'create':
-        return 1;
-      case 'my':
-        return 2;
-      case 'profile':
-        return 3;
-      default:
-        return 0;
+  @override
+  void didUpdateWidget(covariant HomeShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.initialTab != widget.initialTab) {
+      setState(() => _index = _tabFromName(widget.initialTab));
     }
+  }
+
+  static const _tabNames = ['orders', 'create', 'my', 'profile'];
+
+  int _tabFromName(String t) {
+    final i = _tabNames.indexOf(t);
+    return i < 0 ? 0 : i;
   }
 
   @override
@@ -50,7 +53,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       body: IndexedStack(index: _index, children: screens),
       bottomNavigationBar: BottomTabBar(
         index: _index,
-        onChanged: (i) => setState(() => _index = i),
+        onChanged: (i) => context.go('/home/${_tabNames[i]}'),
       ),
     );
   }

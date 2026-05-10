@@ -124,8 +124,8 @@ class _AppTextFieldState extends State<AppTextField> {
                       border: InputBorder.none,
                       contentPadding: EdgeInsets.zero,
                       hintText: widget.hint,
-                      hintStyle: AppText.body(color: Colors.black.withValues(alpha: 0.60))
-                          .copyWith(height: 1.50, letterSpacing: -0.31),
+                      hintStyle: AppText.body(color: Colors.black.withValues(alpha: 0.30))
+                          .copyWith(height: 1.31, letterSpacing: -0.31),
                     ),
                   ),
                 ),

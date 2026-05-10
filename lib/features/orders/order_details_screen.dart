@@ -4,15 +4,16 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
+import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/date_time_formatters.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
-import '../../core/widgets/openfreemap_view.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
-import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 
 class OrderDetailsScreen extends ConsumerWidget {
@@ -32,116 +33,113 @@ class OrderDetailsScreen extends ConsumerWidget {
     final isCustomer = order.customerId == 'me';
     final isMine = isCustomer;
     final hasMyResponse = order.responses.contains('me');
-    final category = MockData.categories.firstWhere(
-      (c) => c.id == order.categoryId,
-      orElse: () => MockData.categories.last,
-    );
-
     final statusBadge =
         _badgeForStatus(order, isCustomer: isCustomer, hasMyResponse: hasMyResponse);
 
+    final isCompleted = order.status == OrderStatus.completed;
+    final isCancelled = order.status == OrderStatus.cancelled;
+    final isPast = isCompleted || isCancelled;
+    // Для выполненных/отменённых «Как можно скорее» неуместно — показываем
+    // дату завершения/создания (как в списке истории).
+    final whenLabel = isPast
+        ? DateFormat('dd.MM.yyyy', 'ru_RU').format(
+            order.scheduledAt ?? order.createdAt,
+          )
+        : order.scheduledAt != null
+            ? DateFormat('dd.MM.yyyy HH:mm').format(order.scheduledAt!)
+            : 'Как можно скорее';
+    final whenFieldLabel =
+        isCompleted ? 'Дата выполнения' : isCancelled ? 'Дата' : 'Время начала работ';
+    final paymentLabel = _paymentLabel(order.paymentMethod);
+
     return Scaffold(
-      body: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8.w),
-                  child: const AppBackButton(),
+      backgroundColor: AppColors.background,
+      body: Column(
+        children: [
+          // ── White header with back button + status badge ──
+          Container(
+            color: AppColors.surface,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(8.w, 4.h, 16.w, 4.h),
+                child: Row(
+                  children: [
+                    const AppBackButton(),
+                    const Spacer(),
+                    if (statusBadge != null) statusBadge,
+                  ],
                 ),
-                const Spacer(),
-                if (statusBadge != null)
-                  Padding(
-                    padding: EdgeInsets.only(right: 16.w),
-                    child: statusBadge,
-                  ),
-              ],
-            ),
-            Expanded(
-              child: ListView(
-                padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
-                children: [
-                  Text(order.title, style: AppText.h2().copyWith(height: 1.20)),
-                  SizedBox(height: 16.h),
-                  Text(
-                    '${NumberFormat('#,###').format(order.priceRub).replaceAll(',', ' ')} ₽',
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 20.sp,
-                      fontWeight: FontWeight.w600,
-                      height: 1.20,
-                    ),
-                  ),
-                  SizedBox(height: 16.h),
-                  _Field('Способ оплаты', 'Наличные'),
-                  SizedBox(height: 12.h),
-                  _Field('Категория работ', category.name),
-                  SizedBox(height: 12.h),
-                  _Field(
-                    'Время начала работы',
-                    order.scheduledAt != null
-                        ? DateFormat('dd.MM.yyyy HH:mm').format(order.scheduledAt!)
-                        : 'Как можно скорее',
-                  ),
-                  SizedBox(height: 12.h),
-                  _Field('Комментарий', order.description),
-                  SizedBox(height: 12.h),
-                  _Field('Адрес', order.address),
-                  SizedBox(height: 12.h),
-                  AppCard(
-                    padding: EdgeInsets.zero,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(20.r),
-                      child: SizedBox(
-                        height: 160.h,
-                        child: OpenFreeMapView(
-                          initialCenter: order.location,
-                          initialZoom: 14,
-                          interactive: false,
-                          markers: [
-                            OpenFreeMapMarker(
-                              id: order.id,
-                              point: order.location,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  if (order.photoPaths.isNotEmpty) ...[
-                    SizedBox(height: 16.h),
-                    Text('Фото', style: AppText.h4()),
-                    SizedBox(height: 8.h),
-                    SizedBox(
-                      height: 96.h,
-                      child: ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: order.photoPaths.length,
-                        separatorBuilder: (_, _) => SizedBox(width: 8.w),
-                        itemBuilder: (_, i) => ClipRRect(
-                          borderRadius: BorderRadius.circular(12.r),
-                          child: Image.network(order.photoPaths[i], width: 96.w, fit: BoxFit.cover),
-                        ),
-                      ),
-                    ),
-                  ],
-                  if (order.executorId != null && order.executorId != 'me' && isMine) ...[
-                    SizedBox(height: 16.h),
-                    Text('Исполнитель', style: AppText.h4()),
-                    SizedBox(height: 8.h),
-                    _ExecutorCard(executorId: order.executorId!, orderId: order.id),
-                  ],
-                  SizedBox(height: 24.h),
-                  ..._buildActions(context, ref, order, isMine, hasMyResponse),
-                ],
               ),
             ),
-          ],
-        ),
+          ),
+          // ── Gray scrollable content ──
+          Expanded(
+            child: ListView(
+              padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 16.h),
+              children: [
+                Text(order.title, style: AppText.h2().copyWith(height: 1.20)),
+                SizedBox(height: 16.h),
+                Text(
+                  formatRub(order.priceRub),
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 20.sp,
+                    fontWeight: FontWeight.w600,
+                    height: 1.40,
+                  ),
+                ),
+                SizedBox(height: 16.h),
+                _Field('Способ оплаты', paymentLabel),
+                SizedBox(height: 16.h),
+                _Field(whenFieldLabel, whenLabel),
+                SizedBox(height: 16.h),
+                if (order.description.trim().isNotEmpty) ...[
+                  _Field('Комментарий', order.description),
+                  SizedBox(height: 16.h),
+                ],
+                _AddressBlock(address: order.address, location: order.location),
+                if (order.photoPaths.isNotEmpty) ...[
+                  SizedBox(height: 16.h),
+                  _FieldLabel('Фото'),
+                  SizedBox(height: 8.h),
+                  SizedBox(
+                    height: 96.h,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: order.photoPaths.length,
+                      separatorBuilder: (_, _) => SizedBox(width: 8.w),
+                      itemBuilder: (_, i) => ClipRRect(
+                        borderRadius: BorderRadius.circular(12.r),
+                        child: Image.network(order.photoPaths[i], width: 96.w, fit: BoxFit.cover),
+                      ),
+                    ),
+                  ),
+                ],
+                if (order.executorId != null && order.executorId != 'me' && isMine) ...[
+                  SizedBox(height: 16.h),
+                  _FieldLabel('Исполнитель'),
+                  SizedBox(height: 8.h),
+                  _ExecutorCard(executorId: order.executorId!, orderId: order.id),
+                ],
+                SizedBox(height: 16.h),
+              ],
+            ),
+          ),
+          // ── White sticky action bar ──
+          _ActionBar(
+            children: _buildActions(context, ref, order, isMine, hasMyResponse),
+          ),
+        ],
       ),
     );
+  }
+
+  String _paymentLabel(PaymentMethod m) {
+    switch (m) {
+      case PaymentMethod.cash:
+        return 'Наличными исполнителю';
+    }
   }
 
   List<Widget> _buildActions(BuildContext context, WidgetRef ref, Order order, bool isMine, bool hasMyResponse) {
@@ -155,21 +153,20 @@ class OrderDetailsScreen extends ConsumerWidget {
             count: order.responses.length,
             onTap: () => context.push('/order/${order.id}/responses'),
           ));
-          widgets.add(SizedBox(height: 12.h));
+          widgets.add(SizedBox(height: 16.h));
           widgets.add(_CancelOrderButton(
             onTap: () => _confirmCancel(context, ctrl, order.id),
           ));
           break;
         case OrderStatus.accepted:
-          widgets.add(_StatusBanner(
-            color: AppColors.primarySoft,
-            textColor: AppColors.primary,
-            label: 'Исполнитель найден. Дождитесь завершения работы.',
+          widgets.add(PrimaryButton(
+            label: 'Работа выполнена',
+            onPressed: () => ctrl.markWorkDone(order.id, inMyOrders: true),
           ));
           break;
         case OrderStatus.awaitingPayment:
           widgets.add(PrimaryButton(
-            label: 'Подтвердить и оплатить наличными',
+            label: 'Подтвердить оплату',
             onPressed: () {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
@@ -258,7 +255,7 @@ class OrderDetailsScreen extends ConsumerWidget {
           width: 313.w,
           padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 16.h),
           decoration: BoxDecoration(
-            color: AppColors.background,
+            color: Colors.white,
             borderRadius: BorderRadius.circular(24.r),
           ),
           child: Column(
@@ -271,70 +268,151 @@ class OrderDetailsScreen extends ConsumerWidget {
                   color: AppColors.error,
                   borderRadius: BorderRadius.circular(14.r),
                 ),
-                child: Icon(Icons.close_rounded, color: Colors.white, size: 36.r),
+                child: Center(
+                  child: CustomPaint(
+                    size: Size(28.r, 28.r),
+                    painter: _XPainter(color: Colors.white, strokeWidth: 4.5.r),
+                  ),
+                ),
               ),
               SizedBox(height: 16.h),
               Text(
                 'Отменить заказ?',
                 textAlign: TextAlign.center,
-                style: AppText.h3().copyWith(height: 1.40),
+                style: TextStyle(
+                  color: Colors.black,
+                  fontSize: 20.sp,
+                  fontWeight: FontWeight.w600,
+                  height: 1.40,
+                ),
               ),
               SizedBox(height: 8.h),
               Text(
                 'Все данные о заказе будут потеряны',
                 textAlign: TextAlign.center,
-                style: AppText.body().copyWith(
-                  fontSize: 15.sp,
+                style: TextStyle(
                   color: Colors.black.withValues(alpha: 0.60),
+                  fontSize: 15.sp,
+                  fontWeight: FontWeight.w400,
                   height: 1.33,
                 ),
               ),
               SizedBox(height: 16.h),
-              Padding(
-                padding: EdgeInsets.symmetric(vertical: 8.h),
-                child: Material(
-                  color: AppColors.primary,
-                  borderRadius: BorderRadius.circular(10.r),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(10.r),
-                    onTap: () {
-                      ctrl.cancelOrder(id);
-                      Navigator.of(dialogCtx).pop();
-                      context.pop();
-                    },
-                    child: SizedBox(
-                      width: double.infinity,
-                      height: 36.h,
-                      child: Center(
-                        child: Text(
-                          'Отменить заказ',
-                          textAlign: TextAlign.center,
-                          style: AppText.bodyLarge(
-                            color: AppColors.background,
-                            weight: FontWeight.w600,
-                          ).copyWith(height: 1.29, letterSpacing: -0.40),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
+              _DialogActionButton(
+                label: 'Отменить заказ',
+                background: AppColors.primary,
+                textColor: Colors.white,
+                onTap: () {
+                  ctrl.cancelOrder(id);
+                  Navigator.of(dialogCtx).pop();
+                  context.pop();
+                },
               ),
-              GestureDetector(
+              SizedBox(height: 8.h),
+              _DialogActionButton(
+                label: 'Отмена',
+                background: AppColors.surfaceVariant,
+                textColor: Colors.black,
                 onTap: () => Navigator.of(dialogCtx).pop(),
-                behavior: HitTestBehavior.opaque,
-                child: Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8.h),
-                  child: Text(
-                    'Отмена',
-                    style: AppText.bodyLarge(
-                      color: AppColors.primary,
-                      weight: FontWeight.w400,
-                    ).copyWith(letterSpacing: -0.40),
-                  ),
-                ),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _XPainter extends CustomPainter {
+  _XPainter({required this.color, required this.strokeWidth});
+  final Color color;
+  final double strokeWidth;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = strokeWidth
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(Offset.zero, Offset(size.width, size.height), paint);
+    canvas.drawLine(Offset(size.width, 0), Offset(0, size.height), paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _XPainter old) =>
+      old.color != color || old.strokeWidth != strokeWidth;
+}
+
+class _DialogActionButton extends StatelessWidget {
+  const _DialogActionButton({
+    required this.label,
+    required this.background,
+    required this.textColor,
+    required this.onTap,
+  });
+
+  final String label;
+  final Color background;
+  final Color textColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: background,
+      borderRadius: BorderRadius.circular(10.r),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(10.r),
+        onTap: onTap,
+        child: SizedBox(
+          width: double.infinity,
+          height: 36.h,
+          child: Center(
+            child: Text(
+              label,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: textColor,
+                fontSize: 17.sp,
+                fontWeight: FontWeight.w600,
+                height: 1.29,
+                letterSpacing: -0.40,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionBar extends StatelessWidget {
+  const _ActionBar({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    if (children.isEmpty) return const SizedBox.shrink();
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(16.r),
+          topRight: Radius.circular(16.r),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 18.80,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 16.h),
+          child: Column(mainAxisSize: MainAxisSize.min, children: children),
         ),
       ),
     );
@@ -350,9 +428,9 @@ class _ResponsesButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: AppColors.primary,
-      borderRadius: BorderRadius.circular(16.r),
+      borderRadius: BorderRadius.circular(10.r),
       child: InkWell(
-        borderRadius: BorderRadius.circular(16.r),
+        borderRadius: BorderRadius.circular(10.r),
         onTap: onTap,
         child: SizedBox(
           width: double.infinity,
@@ -360,27 +438,32 @@ class _ResponsesButton extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(IconsaxPlusLinear.profile_2user, color: Colors.white, size: 22.r),
-              SizedBox(width: 8.w),
               Text(
                 'Смотреть отклики',
                 style: AppText.bodyLarge(color: Colors.white, weight: FontWeight.w600)
                     .copyWith(letterSpacing: -0.40),
               ),
-              if (count > 0) ...[
-                SizedBox(width: 8.w),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 2.h),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12.r),
-                  ),
-                  child: Text(
-                    '$count',
-                    style: AppText.bodySmall(color: AppColors.primary, weight: FontWeight.w600),
+              SizedBox(width: 10.w),
+              Container(
+                constraints: BoxConstraints(minWidth: 24.r),
+                height: 24.r,
+                padding: EdgeInsets.symmetric(horizontal: 6.w),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(24.r),
+                ),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    color: AppColors.primary,
+                    fontSize: 15.sp,
+                    fontWeight: FontWeight.w600,
+                    height: 1.33,
+                    letterSpacing: -0.23,
                   ),
                 ),
-              ],
+              ),
             ],
           ),
         ),
@@ -397,26 +480,133 @@ class _CancelOrderButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return Material(
       color: AppColors.surfaceVariant,
-      borderRadius: BorderRadius.circular(16.r),
+      borderRadius: BorderRadius.circular(10.r),
       child: InkWell(
-        borderRadius: BorderRadius.circular(16.r),
+        borderRadius: BorderRadius.circular(10.r),
         onTap: onTap,
         child: SizedBox(
           width: double.infinity,
           height: 50.h,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(IconsaxPlusLinear.user_remove, color: AppColors.error, size: 22.r),
-              SizedBox(width: 8.w),
-              Text(
-                'Отменить заказ',
-                style: AppText.bodyLarge(color: AppColors.error, weight: FontWeight.w600)
-                    .copyWith(letterSpacing: -0.40),
-              ),
-            ],
+          child: Center(
+            child: Text(
+              'Отменить заказ',
+              style: AppText.bodyLarge(color: AppColors.error, weight: FontWeight.w600)
+                  .copyWith(letterSpacing: -0.40),
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _AddressBlock extends StatelessWidget {
+  const _AddressBlock({required this.address, required this.location});
+  final String address;
+  final LatLng location;
+
+  Future<void> _openMap() async {
+    final lat = location.latitude;
+    final lng = location.longitude;
+    // Цепочка попыток: сначала маршрут от моего местоположения,
+    // если ничего не открылось — просто координаты места.
+    final attempts = <Uri>[
+      Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng'),
+      Uri.parse('geo:$lat,$lng?q=$lat,$lng'),
+    ];
+    for (final uri in attempts) {
+      try {
+        final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+        if (ok) return;
+      } catch (_) {
+        // переходим к следующему варианту
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const _FieldLabel('Адрес'),
+        SizedBox(height: 12.h),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10.r),
+          child: Image.asset(
+            'assets/images/map_mock.webp',
+            width: double.infinity,
+            height: 170.h,
+            fit: BoxFit.cover,
+          ),
+        ),
+        SizedBox(height: 12.h),
+        Row(
+          children: [
+            Icon(IconsaxPlusLinear.location, color: AppColors.primary, size: 18.r),
+            SizedBox(width: 6.w),
+            Expanded(
+              child: Text(
+                address,
+                style: TextStyle(
+                  color: AppColors.primary,
+                  fontSize: 13.sp,
+                  fontWeight: FontWeight.w500,
+                  height: 1.60,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        SizedBox(height: 12.h),
+        Material(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(8.r),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(8.r),
+            onTap: _openMap,
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(IconsaxPlusLinear.routing_2, color: AppColors.primary, size: 20.r),
+                  SizedBox(width: 6.w),
+                  Text(
+                    'Построить маршрут',
+                    style: TextStyle(
+                      color: AppColors.primary,
+                      fontSize: 15.sp,
+                      fontWeight: FontWeight.w600,
+                      height: 1.33,
+                      letterSpacing: -0.23,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FieldLabel extends StatelessWidget {
+  const _FieldLabel(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      label,
+      style: TextStyle(
+        color: AppColors.primary,
+        fontSize: 13.sp,
+        fontWeight: FontWeight.w600,
+        height: 1.54,
       ),
     );
   }
@@ -432,15 +622,7 @@ class _Field extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: AppColors.primary,
-            fontSize: 13.sp,
-            fontWeight: FontWeight.w600,
-            height: 1.54,
-          ),
-        ),
+        _FieldLabel(label),
         SizedBox(height: 4.h),
         Text(value, style: AppText.body().copyWith(height: 1.50)),
       ],
@@ -508,7 +690,7 @@ class _ExecutorCard extends StatelessWidget {
             width: 56.r,
             height: 56.r,
             decoration: const BoxDecoration(
-              color: AppColors.background,
+              color: AppColors.surfaceVariant,
               shape: BoxShape.circle,
             ),
             child: Icon(IconsaxPlusLinear.user, color: AppColors.primary, size: 32.r),

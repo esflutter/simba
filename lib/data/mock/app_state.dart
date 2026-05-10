@@ -107,12 +107,21 @@ class AppController extends Notifier<AppState> {
     _prefs?.saveUser(u);
   }
 
-  void completeProfile({required String name, String? photoPath}) {
+  void completeProfile({
+    required String name,
+    String? photoPath,
+    String? education,
+    bool? hasTools,
+    bool? hasTransport,
+  }) {
     final u = state.user;
     if (u == null) return;
     final updated = u.copyWith(
       name: name.trim().isEmpty ? 'Пользователь' : name,
       photoPath: photoPath,
+      education: education,
+      hasTools: hasTools,
+      hasTransport: hasTransport,
     );
     state = state.copyWith(user: updated);
     _prefs?.saveUser(updated);
@@ -147,7 +156,25 @@ class AppController extends Notifier<AppState> {
     state = state.copyWith(
       myOrders: state.myOrders
           .map((o) => o.id == orderId
-              ? o.copyWith(executorId: executorId, status: OrderStatus.accepted)
+              ? o.copyWith(
+                  executorId: executorId,
+                  status: OrderStatus.accepted,
+                  responses: [executorId],
+                )
+              : o)
+          .toList(),
+    );
+  }
+
+  /// Отклонить отклик от конкретного пользователя — убрать его из responses.
+  /// Заказ остаётся открытым, остальные отклики не трогаем.
+  void declineResponse(String orderId, String userId) {
+    state = state.copyWith(
+      myOrders: state.myOrders
+          .map((o) => o.id == orderId
+              ? o.copyWith(
+                  responses: o.responses.where((id) => id != userId).toList(),
+                )
               : o)
           .toList(),
     );

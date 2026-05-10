@@ -39,6 +39,9 @@ class AppUser {
     this.rating = 0.0,
     this.reviewsCount = 0,
     this.cityId,
+    this.education = '',
+    this.hasTools = false,
+    this.hasTransport = false,
   });
 
   final String id;
@@ -48,6 +51,9 @@ class AppUser {
   final double rating;
   final int reviewsCount;
   final String? cityId;
+  final String education;
+  final bool hasTools;
+  final bool hasTransport;
 
   AppUser copyWith({
     String? name,
@@ -56,6 +62,9 @@ class AppUser {
     double? rating,
     int? reviewsCount,
     String? cityId,
+    String? education,
+    bool? hasTools,
+    bool? hasTransport,
   }) {
     return AppUser(
       id: id,
@@ -65,6 +74,9 @@ class AppUser {
       rating: rating ?? this.rating,
       reviewsCount: reviewsCount ?? this.reviewsCount,
       cityId: cityId ?? this.cityId,
+      education: education ?? this.education,
+      hasTools: hasTools ?? this.hasTools,
+      hasTransport: hasTransport ?? this.hasTransport,
     );
   }
 }
@@ -158,4 +170,20 @@ class Review {
   final String comment;
   final List<String> tags;
   final DateTime createdAt;
+}
+
+extension OrderLifecycle on Order {
+  /// Заказ относится к истории: завершён, отменён, либо запланированная
+  /// дата начала уже прошла (наступило указанное время и позже).
+  bool get isHistorical {
+    if (status == OrderStatus.completed || status == OrderStatus.cancelled) {
+      return true;
+    }
+    final s = scheduledAt;
+    if (s != null && s.isBefore(DateTime.now())) return true;
+    return false;
+  }
+
+  /// Заказ активный — обратное к [isHistorical].
+  bool get isActive => !isHistorical;
 }

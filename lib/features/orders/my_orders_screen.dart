@@ -19,10 +19,9 @@ class MyOrdersScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(appControllerProvider);
-    final mine = state.myOrders.where((o) => o.status != OrderStatus.cancelled);
+    final mine = state.myOrders.where((o) => o.isActive);
     final asExecutor = state.orders.where((o) =>
-        (o.executorId == 'me' || o.responses.contains('me')) &&
-        o.status != OrderStatus.cancelled);
+        (o.executorId == 'me' || o.responses.contains('me')) && o.isActive);
     final orders = [...mine, ...asExecutor];
 
     return Scaffold(

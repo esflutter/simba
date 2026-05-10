@@ -18,7 +18,7 @@ class LeaveReviewScreen extends ConsumerStatefulWidget {
 }
 
 class _LeaveReviewScreenState extends ConsumerState<LeaveReviewScreen> {
-  int _rating = 5;
+  int _rating = 0;
   final Set<String> _tags = {};
   final _ctrl = TextEditingController();
 
@@ -32,39 +32,81 @@ class _LeaveReviewScreenState extends ConsumerState<LeaveReviewScreen> {
     showDialog<void>(
       context: context,
       barrierDismissible: false,
+      barrierColor: Colors.black.withValues(alpha: 0.40),
       builder: (dialogCtx) => Dialog(
-        backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24.r)),
-        insetPadding: EdgeInsets.symmetric(horizontal: 32.w),
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(20.w, 24.h, 20.w, 16.h),
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.symmetric(horizontal: 24.w),
+        child: Container(
+          width: 313.w,
+          padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 16.h),
+          decoration: BoxDecoration(
+            color: AppColors.background,
+            borderRadius: BorderRadius.circular(24.r),
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 64.r,
-                height: 64.r,
+                width: 56.r,
+                height: 56.r,
                 decoration: BoxDecoration(
                   color: AppColors.success,
-                  borderRadius: BorderRadius.circular(16.r),
+                  borderRadius: BorderRadius.circular(14.r),
                 ),
-                child: Icon(IconsaxPlusLinear.tick_circle, color: Colors.white, size: 38.r),
+                child: Icon(Icons.check_rounded, color: Colors.white, size: 36.r, weight: 700),
               ),
               SizedBox(height: 16.h),
-              Text('Спасибо за оценку!', style: AppText.h4(), textAlign: TextAlign.center),
+              Text(
+                'Спасибо за оценку!',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.black,
+                  fontSize: 20.sp,
+                  fontWeight: FontWeight.w600,
+                  height: 1.40,
+                ),
+              ),
               SizedBox(height: 8.h),
               Text(
                 'Ваш отзыв будет опубликован в аккаунте исполнителя / заказчика',
-                style: AppText.body(color: AppColors.textSecondary),
                 textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.black.withValues(alpha: 0.60),
+                  fontSize: 15.sp,
+                  fontWeight: FontWeight.w400,
+                  height: 1.33,
+                ),
               ),
-              SizedBox(height: 20.h),
-              PrimaryButton(
-                label: 'Ок',
-                onPressed: () {
-                  Navigator.of(dialogCtx).pop();
-                  context.pop();
-                },
+              SizedBox(height: 16.h),
+              Padding(
+                padding: EdgeInsets.symmetric(vertical: 8.h),
+                child: Material(
+                  color: AppColors.primary,
+                  borderRadius: BorderRadius.circular(10.r),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(10.r),
+                    onTap: () {
+                      Navigator.of(dialogCtx).pop();
+                      context.pop();
+                    },
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 36.h,
+                      child: Center(
+                        child: Text(
+                          'Ок',
+                          style: TextStyle(
+                            color: const Color(0xFFF5F5F5),
+                            fontSize: 17.sp,
+                            fontWeight: FontWeight.w600,
+                            height: 1.29,
+                            letterSpacing: -0.40,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
@@ -88,15 +130,30 @@ class _LeaveReviewScreenState extends ConsumerState<LeaveReviewScreen> {
               Stack(
                 alignment: Alignment.center,
                 children: [
-                  Text('Как вам заказ?',
-                      style: AppText.h4(),
-                      textAlign: TextAlign.center),
+                  Text(
+                    'Как вам заказ?',
+                    style: TextStyle(
+                      color: Colors.black,
+                      fontSize: 17.sp,
+                      fontWeight: FontWeight.w600,
+                      height: 1.29,
+                      letterSpacing: -0.43,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
                   Positioned(
                     right: 0,
-                    child: IconButton(
-                      icon: Icon(IconsaxPlusLinear.close_circle,
-                          color: AppColors.primary, size: 24.r),
-                      onPressed: () => context.pop(),
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => context.pop(),
+                      child: Padding(
+                        padding: EdgeInsets.all(8.r),
+                        child: Icon(
+                          Icons.close_rounded,
+                          color: AppColors.primary,
+                          size: 24.r,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -118,9 +175,13 @@ class _LeaveReviewScreenState extends ConsumerState<LeaveReviewScreen> {
                               child: Padding(
                                 padding: EdgeInsets.symmetric(horizontal: 6.w),
                                 child: Icon(
-                                  IconsaxPlusBold.star_1,
+                                  filled
+                                      ? IconsaxPlusBold.star_1
+                                      : IconsaxPlusLinear.star_1,
                                   size: 56.r,
-                                  color: filled ? AppColors.star : AppColors.divider,
+                                  color: filled
+                                      ? AppColors.star
+                                      : Colors.black.withValues(alpha: 0.30),
                                 ),
                               ),
                             );

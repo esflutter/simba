@@ -27,10 +27,14 @@ class ResponsesScreen extends ConsumerWidget {
       backgroundColor: AppColors.background,
       body: SafeArea(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
-              child: const AppBackButton(),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                child: const AppBackButton(),
+              ),
             ),
             Expanded(
               child: users.isEmpty
@@ -96,7 +100,9 @@ class ResponsesScreen extends ConsumerWidget {
                                         icon: IconsaxPlusLinear.user_remove,
                                         background: AppColors.surfaceVariant,
                                         color: AppColors.error,
-                                        onTap: () {},
+                                        onTap: () => ref
+                                            .read(appControllerProvider.notifier)
+                                            .declineResponse(orderId, u.id),
                                       ),
                                     ),
                                     SizedBox(width: 8.w),
@@ -137,7 +143,7 @@ class _Avatar extends StatelessWidget {
       width: 56.r,
       height: 56.r,
       decoration: const BoxDecoration(
-        color: AppColors.background,
+        color: AppColors.surfaceVariant,
         shape: BoxShape.circle,
       ),
       child: Icon(IconsaxPlusLinear.user, color: AppColors.primary, size: 32.r),

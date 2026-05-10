@@ -3,12 +3,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
 import '../../data/mock/app_state.dart';
+import '../../data/models/models.dart';
 
 class UserProfileScreen extends ConsumerWidget {
   const UserProfileScreen({super.key, required this.userId, this.orderId});
@@ -17,12 +19,23 @@ class UserProfileScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(appControllerProvider);
     final user = userById(userId);
-    final allReviews = ref.watch(appControllerProvider).reviews;
+    final allReviews = state.reviews;
     final reviews = allReviews
         .where((r) => r.toUserId == userId || r.toUserId == 'me')
         .toList();
-    final accepted = orderId != null;
+    final order = orderId == null
+        ? null
+        : [...state.myOrders, ...state.orders]
+            .cast<Order?>()
+            .firstWhere((o) => o?.id == orderId, orElse: () => null);
+    final isAcceptedExecutor =
+        order != null && order.executorId == userId;
+    final isPendingCandidate = order != null &&
+        order.status == OrderStatus.open &&
+        order.responses.contains(userId);
+    final accepted = isAcceptedExecutor;
 
     final ratingDistribution = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
     for (final r in reviews) {
@@ -38,26 +51,35 @@ class UserProfileScreen extends ConsumerWidget {
 
     return Scaffold(
       backgroundColor: AppColors.background,
-      body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
-              child: const AppBackButton(),
+      body: Column(
+        children: [
+          Container(
+            color: AppColors.surface,
+            child: SafeArea(
+              bottom: false,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                  child: const AppBackButton(),
+                ),
+              ),
             ),
-            Expanded(
+          ),
+          Expanded(
               child: ListView(
                 padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
                 children: [
                   AppCard(
-                    padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 16.h),
+                    padding: EdgeInsets.all(16.w),
+                    borderRadius: BorderRadius.circular(10.r),
                     child: Row(
                       children: [
                         Container(
                           width: 56.r,
                           height: 56.r,
                           decoration: const BoxDecoration(
-                            color: AppColors.background,
+                            color: AppColors.surfaceVariant,
                             shape: BoxShape.circle,
                           ),
                           child: Icon(
@@ -66,7 +88,7 @@ class UserProfileScreen extends ConsumerWidget {
                             size: 32.r,
                           ),
                         ),
-                        SizedBox(width: 12.w),
+                        SizedBox(width: 16.w),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -92,15 +114,24 @@ class UserProfileScreen extends ConsumerWidget {
                                 ),
                               Text(
                                 user.name,
-                                style: AppText.h3().copyWith(height: 1.20),
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 20.sp,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.20,
+                                ),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
                               SizedBox(height: 4.h),
                               Text(
                                 user.phone,
-                                style: AppText.body(weight: FontWeight.w600)
-                                    .copyWith(height: 1.50),
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontSize: 16.sp,
+                                  fontWeight: FontWeight.w600,
+                                  height: 1.50,
+                                ),
                               ),
                             ],
                           ),
@@ -108,44 +139,42 @@ class UserProfileScreen extends ConsumerWidget {
                       ],
                     ),
                   ),
-                  SizedBox(height: 16.h),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _ContactButton(
-                          label: 'Написать',
-                          icon: IconsaxPlusLinear.message_text_1,
-                          background: AppColors.surface,
-                          color: AppColors.textPrimary,
-                          onTap: () => _showContactSheet(context, user.phone),
-                        ),
-                      ),
-                      SizedBox(width: 8.w),
-                      Expanded(
-                        child: _ContactButton(
-                          label: 'Позвонить',
-                          icon: IconsaxPlusLinear.call,
-                          background: AppColors.primary,
-                          color: Colors.white,
-                          onTap: () {},
-                        ),
-                      ),
-                    ],
-                  ),
-                  SizedBox(height: 16.h),
+                  SizedBox(height: 8.h),
                   Padding(
-                    padding: EdgeInsets.only(left: 4.w),
-                    child: Text(
-                      'Отзывы',
-                      style: TextStyle(
-                        color: AppColors.primary,
-                        fontSize: 13.sp,
-                        fontWeight: FontWeight.w600,
-                        height: 1.54,
-                      ),
+                    padding: EdgeInsets.symmetric(vertical: 8.h),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: _ContactButton(
+                            label: 'Написать',
+                            background: AppColors.surface,
+                            color: Colors.black,
+                            onTap: () => _showContactSheet(context, user.phone),
+                          ),
+                        ),
+                        SizedBox(width: 8.w),
+                        Expanded(
+                          child: _ContactButton(
+                            label: 'Позвонить',
+                            background: AppColors.primary,
+                            color: const Color(0xFFF5F5F5),
+                            onTap: () => _callPhone(user.phone),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   SizedBox(height: 8.h),
+                  Text(
+                    'Отзывы',
+                    style: TextStyle(
+                      color: AppColors.primary,
+                      fontSize: 13.sp,
+                      fontWeight: FontWeight.w600,
+                      height: 1.54,
+                    ),
+                  ),
+                  SizedBox(height: 4.h),
                   if (reviews.isEmpty)
                     AppCard(
                       child: Padding(
@@ -189,7 +218,7 @@ class UserProfileScreen extends ConsumerWidget {
                                 children: [
                                   CircleAvatar(
                                     radius: 16.r,
-                                    backgroundColor: AppColors.primarySoft,
+                                    backgroundColor: AppColors.surfaceVariant,
                                     child: Icon(
                                       IconsaxPlusLinear.user,
                                       color: AppColors.primary,
@@ -255,8 +284,22 @@ class UserProfileScreen extends ConsumerWidget {
                 ],
               ),
             ),
-          ],
-        ),
+          if (isPendingCandidate)
+            _CandidateActionBar(
+              onAccept: () {
+                ref
+                    .read(appControllerProvider.notifier)
+                    .acceptResponse(orderId!, userId);
+                Navigator.of(context).pop();
+              },
+              onDecline: () {
+                ref
+                    .read(appControllerProvider.notifier)
+                    .declineResponse(orderId!, userId);
+                Navigator.of(context).pop();
+              },
+            ),
+        ],
       ),
     );
   }
@@ -268,19 +311,117 @@ class UserProfileScreen extends ConsumerWidget {
       builder: (_) => _ContactSheet(phone: phone),
     );
   }
+
+  Future<void> _callPhone(String phone) async {
+    final sanitized = phone.replaceAll(RegExp(r'[^0-9+]'), '');
+    if (sanitized.isEmpty) return;
+    final uri = Uri.parse('tel:$sanitized');
+    try {
+      await launchUrl(uri);
+    } catch (_) {}
+  }
+}
+
+class _CandidateActionBar extends StatelessWidget {
+  const _CandidateActionBar({required this.onAccept, required this.onDecline});
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(16.r),
+          topRight: Radius.circular(16.r),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 18.80,
+            offset: const Offset(0, -4),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 16.h),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _ActionBarButton(
+                label: 'Принять',
+                background: AppColors.primary,
+                textColor: Colors.white,
+                onTap: onAccept,
+              ),
+              SizedBox(height: 8.h),
+              _ActionBarButton(
+                label: 'Отклонить',
+                background: AppColors.surfaceVariant,
+                textColor: AppColors.error,
+                onTap: onDecline,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionBarButton extends StatelessWidget {
+  const _ActionBarButton({
+    required this.label,
+    required this.background,
+    required this.textColor,
+    required this.onTap,
+  });
+  final String label;
+  final Color background;
+  final Color textColor;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: background,
+      borderRadius: BorderRadius.circular(16.r),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16.r),
+        onTap: onTap,
+        child: SizedBox(
+          width: double.infinity,
+          height: 50.h,
+          child: Center(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: textColor,
+                fontSize: 17.sp,
+                fontWeight: FontWeight.w600,
+                height: 1.29,
+                letterSpacing: -0.40,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _ContactButton extends StatelessWidget {
   const _ContactButton({
     required this.label,
-    required this.icon,
     required this.background,
     required this.color,
     required this.onTap,
   });
 
   final String label;
-  final IconData icon;
   final Color background;
   final Color color;
   final VoidCallback onTap;
@@ -295,17 +436,17 @@ class _ContactButton extends StatelessWidget {
         onTap: onTap,
         child: SizedBox(
           height: 36.h,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: color, size: 18.r),
-              SizedBox(width: 6.w),
-              Text(
-                label,
-                style: AppText.bodyLarge(color: color, weight: FontWeight.w600)
-                    .copyWith(letterSpacing: -0.40),
+          child: Center(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 17.sp,
+                fontWeight: FontWeight.w600,
+                height: 1.29,
+                letterSpacing: -0.40,
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -319,100 +460,152 @@ class _ContactSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.h),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: AppColors.surface,
-                borderRadius: BorderRadius.circular(14.r),
-              ),
-              padding: EdgeInsets.symmetric(vertical: 12.h),
-              child: Column(
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24.r)),
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 16.h),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
                 children: [
-                  Padding(
-                    padding: EdgeInsets.symmetric(vertical: 8.h),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        _MessengerIcon(label: 'WhatsApp', color: const Color(0xFF25D366), icon: Icons.chat),
-                        _MessengerIcon(label: 'Telegram', color: const Color(0xFF26A5E4), icon: Icons.send_rounded),
-                        _MessengerIcon(label: 'MAX', color: const Color(0xFFFF8D28), icon: Icons.flash_on),
-                      ],
+                  Icon(
+                    IconsaxPlusLinear.message_text_1,
+                    color: AppColors.primary,
+                    size: 24.r,
+                  ),
+                  SizedBox(width: 8.w),
+                  Text(
+                    'Написать',
+                    style: TextStyle(
+                      color: Colors.black,
+                      fontSize: 20.sp,
+                      fontWeight: FontWeight.w600,
+                      height: 1.20,
                     ),
                   ),
-                  Container(height: 0.5.h, color: AppColors.divider),
-                  Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12.h),
-                    child: Text(
-                      phone,
-                      style: AppText.bodyLarge(color: AppColors.primary)
-                          .copyWith(letterSpacing: -0.40),
+                  const Spacer(),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => Navigator.of(context).pop(),
+                    child: Padding(
+                      padding: EdgeInsets.all(4.r),
+                      child: Icon(
+                        Icons.close_rounded,
+                        color: AppColors.primary,
+                        size: 24.r,
+                      ),
                     ),
                   ),
                 ],
               ),
-            ),
-            SizedBox(height: 8.h),
-            Material(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(14.r),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(14.r),
-                onTap: () => Navigator.of(context).pop(),
-                child: SizedBox(
-                  width: double.infinity,
-                  height: 56.h,
-                  child: Center(
-                    child: Text(
-                      'Cancel',
-                      style: AppText.bodyLarge(
-                        color: AppColors.primary,
-                        weight: FontWeight.w600,
-                      ).copyWith(letterSpacing: -0.40),
+              SizedBox(height: 16.h),
+              Container(height: 1, color: AppColors.divider),
+              SizedBox(height: 24.h),
+              // Messengers
+              Row(
+                children: [
+                  _Messenger(
+                    label: "What's App",
+                    onTap: () => _openMessenger(context, 'whatsapp'),
+                    builder: (s) => Container(
+                      width: s,
+                      height: s,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF25D366),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.phone, color: Colors.white, size: s * 0.5),
                     ),
                   ),
-                ),
+                  SizedBox(width: 24.w),
+                  _Messenger(
+                    label: 'Telegram',
+                    onTap: () => _openMessenger(context, 'telegram'),
+                    builder: (s) => Container(
+                      width: s,
+                      height: s,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF26A5E4),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(Icons.send_rounded, color: Colors.white, size: s * 0.5),
+                    ),
+                  ),
+                  SizedBox(width: 24.w),
+                  _Messenger(
+                    label: 'MAX',
+                    onTap: () => _openMessenger(context, 'max'),
+                    builder: (s) => Container(
+                      width: s,
+                      height: s,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0xFF7B45FF), Color(0xFF26A5E4)],
+                        ),
+                        borderRadius: BorderRadius.circular(s * 0.25),
+                      ),
+                      child: Icon(Icons.chat_bubble, color: Colors.white, size: s * 0.45),
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
+              SizedBox(height: 16.h),
+            ],
+          ),
         ),
       ),
     );
   }
+
+  void _openMessenger(BuildContext context, String app) {
+    // TODO: deep-links на конкретные мессенджеры — пока заглушка.
+    Navigator.of(context).pop();
+  }
 }
 
-class _MessengerIcon extends StatelessWidget {
-  const _MessengerIcon({required this.label, required this.color, required this.icon});
+class _Messenger extends StatelessWidget {
+  const _Messenger({
+    required this.label,
+    required this.builder,
+    required this.onTap,
+  });
+
   final String label;
-  final Color color;
-  final IconData icon;
+  final Widget Function(double size) builder;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 56.r,
-          height: 56.r,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
+    final iconSize = 64.r;
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          builder(iconSize),
+          SizedBox(height: 8.h),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.black,
+              fontSize: 13.sp,
+              fontWeight: FontWeight.w600,
+              height: 1.38,
+            ),
           ),
-          child: Icon(icon, color: Colors.white, size: 28.r),
-        ),
-        SizedBox(height: 4.h),
-        Text(
-          label,
-          style: AppText.caption(color: AppColors.textSecondary)
-              .copyWith(height: 1.33),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

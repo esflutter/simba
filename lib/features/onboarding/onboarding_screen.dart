@@ -124,6 +124,28 @@ class _OnboardingScreenState extends State<OnboardingScreen>
                   count: _pages.length,
                 ),
               ),
+
+              // TEMP: быстрый переход на «Заказы» (для отладки)
+              Positioned(
+                right: 12.w,
+                top: 12.h,
+                child: Material(
+                  color: Colors.white.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(20.r),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(20.r),
+                    onTap: () => context.go('/home/orders'),
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+                      child: Text(
+                        '→ Заказы',
+                        style: AppText.bodySmall(color: AppColors.textOnPrimary)
+                            .copyWith(fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
             ],
           ),
         ),

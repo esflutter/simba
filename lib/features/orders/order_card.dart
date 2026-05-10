@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/app_colors.dart';
@@ -10,11 +9,18 @@ import '../../core/widgets/app_card.dart';
 import '../../data/models/models.dart';
 
 class OrderCard extends StatelessWidget {
-  const OrderCard({super.key, required this.order, required this.categoryName, required this.onTap});
+  const OrderCard({
+    super.key,
+    required this.order,
+    required this.categoryName,
+    required this.onTap,
+    this.showTime = true,
+  });
 
   final Order order;
   final String categoryName;
   final VoidCallback onTap;
+  final bool showTime;
 
   String get _whenLabel {
     if (order.scheduledAt != null) {
@@ -31,65 +37,70 @@ class OrderCard extends StatelessWidget {
       onTap: onTap,
       padding: EdgeInsets.all(16.w),
       borderRadius: BorderRadius.circular(12.r),
-      child: Stack(
-        children: [
-          Padding(
-            padding: EdgeInsets.only(right: 32.w),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: SizedBox(
+        height: 142.h - 32.h, // 142.h total − vertical padding (16.h × 2)
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                CategoryChip(categoryName, dense: true),
-                SizedBox(height: 8.h),
-                Text(
-                  order.title,
-                  style: AppText.h3().copyWith(height: 1.20),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+                Expanded(
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: CategoryChip(categoryName, dense: true),
+                  ),
                 ),
-                SizedBox(height: 8.h),
+                SizedBox(width: 8.w),
                 Text(
-                  order.address,
-                  style: AppText.bodySmall(
-                    color: Colors.black.withValues(alpha: 0.60),
-                  ).copyWith(height: 1.40),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                SizedBox(height: 8.h),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        _whenLabel,
-                        style: AppText.body(weight: FontWeight.w500)
-                            .copyWith(height: 1.40),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    SizedBox(width: 8.w),
-                    Text(
-                      _priceLabel,
-                      style: AppText.body(
-                        color: AppColors.primary,
-                        weight: FontWeight.w600,
-                      ).copyWith(height: 1.40),
-                    ),
-                  ],
+                  '→',
+                  style: AppText.body(color: AppColors.primary)
+                      .copyWith(height: 1.0, fontSize: 18.sp),
                 ),
               ],
             ),
-          ),
-          Positioned(
-            right: 0,
-            top: 0,
-            child: Icon(
-              IconsaxPlusLinear.arrow_right_3,
-              color: AppColors.primary,
-              size: 20.r,
+            Text(
+              order.title,
+              style: AppText.h3().copyWith(height: 1.20),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-          ),
-        ],
+            Text(
+              order.address,
+              style: AppText.bodySmall(
+                color: Colors.black.withValues(alpha: 0.60),
+              ).copyWith(height: 1.40),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.baseline,
+              textBaseline: TextBaseline.alphabetic,
+              children: [
+                Expanded(
+                  child: showTime
+                      ? Text(
+                          _whenLabel,
+                          style: AppText.body(weight: FontWeight.w500)
+                              .copyWith(height: 1.40),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        )
+                      : const SizedBox.shrink(),
+                ),
+                SizedBox(width: 8.w),
+                Text(
+                  _priceLabel,
+                  style: AppText.body(
+                    color: AppColors.primary,
+                    weight: FontWeight.w600,
+                  ).copyWith(height: 1.40),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
