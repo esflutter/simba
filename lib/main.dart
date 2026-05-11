@@ -18,9 +18,15 @@ Future<void> main() async {
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.dark,
+    statusBarBrightness: Brightness.light,
     systemNavigationBarColor: Color(0xFFF5F5F5),
     systemNavigationBarDividerColor: Color(0xFFF5F5F5),
     systemNavigationBarIconBrightness: Brightness.dark,
+    // На Android 10+ ОС может рисовать полупрозрачный «контрастный»
+    // оверлей поверх нижней панели — на цветных скринах это выглядит
+    // как синеватый оттенок системных кнопок. Отключаем.
+    systemNavigationBarContrastEnforced: false,
+    systemStatusBarContrastEnforced: false,
   ));
   final prefs = await SharedPreferences.getInstance();
   // В debug-режиме очищаем сохранённое состояние при каждом hot restart /
@@ -48,18 +54,32 @@ class SimbaApp extends ConsumerWidget {
       minTextAdapt: true,
       splitScreenMode: false,
       builder: (context, child) {
-        return MaterialApp.router(
-          title: 'SimbA',
-          debugShowCheckedModeBanner: false,
-          theme: AppTheme.light(),
-          routerConfig: ref.watch(routerProvider),
-          locale: const Locale('ru', 'RU'),
-          localizationsDelegates: const [
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          supportedLocales: const [Locale('ru', 'RU'), Locale('en', 'US')],
+        // Глобальный AnnotatedRegion удерживает стиль системных баров —
+        // некоторые плагины/модалки/переходы могут его сбрасывать.
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: const SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.dark,
+            statusBarBrightness: Brightness.light,
+            systemNavigationBarColor: Color(0xFFF5F5F5),
+            systemNavigationBarDividerColor: Color(0xFFF5F5F5),
+            systemNavigationBarIconBrightness: Brightness.dark,
+            systemNavigationBarContrastEnforced: false,
+            systemStatusBarContrastEnforced: false,
+          ),
+          child: MaterialApp.router(
+            title: 'SimbA',
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.light(),
+            routerConfig: ref.watch(routerProvider),
+            locale: const Locale('ru', 'RU'),
+            localizationsDelegates: const [
+              GlobalMaterialLocalizations.delegate,
+              GlobalWidgetsLocalizations.delegate,
+              GlobalCupertinoLocalizations.delegate,
+            ],
+            supportedLocales: const [Locale('ru', 'RU'), Locale('en', 'US')],
+          ),
         );
       },
     );

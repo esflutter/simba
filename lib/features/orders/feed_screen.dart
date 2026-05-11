@@ -30,7 +30,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(appControllerProvider);
     final isExecutor = state.role == UserRole.executor;
-    final orders = state.orders.where((o) => o.status == OrderStatus.open).toList();
+    final orders = state.orders
+        .where((o) => o.status == OrderStatus.open && !o.isExpiredOpen)
+        .toList();
 
     return Scaffold(
       backgroundColor: AppColors.background,

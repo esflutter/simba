@@ -20,7 +20,8 @@ class MyOrdersScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(appControllerProvider);
     final mine = state.myOrders.where((o) =>
-        o.status == OrderStatus.open || o.status == OrderStatus.accepted);
+        !o.isExpiredOpen &&
+        (o.status == OrderStatus.open || o.status == OrderStatus.accepted));
     final asExecutor = state.orders.where((o) =>
         o.executorId == 'me' &&
         (o.status == OrderStatus.accepted ||

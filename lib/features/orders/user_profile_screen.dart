@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -261,10 +262,16 @@ class UserProfileScreen extends ConsumerWidget {
                     .read(appControllerProvider.notifier)
                     .acceptResponse(orderId!, userId);
                 AppToast.show(context, 'Исполнитель принят');
-                final route = ModalRoute.of(context);
-                if (route != null) {
-                  Navigator.of(context).removeRouteBelow(route);
-                }
+                // После принятия остальные отклики автоматически отклонены —
+                // экран откликов под нами теперь пустой. Убираем его из
+                // стека (go_router-native): сначала pop профиля, потом
+                // pushReplacement на тот же профиль — экран откликов
+                // заменяется и в стеке остаётся [order → profile]. Back
+                // теперь корректно ведёт на детали заказа.
+                context.pop();
+                context.pushReplacement(
+                  '/order/$orderId/user/$userId',
+                );
               },
               onDecline: () {
                 final wasLast = order!.responses.length == 1;
@@ -272,8 +279,8 @@ class UserProfileScreen extends ConsumerWidget {
                     .read(appControllerProvider.notifier)
                     .declineResponse(orderId!, userId);
                 AppToast.show(context, 'Исполнитель отклонён');
-                Navigator.of(context).pop();
-                if (wasLast) Navigator.of(context).pop();
+                context.pop();
+                if (wasLast) context.pop();
               },
             ),
         ],
@@ -771,7 +778,7 @@ class _ReviewItem extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 13.sp,
                         fontWeight: FontWeight.w500,
-                        color: AppColors.primary,
+                        color: Colors.black,
                       ),
                     ),
                   ),

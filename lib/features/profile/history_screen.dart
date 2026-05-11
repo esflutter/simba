@@ -12,7 +12,7 @@ import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../orders/order_card.dart';
 
-enum _Tab { posted, completed }
+enum _Tab { posted, executed }
 
 class HistoryScreen extends ConsumerStatefulWidget {
   const HistoryScreen({super.key});
@@ -31,22 +31,21 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(appControllerProvider);
-    // Размещённые: я разместил, в истории, и работа НЕ выполнена
-    // (отменены / просрочены / не приняты исполнителем)
+    // Размещённые: заказы, которые я создал как заказчик и завершил со
+    // своей стороны (нажал «Работа выполнена», статус awaitingPayment, либо
+    // заказ полностью completed).
     final posted = state.myOrders
-        .where((o) =>
-            o.isHistorical &&
-            o.status != OrderStatus.completed &&
-            o.status != OrderStatus.awaitingPayment)
-        .toList();
-    // Выполненные с моей стороны как заказчика: я нажал «Работа выполнена»
-    // (статус awaitingPayment) или заказ полностью завершён (completed).
-    final completed = state.myOrders
         .where((o) =>
             o.status == OrderStatus.awaitingPayment ||
             o.status == OrderStatus.completed)
         .toList();
-    final list = _tab == _Tab.posted ? posted : completed;
+    // Выполненные: заказы, в которых я был исполнителем и нажал
+    // «Подтвердите оплату» — статус становится completed.
+    final executed = state.orders
+        .where((o) =>
+            o.executorId == 'me' && o.status == OrderStatus.completed)
+        .toList();
+    final list = _tab == _Tab.posted ? posted : executed;
     final groups = _groupByDate(list);
 
     return Scaffold(
@@ -97,7 +96,11 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
           // ── Body ──
           Expanded(
             child: list.isEmpty
-                ? const _EmptyHistory()
+                ? _EmptyHistory(
+                    subtitle: _tab == _Tab.posted
+                        ? 'Здесь будет отображаться история заказов, размещённых Вами в качестве заказчика'
+                        : 'Здесь будет отображаться история заказов, выполненных Вами в качестве исполнителя',
+                  )
                 : ListView.builder(
                     padding: EdgeInsets.fromLTRB(
                       16.w,
@@ -205,8 +208,8 @@ class _SegmentedTabs extends StatelessWidget {
           Expanded(
             child: _Segment(
               label: 'Выполненные',
-              active: value == _Tab.completed,
-              onTap: () => onChanged(_Tab.completed),
+              active: value == _Tab.executed,
+              onTap: () => onChanged(_Tab.executed),
             ),
           ),
         ],
@@ -270,7 +273,9 @@ class _Segment extends StatelessWidget {
 }
 
 class _EmptyHistory extends StatelessWidget {
-  const _EmptyHistory();
+  const _EmptyHistory({required this.subtitle});
+
+  final String subtitle;
 
   @override
   Widget build(BuildContext context) {
@@ -301,7 +306,7 @@ class _EmptyHistory extends StatelessWidget {
             ),
             SizedBox(height: 4.h),
             Text(
-              'Здесь будет отображаться история заказов',
+              subtitle,
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.black.withValues(alpha: 0.60),
@@ -318,4 +323,3 @@ class _EmptyHistory extends StatelessWidget {
     );
   }
 }
-

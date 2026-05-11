@@ -57,7 +57,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(appControllerProvider);
     final results = state.orders
-        .where((o) => o.status == OrderStatus.open && _matches(o, _query))
+        .where((o) =>
+            o.status == OrderStatus.open &&
+            !o.isExpiredOpen &&
+            _matches(o, _query))
         .toList();
     final hasQuery = _query.isNotEmpty;
 

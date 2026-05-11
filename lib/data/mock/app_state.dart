@@ -76,7 +76,7 @@ class AppController extends Notifier<AppState> {
       user: p?.user,
       role: p?.role ?? UserRole.customer,
       orders: MockData.seedOrders(city.center),
-      myOrders: MockData.seedMyOrders(city.center),
+      myOrders: _withoutExpiredOpen(MockData.seedMyOrders(city.center)),
       reviews: MockData.seedReviews(),
       selectedCityId: cityId,
       executorActive: false,
@@ -84,12 +84,17 @@ class AppController extends Notifier<AppState> {
     );
   }
 
+  /// Отбрасывает «размещённые» заказы, у которых истекла назначенная дата
+  /// и так и не нашёлся исполнитель — они автоматически удаляются.
+  List<Order> _withoutExpiredOpen(List<Order> orders) =>
+      orders.where((o) => !o.isExpiredOpen).toList();
+
   void setCity(String id) {
     final c = MockData.cities.firstWhere((c) => c.id == id);
     state = state.copyWith(
       selectedCityId: id,
       orders: MockData.seedOrders(c.center),
-      myOrders: MockData.seedMyOrders(c.center),
+      myOrders: _withoutExpiredOpen(MockData.seedMyOrders(c.center)),
     );
     _prefs?.setCityId(id);
   }
@@ -203,6 +208,27 @@ class AppController extends Notifier<AppState> {
             .toList(),
       );
     }
+  }
+
+  /// Сохранить отзыв «от меня» о другом участнике заказа.
+  void addReview({
+    required String orderId,
+    required String toUserId,
+    required int rating,
+    required String comment,
+    required List<String> tags,
+  }) {
+    final review = Review(
+      id: 'r_${DateTime.now().microsecondsSinceEpoch}',
+      fromUserId: 'me',
+      toUserId: toUserId,
+      orderId: orderId,
+      rating: rating,
+      comment: comment,
+      tags: tags,
+      createdAt: DateTime.now(),
+    );
+    state = state.copyWith(reviews: [review, ...state.reviews]);
   }
 
   void confirmPayment(String orderId, {required bool inMyOrders}) {

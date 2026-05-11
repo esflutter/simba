@@ -71,7 +71,13 @@ class ResponsesScreen extends ConsumerWidget {
                                 .read(appControllerProvider.notifier)
                                 .acceptResponse(orderId, u.id);
                             AppToast.show(context, 'Исполнитель принят');
-                            context.go('/order/$orderId/user/${u.id}');
+                            // pushReplacement, а не go: go сбрасывает стек
+                            // и /home/orders уходит — потом back из заказа
+                            // не работает. Заменяем responses на профиль,
+                            // сохраняя [home, order, profile] в стеке.
+                            context.pushReplacement(
+                              '/order/$orderId/user/${u.id}',
+                            );
                           },
                         );
                       },

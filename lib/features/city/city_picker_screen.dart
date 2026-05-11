@@ -53,14 +53,13 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
     );
     _anim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeInOut);
     // В режиме смены города (пользователь уже создан) сразу разворачиваем
-    // экран в режим поиска с пустым полем и полным списком городов.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      final hasUser = ref.read(appControllerProvider).user != null;
-      if (!hasUser) return;
-      setState(() => _searching = true);
+    // экран в режим поиска с пустым полем и полным списком городов —
+    // синхронно в initState, чтобы не было «вспышки» шапки на первом кадре.
+    final hasUser = ref.read(appControllerProvider).user != null;
+    if (hasUser) {
+      _searching = true;
       _animCtrl.value = 1.0;
-    });
+    }
   }
 
   void _onFieldTap() {
@@ -326,7 +325,20 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
       builder: (_) => _RequestCitySheet(initialName: _query),
     );
     if (!mounted || submitted != true) return;
-    _closeSearch();
+    // Для пользователей, меняющих город из «Заказов», страница уже открыта в
+    // режиме поиска — не сворачиваем её в шапку «Укажите город», чтобы они
+    // могли продолжить искать. Сбрасываем только текст и фокус.
+    final hasUser = ref.read(appControllerProvider).user != null;
+    if (hasUser) {
+      FocusScope.of(context).unfocus();
+      _searchCtrl.clear();
+      setState(() {
+        _query = '';
+        _selectedId = null;
+      });
+    } else {
+      _closeSearch();
+    }
     AppToast.show(context, 'Заявка отправлена. Спасибо!');
   }
 }

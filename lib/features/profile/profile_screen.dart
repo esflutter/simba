@@ -9,20 +9,24 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../data/mock/app_state.dart';
+import '../../data/models/models.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(appControllerProvider);
-    final user = state.user;
+    // Подписываемся отдельно на user — иначе ConsumerWidget может пропустить
+    // ребилд из-за const-канонизации screens в HomeShell.
+    final user = ref.watch(appControllerProvider.select((s) => s.user));
+    final reviews =
+        ref.watch(appControllerProvider.select((s) => s.reviews));
     if (user == null) {
       return const Scaffold(body: SizedBox.shrink());
     }
     // Считаем рейтинг из реальных отзывов на «me», а не из user.rating
     // (он у новых пользователей 0).
-    final myReviews = state.reviews.where((r) => r.toUserId == 'me').toList();
+    final myReviews = reviews.where((r) => r.toUserId == 'me').toList();
     final computedRating = myReviews.isEmpty
         ? 0.0
         : myReviews.map((r) => r.rating).reduce((a, b) => a + b) /
@@ -250,15 +254,15 @@ class _ProfileCard extends StatelessWidget {
     required this.reviewsCount,
     required this.onEdit,
   });
-  final dynamic user;
+  final AppUser user;
   final double rating;
   final int reviewsCount;
   final VoidCallback onEdit;
 
   @override
   Widget build(BuildContext context) {
-    final hasTools = user.hasTools as bool;
-    final hasTransport = user.hasTransport as bool;
+    final hasTools = user.hasTools;
+    final hasTransport = user.hasTransport;
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -269,17 +273,17 @@ class _ProfileCard extends StatelessWidget {
         children: [
           Column(
             children: [
-              _Avatar(photoPath: user.photoPath as String?),
+              _Avatar(photoPath: user.photoPath),
               SizedBox(height: 16.h),
               Text(
-                (user.name as String).isEmpty ? 'Пользователь' : user.name as String,
+                user.name.isEmpty ? 'Пользователь' : user.name,
                 textAlign: TextAlign.center,
                 style: AppText.h3().copyWith(height: 1.10),
               ),
-              if ((user.phone as String).isNotEmpty) ...[
+              if (user.phone.isNotEmpty) ...[
                 SizedBox(height: 4.h),
                 Text(
-                  user.phone as String,
+                  user.phone,
                   textAlign: TextAlign.center,
                   style: AppText.bodySmall().copyWith(
                     color: Colors.black.withValues(alpha: 0.60),

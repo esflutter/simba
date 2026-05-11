@@ -5,6 +5,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/primary_button.dart';
+import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 
 /// Открывает шторку «Оставить отзыв» снизу экрана.
@@ -38,6 +39,29 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
   }
 
   void _submit(BuildContext context) {
+    // Определяем, кому мы оставляем отзыв: если 'me' — заказчик, отзыв
+    // идёт исполнителю; иначе — заказчику.
+    final state = ref.read(appControllerProvider);
+    final order = [...state.myOrders, ...state.orders].firstWhere(
+      (o) => o.id == widget.orderId,
+      orElse: () => state.myOrders.isNotEmpty
+          ? state.myOrders.first
+          : state.orders.first,
+    );
+    final isCustomerReviewing = order.customerId == 'me';
+    final recipientRole = isCustomerReviewing ? 'исполнителя' : 'заказчика';
+    final recipientId =
+        isCustomerReviewing ? (order.executorId ?? '') : order.customerId;
+    // Сохраняем отзыв в стейт, чтобы кнопка «Оставить отзыв» больше не
+    // отображалась на странице этого заказа.
+    ref.read(appControllerProvider.notifier).addReview(
+          orderId: order.id,
+          toUserId: recipientId,
+          rating: _rating,
+          comment: _ctrl.text.trim(),
+          tags: _tags.toList(),
+        );
+
     showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -55,14 +79,10 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
+              Image.asset(
+                'assets/images/tick_square.webp',
                 width: 56.r,
                 height: 56.r,
-                decoration: BoxDecoration(
-                  color: AppColors.success,
-                  borderRadius: BorderRadius.circular(14.r),
-                ),
-                child: Icon(Icons.check_rounded, color: Colors.white, size: 36.r, weight: 700),
               ),
               SizedBox(height: 16.h),
               Text(
@@ -77,7 +97,7 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
               ),
               SizedBox(height: 8.h),
               Text(
-                'Ваш отзыв будет опубликован в аккаунте исполнителя / заказчика',
+                'Ваш отзыв будет опубликован в аккаунте $recipientRole',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.black.withValues(alpha: 0.60),

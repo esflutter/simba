@@ -187,4 +187,13 @@ extension OrderLifecycle on Order {
 
   /// Заказ активный — обратное к [isHistorical].
   bool get isActive => !isHistorical;
+
+  /// Просроченный «размещённый» заказ: исполнитель не найден, а назначенная
+  /// дата уже прошла. Такие заказы не показываются нигде — автоматически
+  /// удаляются.
+  bool get isExpiredOpen {
+    if (status != OrderStatus.open) return false;
+    final s = scheduledAt;
+    return s != null && s.isBefore(DateTime.now());
+  }
 }

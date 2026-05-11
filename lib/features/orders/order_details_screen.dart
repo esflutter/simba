@@ -36,7 +36,6 @@ class OrderDetailsScreen extends ConsumerWidget {
     final isCustomer = order.customerId == 'me';
     final isMine = isCustomer;
     final hasMyResponse = order.responses.contains('me');
-    final statusBadge = _badgeForStatus(order, isCustomer: isCustomer);
 
     final isCompleted = order.status == OrderStatus.completed;
     final isCancelled = order.status == OrderStatus.cancelled;
@@ -58,19 +57,16 @@ class OrderDetailsScreen extends ConsumerWidget {
       backgroundColor: AppColors.background,
       body: Column(
         children: [
-          // ── White header with back button + status badge ──
+          // ── White header with back button ──
           Container(
             color: AppColors.surface,
             child: SafeArea(
               bottom: false,
-              child: Padding(
-                padding: EdgeInsets.fromLTRB(8.w, 4.h, 16.w, 4.h),
-                child: Row(
-                  children: [
-                    const AppBackButton(),
-                    const Spacer(),
-                    if (statusBadge != null) statusBadge,
-                  ],
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                  child: const AppBackButton(),
                 ),
               ),
             ),
@@ -158,6 +154,9 @@ class OrderDetailsScreen extends ConsumerWidget {
 
   List<Widget> _buildActions(BuildContext context, WidgetRef ref, Order order, bool isMine, bool hasMyResponse) {
     final ctrl = ref.read(appControllerProvider.notifier);
+    final reviews = ref.watch(appControllerProvider).reviews;
+    final hasMyReview =
+        reviews.any((r) => r.orderId == order.id && r.fromUserId == 'me');
     final widgets = <Widget>[];
 
     if (isMine) {
@@ -180,17 +179,14 @@ class OrderDetailsScreen extends ConsumerWidget {
           break;
         case OrderStatus.awaitingPayment:
         case OrderStatus.completed:
-          widgets.add(PrimaryButton(
-            label: 'Оставить отзыв',
-            onPressed: () => showLeaveReviewSheet(context, order.id),
-          ));
+          if (!hasMyReview) {
+            widgets.add(PrimaryButton(
+              label: 'Оставить отзыв',
+              onPressed: () => showLeaveReviewSheet(context, order.id),
+            ));
+          }
           break;
         case OrderStatus.cancelled:
-          widgets.add(_StatusBanner(
-            color: AppColors.surfaceVariant,
-            textColor: AppColors.textSecondary,
-            label: 'Заказ отменён.',
-          ));
           break;
       }
     } else {
@@ -236,10 +232,12 @@ class OrderDetailsScreen extends ConsumerWidget {
           }
           break;
         case OrderStatus.completed:
-          widgets.add(PrimaryButton(
-            label: 'Оставить отзыв',
-            onPressed: () => showLeaveReviewSheet(context, order.id),
-          ));
+          if (!hasMyReview) {
+            widgets.add(PrimaryButton(
+              label: 'Оставить отзыв',
+              onPressed: () => showLeaveReviewSheet(context, order.id),
+            ));
+          }
           break;
         case OrderStatus.cancelled:
           break;
@@ -396,7 +394,11 @@ class _ActionBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (children.isEmpty) return const SizedBox.shrink();
+    if (children.isEmpty) {
+      // Кнопок нет — но без SafeArea контент списка уезжает под системный
+      // нав-бар. Оставляем нижний инсет.
+      return SafeArea(top: false, child: const SizedBox.shrink());
+    }
     return Container(
       decoration: BoxDecoration(
         color: AppColors.surface,
@@ -630,45 +632,6 @@ class _Field extends StatelessWidget {
         SizedBox(height: 4.h),
         Text(value, style: AppText.body().copyWith(height: 1.50)),
       ],
-    );
-  }
-}
-
-Widget? _badgeForStatus(
-  Order order, {
-  required bool isCustomer,
-}) {
-  switch (order.status) {
-    case OrderStatus.accepted:
-      return null;
-    case OrderStatus.awaitingPayment:
-      return null;
-    case OrderStatus.completed:
-      return const _StatusBadge('Завершён');
-    case OrderStatus.cancelled:
-      return const _StatusBadge('Отменён', color: AppColors.error);
-    case OrderStatus.open:
-      return null;
-  }
-}
-
-class _StatusBadge extends StatelessWidget {
-  const _StatusBadge(this.label, {this.color = AppColors.primary});
-  final String label;
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(20.r),
-      ),
-      child: Text(
-        label,
-        style: AppText.bodySmall(color: Colors.white, weight: FontWeight.w500),
-      ),
     );
   }
 }
