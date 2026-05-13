@@ -15,10 +15,31 @@ enum PaymentMethod { cash }
 
 @immutable
 class City {
-  const City({required this.id, required this.name, required this.center});
+  const City({
+    required this.id,
+    required this.name,
+    required this.center,
+    this.dadataFiasId,
+    this.boundsRadiusKm = 50.0,
+  });
+
   final String id;
   final String name;
   final LatLng center;
+
+  /// FIAS-идентификатор города (Federal Information Address System).
+  /// Передаётся в DaData как `city_fias_id` для строгого ограничения
+  /// поиска адресов рамками выбранного города. См. `select_address_screen`.
+  /// Null означает «город без бэк-привязки» (моки без FIAS).
+  final String? dadataFiasId;
+
+  /// Радиус (км) от [center], внутри которого считается «город» для
+  /// первого, дешёвого этапа валидации адреса (Phase 1 при тапе на карте).
+  /// Точная проверка делается через DaData reverse-geocode (Phase 2)
+  /// — сравнение `city_fias_id` из ответа DaData с [dadataFiasId].
+  /// 50 км — разумный дефолт для миллионников РФ; для Москвы можно
+  /// поставить 60 (агломерация), для Воронежа — 40 (компактный).
+  final double boundsRadiusKm;
 }
 
 @immutable
@@ -151,6 +172,7 @@ class Order {
     this.workDoneAt,
     this.workConfirmedAt,
     this.paymentReceivedAt,
+    this.cityId,
   });
 
   final String id;
@@ -191,6 +213,12 @@ class Order {
   final DateTime? workConfirmedAt;
   final DateTime? paymentReceivedAt;
 
+  /// ID города, в котором создан заказ (relation на coll. `cities`). Заказ
+  /// привязывается к городу при создании и НЕ меняется — это immutable
+  /// фильтр для ленты исполнителей. Заказчик может переключить свой
+  /// `selectedCityId`, но старые заказы остаются в своём городе.
+  final String? cityId;
+
   Order copyWith({
     OrderStatus? status,
     String? executorId,
@@ -201,6 +229,7 @@ class Order {
     DateTime? workDoneAt,
     DateTime? workConfirmedAt,
     DateTime? paymentReceivedAt,
+    String? cityId,
   }) =>
       Order(
         id: id,
@@ -229,6 +258,7 @@ class Order {
         workDoneAt: workDoneAt ?? this.workDoneAt,
         workConfirmedAt: workConfirmedAt ?? this.workConfirmedAt,
         paymentReceivedAt: paymentReceivedAt ?? this.paymentReceivedAt,
+        cityId: cityId ?? this.cityId,
       );
 }
 

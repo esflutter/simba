@@ -69,6 +69,7 @@ Order orderFromRecord(RecordModel r, [PocketBase? pb]) {
     workConfirmedAt:
         _parseDate(r.getStringValue('work_confirmed_by_customer_at')),
     paymentReceivedAt: paymentReceivedAt,
+    cityId: _nonEmpty(r.getStringValue('city')),
   );
 }
 

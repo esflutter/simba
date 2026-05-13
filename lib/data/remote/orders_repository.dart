@@ -80,10 +80,13 @@ class OrdersRepository {
     String? cityId,
   }) async {
     if (!_isLive) {
+      // Mock-ветка фильтрует по cityId явно: на моках state.orders сидится
+      // с центром текущего города, но после переключения города со старыми
+      // заказами в state могут оказаться записи прежнего города — отсекаем.
       return _ref
           .read(appControllerProvider)
           .orders
-          .where((o) => o.status == OrderStatus.open)
+          .where((o) => o.status == OrderStatus.open && (cityId == null || cityId.isEmpty || o.cityId == cityId))
           .toList();
     }
     final pb = _pb!;
@@ -313,12 +316,14 @@ class OrdersRepository {
       final customerIdRaw = m['customer']?.toString();
       final executorIdRaw = m['executor']?.toString();
       final paymentRaw = m['payment_method']?.toString();
+      final cityRaw = m['city']?.toString();
       return Order(
         id: id,
         customerId: (customerIdRaw == null || customerIdRaw.isEmpty)
             ? ''
             : customerIdRaw,
         categoryId: m['category']?.toString() ?? '',
+        cityId: (cityRaw == null || cityRaw.isEmpty) ? null : cityRaw,
         title: m['title']?.toString() ?? '',
         description: '',
         address: m['address']?.toString() ?? '',
@@ -377,9 +382,13 @@ final feedOrdersProvider = FutureProvider<List<Order>>((ref) async {
       ref.watch(appControllerProvider.select((s) => s.selectedCity));
   final radiusKm =
       ref.watch(appControllerProvider.select((s) => s.searchRadiusKm));
+  // Передаём cityId — бэк фильтрует ленту строго по городу пользователя
+  // (city == auth.user.city на бэке). Лента НЕ должна показывать заказы
+  // из чужих городов: бизнес-правило SimbA — юзер видит только свой город.
   return ref.read(ordersRepositoryProvider).feed(
         lat: city.center.latitude,
         lng: city.center.longitude,
         radiusKm: radiusKm,
+        cityId: city.id,
       );
 });

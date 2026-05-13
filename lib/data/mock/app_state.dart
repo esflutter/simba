@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import '../../core/config/env.dart';
 import '../local/preferences_store.dart';
 import '../models/models.dart';
+import '../remote/pocketbase_client.dart';
 import 'mock_data.dart';
 
 @immutable
@@ -102,6 +103,30 @@ class AppController extends Notifier<AppState> {
           : _withoutExpiredOpen(MockData.seedMyOrders(c.center)),
     );
     _prefs?.setCityId(id);
+
+    // Live-режим: PATCH users.city → источник правды на бэке. Fire-and-forget:
+    // если PATCH не дойдёт (сеть/таймаут), при следующей авторизации
+    // _consumeAuthEnvelope подтянет актуальный city с сервера, а до тех пор
+    // юзер видит UX-соответствующий локальный selectedCityId. Не блокируем
+    // переключатель города ожиданием HTTP — переключение должно быть instant.
+    if (Env.hasPocketbase) {
+      try {
+        final pb = ref.read(pocketbaseProvider);
+        if (pb != null &&
+            pb.authStore.isValid &&
+            pb.authStore.record != null) {
+          pb
+              .collection('users')
+              .update(pb.authStore.record!.id, body: {'city': id})
+              // ignore: body_might_complete_normally_catch_error
+              .catchError((_) {
+            // Молча — это background sync. Логирование оставим на бэке.
+          });
+        }
+      } catch (_) {
+        // ref.read may throw in tests without PB override — игнор.
+      }
+    }
   }
 
   void completeAuth({required String phone}) {

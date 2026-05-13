@@ -148,11 +148,15 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     final mySeq = ++_suggestSeq;
     final client = ref.read(dadataClientProvider);
     final city = ref.read(appControllerProvider).selectedCity;
+    // city.dadataFiasId — строгое ограничение DaData на выбранный город.
+    // restrictToCity=true → DaData физически не вернёт адреса других городов.
+    // cityName используется как fallback на старых записях без FIAS-ID
+    // (если миграция 1700000009 ещё не отработала на бэке).
     final results = await client.suggest(
       query,
       count: 7,
-      cityName: city.name,
-      // TODO: прокинуть regionFiasId из City, когда seed добавит это поле.
+      cityFiasId: city.dadataFiasId,
+      cityName: city.dadataFiasId == null ? city.name : null,
     );
     // Игнорируем устаревшие ответы: пока летел запрос, юзер мог продолжить
     // печатать, и пришёл уже более новый mySeq.
@@ -180,6 +184,19 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
   }
 
   Future<void> _onMapTap(LatLng point) async {
+    final city = ref.read(appControllerProvider).selectedCity;
+
+    // Phase 1 — дешёвый локальный radius-чек. Отсекает явные промахи
+    // (юзер из Москвы тапнул куда-то в Сибирь) БЕЗ запроса в DaData,
+    // экономит квоту и время. boundsRadiusKm * 1.5 — мягкий буфер,
+    // точная FIAS-сверка идёт в Phase 2.
+    final centerDistance = const Distance().as(LengthUnit.Kilometer, point, city.center);
+    if (centerDistance > city.boundsRadiusKm * 1.5) {
+      if (!mounted) return;
+      AppToast.show(context, 'В ${city.name} мы пока не работаем здесь');
+      return;
+    }
+
     setState(() {
       _selectedPoint = point;
       _selectedAddress = 'Точка на карте';
@@ -187,16 +204,37 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
       _ctrl.text = '';
       _showSuggestions = false;
     });
-    // Реверс-геокодинг для красивого адреса.
+
+    // Phase 2 — DaData reverse-geocode для точной FIAS-сверки.
+    // Параллельно даёт красивый текст адреса для UI.
     final result = await ref.read(dadataClientProvider).geolocate(point);
     if (!mounted) return;
-    if (result != null) {
-      setState(() {
-        _selectedAddress = result.value;
-        _selectedSuggestion = result;
-        _ctrl.text = result.value;
-      });
+    if (result == null) {
+      // DaData не смогла распознать адрес (пустыри, лес). Не блокируем —
+      // юзер мог тапнуть на стройплощадку без распознанного адреса; пусть
+      // допишет вручную. Phase 1 уже подтвердил, что точка близко к городу.
+      return;
     }
+    final providerCityFias = result.cityFiasId;
+    if (city.dadataFiasId != null &&
+        providerCityFias != null &&
+        providerCityFias != city.dadataFiasId) {
+      // Точка реально вне выбранного города (например, Подмосковье вместо
+      // Москвы). Откатываем выбор и предупреждаем юзера.
+      setState(() {
+        _selectedPoint = null;
+        _selectedAddress = '';
+        _selectedSuggestion = null;
+        _ctrl.text = '';
+      });
+      AppToast.show(context, 'В ${city.name} мы пока не работаем здесь');
+      return;
+    }
+    setState(() {
+      _selectedAddress = result.value;
+      _selectedSuggestion = result;
+      _ctrl.text = result.value;
+    });
   }
 
   Future<void> _useMyLocation() async {

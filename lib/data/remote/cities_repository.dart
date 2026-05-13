@@ -18,6 +18,10 @@ final citiesProvider = FutureProvider<List<City>>((ref) async {
           sort: 'sort_order',
         );
     return records.map((r) {
+      // bounds_radius_km может быть null если миграция 1700000009 ещё не
+      // отработала — используем дефолт из City.boundsRadiusKm (50).
+      final radius = r.getDoubleValue('bounds_radius_km');
+      final fias = r.getStringValue('dadata_fias_id');
       return City(
         id: r.id,
         name: r.getStringValue('name'),
@@ -25,6 +29,8 @@ final citiesProvider = FutureProvider<List<City>>((ref) async {
           r.getDoubleValue('lat'),
           r.getDoubleValue('lng'),
         ),
+        dadataFiasId: fias.isEmpty ? null : fias,
+        boundsRadiusKm: radius > 0 ? radius : 50.0,
       );
     }).toList();
   } catch (_) {

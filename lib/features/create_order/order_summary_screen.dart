@@ -6,6 +6,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
@@ -243,6 +244,35 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       AppToast.show(context, 'Максимальная цена 100 000 ₽');
       return;
     }
+    // Финальный city-guard: даже если в _onMapTap прошли Phase 1+2, тут
+    // ещё раз проверяем что точка действительно близко к центру выбранного
+    // города (например, пользователь мог сменить город уже после выбора
+    // адреса — тогда `draft.location` останется в прежнем городе).
+    final city = ref.read(appControllerProvider).selectedCity;
+    final distanceKm = const Distance().as(
+      LengthUnit.Kilometer,
+      draft.location!,
+      city.center,
+    );
+    if (distanceKm > city.boundsRadiusKm * 1.5) {
+      AppToast.show(
+        context,
+        'Адрес вне города ${city.name}. Уточните адрес или смените город.',
+      );
+      return;
+    }
+    // Дополнительная FIAS-сверка: cityFiasId должен совпадать с городом
+    // юзера. Если в draft.cityFiasId пусто — пропускаем (старые черновики).
+    if (city.dadataFiasId != null &&
+        draft.cityFiasId != null &&
+        draft.cityFiasId!.isNotEmpty &&
+        draft.cityFiasId != city.dadataFiasId) {
+      AppToast.show(
+        context,
+        'Адрес вне города ${city.name}. Уточните адрес или смените город.',
+      );
+      return;
+    }
     setState(() => _isPublishing = true);
     try {
       final id = MockData.generateOrderId();
@@ -251,10 +281,16 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       // мок-AppController (см. ниже invalidate myOrders/feed). На моках
       // (без бэка) берём id из state.user. Старый хардкод `'me'` ломал
       // фильтр «мои заказы» при гибридных режимах.
-      final myId = ref.read(appControllerProvider).user?.id ?? 'me';
+      final appState = ref.read(appControllerProvider);
+      final myId = appState.user?.id ?? 'me';
+      // city_id фиксируем в момент создания — это immutable-привязка к городу,
+      // в котором заказ был размещён. Даже если заказчик потом переключит
+      // selectedCityId, старые заказы остаются в своём городе (исполнители
+      // прежнего города продолжают их видеть в ленте).
       final order = Order(
         id: id,
         customerId: myId,
+        cityId: appState.selectedCity.id,
         categoryId: draft.categoryId!,
         title: draft.title,
         description: draft.description,

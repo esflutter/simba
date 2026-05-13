@@ -280,6 +280,15 @@ class AuthRepository {
     final phoneDigits = email.split('@').first;
     final phone = phoneDigits.isEmpty ? '' : '+$phoneDigits';
 
+    // Город — источник правды на бэке (users.city). При логине переносим
+    // в локальный selectedCityId, чтобы лента/feed сразу подтянулась под
+    // правильный город без редиректа на /city (если поле непустое).
+    // Если в record `city` пусто — оставляем AppController как есть; роутер
+    // отправит на /city как часть onboarding.
+    if (cityId.isNotEmpty) {
+      _ref.read(appControllerProvider.notifier).setCity(cityId);
+    }
+
     final user = AppUser(
       id: record.id,
       name: record.getStringValue('name'),

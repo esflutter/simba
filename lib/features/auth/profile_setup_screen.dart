@@ -66,11 +66,22 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
               ));
             }
           }
+          // city сохраняем вместе с именем — это часть онбординга. Если в
+          // state нет selectedCityId (роутер до profile должен был провести
+          // через /city, но защитимся), не отправляем — бэк не примет пустой
+          // relation.
+          final selectedCityId =
+              ref.read(appControllerProvider).selectedCityId;
+          final patchBody = <String, dynamic>{
+            'name': name,
+            if (selectedCityId != null && selectedCityId.isNotEmpty)
+              'city': selectedCityId,
+          };
           await pb
               .collection('users')
               .update(
                 pb.authStore.record!.id,
-                body: {'name': name},
+                body: patchBody,
                 files: files,
               )
               .timeout(const Duration(seconds: 10));
