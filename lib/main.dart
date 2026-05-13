@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'data/local/preferences_store.dart';
+import 'data/remote/pocketbase_client.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -34,10 +35,14 @@ Future<void> main() async {
   if (kDebugMode) {
     await prefs.clear();
   }
+  // PocketBase создаётся ОДИН раз здесь, чтобы привязать AsyncAuthStore к
+  // тем же SharedPreferences и persist'ить токен между запусками.
+  final pb = buildPocketBase(prefs);
   runApp(
     ProviderScope(
       overrides: [
         preferencesProvider.overrideWithValue(PreferencesStore(prefs)),
+        pocketbaseProvider.overrideWithValue(pb),
       ],
       child: const SimbaApp(),
     ),

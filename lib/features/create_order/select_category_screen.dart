@@ -7,6 +7,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../data/mock/mock_data.dart';
+import '../../data/remote/categories_repository.dart';
 import 'order_draft.dart';
 
 class SelectCategoryScreen extends ConsumerWidget {
@@ -64,17 +65,22 @@ class SelectCategoryScreen extends ConsumerWidget {
           ),
           SizedBox(height: 8.h),
           Expanded(
-            child: ListView.separated(
+            child: Builder(builder: (context) {
+              final categories = ref.watch(categoriesProvider).maybeWhen(
+                    data: (xs) => xs,
+                    orElse: () => MockData.categories,
+                  );
+              return ListView.separated(
               padding: EdgeInsets.fromLTRB(
                 16.w,
                 0,
                 16.w,
                 16.h + MediaQuery.viewPaddingOf(context).bottom,
               ),
-              itemCount: MockData.categories.length,
+              itemCount: categories.length,
               separatorBuilder: (_, _) => SizedBox(height: 8.h),
               itemBuilder: (_, i) {
-                final c = MockData.categories[i];
+                final c = categories[i];
                 return Material(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(16.r),
@@ -97,7 +103,8 @@ class SelectCategoryScreen extends ConsumerWidget {
                   ),
                 );
               },
-            ),
+            );
+            }),
           ),
         ],
       ),

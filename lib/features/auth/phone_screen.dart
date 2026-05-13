@@ -8,7 +8,9 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/ru_phone_formatter.dart';
 import '../../core/widgets/app_text_field.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
+import '../../data/remote/auth_repository.dart';
 
 class PhoneScreen extends ConsumerStatefulWidget {
   const PhoneScreen({super.key});
@@ -32,6 +34,23 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
   void dispose() {
     _ctrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _onNext() async {
+    final phone = _ctrl.text;
+    final auth = ref.read(authRepositoryProvider);
+    // Если бэкенд подключён — отправляем OTP; иначе сразу переходим
+    // на экран кода с мок-проверкой.
+    if (auth.isLive) {
+      final ok = await auth.sendOtp(phone);
+      if (!mounted) return;
+      if (!ok) {
+        AppToast.show(context, 'Не удалось отправить SMS');
+        return;
+      }
+    }
+    if (!mounted) return;
+    context.push('/auth/sms?phone=${Uri.encodeComponent(phone)}');
   }
 
   @override
@@ -135,9 +154,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
               SizedBox(height: 18.h),
               PrimaryButton(
                 label: 'Далее',
-                onPressed: _valid
-                    ? () => context.push('/auth/sms?phone=${Uri.encodeComponent(_ctrl.text)}')
-                    : null,
+                onPressed: _valid ? _onNext : null,
               ),
             ],
           ),

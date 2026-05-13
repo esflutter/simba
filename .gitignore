@@ -43,3 +43,7 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Локальные скрипты запуска с ключами
+run_dev.bat
+run_prod.bat

@@ -11,7 +11,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/primary_button.dart';
-import '../../data/mock/app_state.dart';
+import '../../data/remote/auth_repository.dart';
 
 class SmsCodeScreen extends ConsumerStatefulWidget {
   const SmsCodeScreen({super.key, required this.phone});
@@ -73,8 +73,11 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen> {
     return '$m:$s';
   }
 
-  void _onNext() {
-    if (_code == '000000') {
+  Future<void> _onNext() async {
+    final auth = ref.read(authRepositoryProvider);
+    final ok = await auth.verifyOtp(phone: widget.phone, code: _code);
+    if (!mounted) return;
+    if (!ok) {
       _errorTimer?.cancel();
       setState(() {
         _code = '';
@@ -87,7 +90,6 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen> {
       });
       return;
     }
-    ref.read(appControllerProvider.notifier).completeAuth(phone: widget.phone);
     context.go('/auth/profile');
   }
 

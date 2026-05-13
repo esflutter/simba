@@ -9,6 +9,7 @@ import '../../core/widgets/app_back_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/orders_repository.dart';
 import 'order_card.dart';
 
 class SearchScreen extends ConsumerStatefulWidget {
@@ -56,7 +57,13 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(appControllerProvider);
-    final results = state.orders
+    // Источник — фид из PB (если есть), иначе мок-стейт.
+    final remoteFeed = ref.watch(feedOrdersProvider).maybeWhen(
+          data: (xs) => xs,
+          orElse: () => null,
+        );
+    final source = remoteFeed ?? state.orders;
+    final results = source
         .where((o) =>
             o.status == OrderStatus.open &&
             !o.isExpiredOpen &&

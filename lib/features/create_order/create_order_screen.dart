@@ -153,7 +153,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                     label: 'Название / Краткое описание работ',
                     controller: _titleCtrl,
                     textInputAction: TextInputAction.next,
-                    inputFormatters: [LengthLimitingTextInputFormatter(80)],
+                    inputFormatters: [LengthLimitingTextInputFormatter(50)],
                     onChanged: (v) {
                       ref.read(orderDraftProvider.notifier).update(title: v);
                       setState(() {});
@@ -168,7 +168,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                       controller: _descCtrl,
                       minLines: 3,
                       maxLines: 6,
-                      inputFormatters: [LengthLimitingTextInputFormatter(1000)],
+                      inputFormatters: [LengthLimitingTextInputFormatter(500)],
                       onChanged: (v) =>
                           ref.read(orderDraftProvider.notifier).update(description: v),
                     ),

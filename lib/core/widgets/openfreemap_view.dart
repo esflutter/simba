@@ -33,6 +33,7 @@ class OpenFreeMapView extends StatefulWidget {
     this.onMapTap,
     this.interactive = true,
     this.styleUri = 'https://tiles.openfreemap.org/styles/positron',
+    this.mapController,
   });
 
   final List<OpenFreeMapMarker> markers;
@@ -42,6 +43,9 @@ class OpenFreeMapView extends StatefulWidget {
   final void Function(LatLng point)? onMapTap;
   final bool interactive;
   final String styleUri;
+  /// Внешний контроллер для программного управления центром/зумом
+  /// (например, при выборе адреса из подсказки).
+  final MapController? mapController;
 
   @override
   State<OpenFreeMapView> createState() => _OpenFreeMapViewState();
@@ -97,6 +101,7 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView> {
         }
         final style = snap.data!;
         final map = FlutterMap(
+          mapController: widget.mapController,
           options: MapOptions(
             initialCenter: widget.initialCenter ??
                 style.center ??

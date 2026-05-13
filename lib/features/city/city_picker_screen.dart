@@ -12,6 +12,7 @@ import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/cities_repository.dart';
 
 // Города-миллионники России по убыванию населения
 const _millionCityIds = [
@@ -35,12 +36,19 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
   String? _selectedId;
   bool _searching = false;
 
-  List<City> get _allCities =>
-      MockData.cities.where((c) => _millionCityIds.contains(c.id)).toList();
+  /// Список городов: из PocketBase (если бэкенд подключён) либо из моков.
+  /// `citiesProvider` сам делает fallback на моки при ошибке сети.
+  List<City> _citiesFrom(AsyncValue<List<City>> async) {
+    final list = async.maybeWhen(
+      data: (xs) => xs,
+      orElse: () => MockData.cities,
+    );
+    return list.where((c) => _millionCityIds.contains(c.id)).toList();
+  }
 
-  List<City> get _filtered => _query.isEmpty
-      ? _allCities
-      : _allCities
+  List<City> _filter(List<City> all) => _query.isEmpty
+      ? all
+      : all
           .where((c) => c.name.toLowerCase().contains(_query.toLowerCase()))
           .toList();
 
@@ -89,6 +97,8 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
   @override
   Widget build(BuildContext context) {
     final canContinue = _selectedId != null;
+    final allCities = _citiesFrom(ref.watch(citiesProvider));
+    final filtered = _filter(allCities);
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
@@ -207,7 +217,7 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                   ).animate(_anim),
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 0),
-                    child: _filtered.isEmpty
+                    child: filtered.isEmpty
                         ? Padding(
                             padding: EdgeInsets.only(bottom: 16.h),
                             child: _NoCityFound(
@@ -215,11 +225,11 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                           )
                         : ListView.separated(
                             padding: EdgeInsets.only(bottom: 16.h),
-                            itemCount: _filtered.length,
+                            itemCount: filtered.length,
                             separatorBuilder: (context, index) =>
                                 SizedBox(height: 8.h),
                             itemBuilder: (_, i) {
-                              final c = _filtered[i];
+                              final c = filtered[i];
                               final selected = c.id == _selectedId;
                               return Material(
                                 color: selected

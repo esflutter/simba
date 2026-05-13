@@ -7,6 +7,8 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
+import '../../data/remote/reviews_repository.dart';
+import '../reviews/reviews_providers.dart';
 
 /// Открывает шторку «Оставить отзыв» снизу экрана.
 Future<void> showLeaveReviewSheet(BuildContext context, String orderId) {
@@ -38,7 +40,7 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
     super.dispose();
   }
 
-  void _submit(BuildContext context) {
+  Future<void> _submit(BuildContext submitContext) async {
     // Определяем, кому мы оставляем отзыв: если 'me' — заказчик, отзыв
     // идёт исполнителю; иначе — заказчику.
     final state = ref.read(appControllerProvider);
@@ -52,8 +54,8 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
     final recipientRole = isCustomerReviewing ? 'исполнителя' : 'заказчика';
     final recipientId =
         isCustomerReviewing ? (order.executorId ?? '') : order.customerId;
-    // Сохраняем отзыв в стейт, чтобы кнопка «Оставить отзыв» больше не
-    // отображалась на странице этого заказа.
+    // Зеркалим в локальный стейт — чтобы кнопка «Оставить отзыв» больше не
+    // отображалась на странице этого заказа (нужно и для live, и для mock).
     ref.read(appControllerProvider.notifier).addReview(
           orderId: order.id,
           toUserId: recipientId,
@@ -61,6 +63,21 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
           comment: _ctrl.text.trim(),
           tags: _tags.toList(),
         );
+    // Отправляем на сервер (если PB подключён). Если ошибка — продолжаем,
+    // моковая запись уже добавлена.
+    try {
+      await ref.read(reviewsRepositoryProvider).create(
+            orderId: order.id,
+            toUserId: recipientId,
+            rating: _rating,
+            comment: _ctrl.text.trim(),
+            tags: _tags.toList(),
+          );
+      ref.invalidate(reviewsForUserProvider(recipientId));
+    } catch (_) {
+      // Игнор: мок-стейт уже обновлён.
+    }
+    if (!mounted) return;
 
     showDialog<void>(
       context: context,

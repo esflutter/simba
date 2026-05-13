@@ -15,6 +15,9 @@ import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/order_responses_repository.dart';
+import '../../data/remote/orders_repository.dart';
+import '../../data/remote/users_repository.dart';
 
 class UserProfileScreen extends ConsumerWidget {
   const UserProfileScreen({super.key, required this.userId, this.orderId});
@@ -151,15 +154,27 @@ class UserProfileScreen extends ConsumerWidget {
                               ),
                               if (canContact) ...[
                                 SizedBox(height: 4.h),
-                                Text(
-                                  user.phone,
-                                  style: TextStyle(
-                                    color: Colors.black,
-                                    fontSize: 16.sp,
-                                    fontWeight: FontWeight.w600,
-                                    height: 1.50,
-                                  ),
-                                ),
+                                Consumer(builder: (context, ref, _) {
+                                  final args = ContactPhoneArgs(
+                                    userId: userId,
+                                    orderId: orderId!,
+                                  );
+                                  final phoneAsync =
+                                      ref.watch(contactPhoneProvider(args));
+                                  final phone = phoneAsync.maybeWhen(
+                                    data: (p) => p ?? user.phone,
+                                    orElse: () => user.phone,
+                                  );
+                                  return Text(
+                                    phone,
+                                    style: TextStyle(
+                                      color: Colors.black,
+                                      fontSize: 16.sp,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.50,
+                                    ),
+                                  );
+                                }),
                               ],
                             ],
                           ),
@@ -171,27 +186,39 @@ class UserProfileScreen extends ConsumerWidget {
                     SizedBox(height: 8.h),
                     Padding(
                       padding: EdgeInsets.symmetric(vertical: 8.h),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: _ContactButton(
-                              label: 'Написать',
-                              background: AppColors.surface,
-                              color: Colors.black,
-                              onTap: () => _showContactSheet(context, user.phone),
+                      child: Consumer(builder: (context, ref, _) {
+                        final args = ContactPhoneArgs(
+                          userId: userId,
+                          orderId: orderId!,
+                        );
+                        final phone = ref
+                            .watch(contactPhoneProvider(args))
+                            .maybeWhen(
+                              data: (p) => p ?? user.phone,
+                              orElse: () => user.phone,
+                            );
+                        return Row(
+                          children: [
+                            Expanded(
+                              child: _ContactButton(
+                                label: 'Написать',
+                                background: AppColors.surface,
+                                color: Colors.black,
+                                onTap: () => _showContactSheet(context, phone),
+                              ),
                             ),
-                          ),
-                          SizedBox(width: 8.w),
-                          Expanded(
-                            child: _ContactButton(
-                              label: 'Позвонить',
-                              background: AppColors.primary,
-                              color: const Color(0xFFF5F5F5),
-                              onTap: () => _callPhone(user.phone),
+                            SizedBox(width: 8.w),
+                            Expanded(
+                              child: _ContactButton(
+                                label: 'Позвонить',
+                                background: AppColors.primary,
+                                color: const Color(0xFFF5F5F5),
+                                onTap: () => _callPhone(phone),
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
+                          ],
+                        );
+                      }),
                     ),
                   ],
                   SizedBox(height: 8.h),
@@ -257,30 +284,44 @@ class UserProfileScreen extends ConsumerWidget {
             ),
           if (isPendingCandidate)
             _CandidateActionBar(
-              onAccept: () {
-                ref
-                    .read(appControllerProvider.notifier)
-                    .acceptResponse(orderId!, userId);
-                AppToast.show(context, 'Исполнитель принят');
-                // После принятия остальные отклики автоматически отклонены —
-                // экран откликов под нами теперь пустой. Убираем его из
-                // стека (go_router-native): сначала pop профиля, потом
-                // pushReplacement на тот же профиль — экран откликов
-                // заменяется и в стеке остаётся [order → profile]. Back
-                // теперь корректно ведёт на детали заказа.
-                context.pop();
-                context.pushReplacement(
-                  '/order/$orderId/user/$userId',
-                );
+              onAccept: () async {
+                try {
+                  await ref
+                      .read(orderResponsesRepositoryProvider)
+                      .accept(orderId!, userId);
+                  if (!context.mounted) return;
+                  ref.invalidate(myOrdersStreamProvider);
+                  AppToast.show(context, 'Исполнитель принят');
+                  // После принятия остальные отклики автоматически отклонены —
+                  // экран откликов под нами теперь пустой. Убираем его из
+                  // стека (go_router-native): сначала pop профиля, потом
+                  // pushReplacement на тот же профиль — экран откликов
+                  // заменяется и в стеке остаётся [order → profile]. Back
+                  // теперь корректно ведёт на детали заказа.
+                  context.pop();
+                  context.pushReplacement(
+                    '/order/$orderId/user/$userId',
+                  );
+                } catch (_) {
+                  if (!context.mounted) return;
+                  AppToast.show(context, 'Ошибка. Попробуйте позже');
+                }
               },
-              onDecline: () {
-                final wasLast = order!.responses.length == 1;
-                ref
-                    .read(appControllerProvider.notifier)
-                    .declineResponse(orderId!, userId);
-                AppToast.show(context, 'Исполнитель отклонён');
-                context.pop();
-                if (wasLast) context.pop();
+              onDecline: () async {
+                final wasLast = order.responses.length == 1;
+                try {
+                  await ref
+                      .read(orderResponsesRepositoryProvider)
+                      .decline(orderId!, userId);
+                  if (!context.mounted) return;
+                  ref.invalidate(myOrdersStreamProvider);
+                  AppToast.show(context, 'Исполнитель отклонён');
+                  context.pop();
+                  if (wasLast) context.pop();
+                } catch (_) {
+                  if (!context.mounted) return;
+                  AppToast.show(context, 'Ошибка. Попробуйте позже');
+                }
               },
             ),
         ],

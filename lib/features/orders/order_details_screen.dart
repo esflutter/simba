@@ -14,9 +14,12 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_toast.dart';
+import '../../core/widgets/openfreemap_view.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/order_responses_repository.dart';
+import '../../data/remote/orders_repository.dart';
 import '../reviews/leave_review_screen.dart';
 
 class OrderDetailsScreen extends ConsumerWidget {
@@ -153,11 +156,61 @@ class OrderDetailsScreen extends ConsumerWidget {
   }
 
   List<Widget> _buildActions(BuildContext context, WidgetRef ref, Order order, bool isMine, bool hasMyResponse) {
-    final ctrl = ref.read(appControllerProvider.notifier);
     final reviews = ref.watch(appControllerProvider).reviews;
     final hasMyReview =
         reviews.any((r) => r.orderId == order.id && r.fromUserId == 'me');
     final widgets = <Widget>[];
+
+    Future<void> markWorkDone() async {
+      try {
+        await ref.read(ordersRepositoryProvider).markWorkDone(order.id);
+        if (!context.mounted) return;
+        ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(feedOrdersProvider);
+      } catch (_) {
+        if (!context.mounted) return;
+        AppToast.show(context, 'Ошибка. Попробуйте позже');
+      }
+    }
+
+    Future<void> confirmWork() async {
+      try {
+        await ref.read(ordersRepositoryProvider).confirmWork(order.id);
+        if (!context.mounted) return;
+        ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(feedOrdersProvider);
+      } catch (_) {
+        if (!context.mounted) return;
+        AppToast.show(context, 'Ошибка. Попробуйте позже');
+      }
+    }
+
+    Future<void> confirmPaymentReceived() async {
+      try {
+        await ref
+            .read(ordersRepositoryProvider)
+            .confirmPaymentReceived(order.id);
+        if (!context.mounted) return;
+        ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(feedOrdersProvider);
+      } catch (_) {
+        if (!context.mounted) return;
+        AppToast.show(context, 'Ошибка. Попробуйте позже');
+      }
+    }
+
+    Future<void> respond() async {
+      try {
+        await ref.read(orderResponsesRepositoryProvider).respond(order.id);
+        if (!context.mounted) return;
+        ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(feedOrdersProvider);
+        AppToast.show(context, 'Отклик отправлен');
+      } catch (_) {
+        if (!context.mounted) return;
+        AppToast.show(context, 'Ошибка. Попробуйте позже');
+      }
+    }
 
     if (isMine) {
       switch (order.status) {
@@ -168,13 +221,14 @@ class OrderDetailsScreen extends ConsumerWidget {
           ));
           widgets.add(SizedBox(height: 16.h));
           widgets.add(_CancelOrderButton(
-            onTap: () => _confirmCancel(context, ctrl, order.id),
+            onTap: () => _confirmCancel(context, ref, order.id),
           ));
           break;
         case OrderStatus.accepted:
+          // Заказчик подтверждает выполнение работы (= передал наличные).
           widgets.add(PrimaryButton(
-            label: 'Работа выполнена',
-            onPressed: () => ctrl.markWorkDone(order.id, inMyOrders: true),
+            label: 'Подтверждаю работу',
+            onPressed: confirmWork,
           ));
           break;
         case OrderStatus.awaitingPayment:
@@ -201,19 +255,16 @@ class OrderDetailsScreen extends ConsumerWidget {
           } else {
             widgets.add(PrimaryButton(
               label: 'Откликнуться на заказ',
-              onPressed: () {
-                ctrl.takeOrderAsExecutor(order.id);
-                AppToast.show(context, 'Отклик отправлен');
-              },
+              onPressed: respond,
             ));
           }
           break;
         case OrderStatus.accepted:
           if (order.executorId == 'me') {
-            widgets.add(_StatusBanner(
-              color: AppColors.primarySoft,
-              textColor: AppColors.primary,
-              label: 'Дождитесь подтверждения работы от заказчика',
+            // Исполнитель отмечает «Работа выполнена».
+            widgets.add(PrimaryButton(
+              label: 'Работа выполнена',
+              onPressed: markWorkDone,
             ));
           } else {
             widgets.add(_StatusBanner(
@@ -225,9 +276,10 @@ class OrderDetailsScreen extends ConsumerWidget {
           break;
         case OrderStatus.awaitingPayment:
           if (order.executorId == 'me') {
+            // Заказчик подтвердил работу — исполнитель подтверждает получение оплаты.
             widgets.add(PrimaryButton(
-              label: 'Подтвердите оплату',
-              onPressed: () => ctrl.confirmPayment(order.id, inMyOrders: false),
+              label: 'Оплата получена',
+              onPressed: confirmPaymentReceived,
             ));
           }
           break;
@@ -246,7 +298,19 @@ class OrderDetailsScreen extends ConsumerWidget {
     return widgets;
   }
 
-  void _confirmCancel(BuildContext context, AppController ctrl, String id) {
+  void _confirmCancel(BuildContext context, WidgetRef ref, String id) {
+    Future<void> doCancel() async {
+      try {
+        await ref.read(ordersRepositoryProvider).cancel(id);
+        if (!context.mounted) return;
+        ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(feedOrdersProvider);
+      } catch (_) {
+        if (!context.mounted) return;
+        AppToast.show(context, 'Ошибка. Попробуйте позже');
+      }
+    }
+
     showDialog<void>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.40),
@@ -305,8 +369,8 @@ class OrderDetailsScreen extends ConsumerWidget {
                 background: AppColors.primary,
                 textColor: Colors.white,
                 onTap: () {
-                  ctrl.cancelOrder(id);
                   Navigator.of(dialogCtx).pop();
+                  doCancel();
                   context.pop();
                 },
               ),
@@ -539,11 +603,21 @@ class _AddressBlock extends StatelessWidget {
         SizedBox(height: 12.h),
         ClipRRect(
           borderRadius: BorderRadius.circular(10.r),
-          child: Image.asset(
-            'assets/images/map_order_mock.webp',
+          child: SizedBox(
             width: double.infinity,
             height: 170.h,
-            fit: BoxFit.cover,
+            child: OpenFreeMapView(
+              initialCenter: location,
+              initialZoom: 15,
+              interactive: false,
+              markers: [
+                OpenFreeMapMarker(
+                  id: 'order',
+                  point: location,
+                  color: AppColors.markerRed,
+                ),
+              ],
+            ),
           ),
         ),
         SizedBox(height: 12.h),

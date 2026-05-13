@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../core/config/env.dart';
 import '../local/preferences_store.dart';
 import '../models/models.dart';
 import 'mock_data.dart';
@@ -75,9 +76,11 @@ class AppController extends Notifier<AppState> {
     return AppState(
       user: p?.user,
       role: p?.role ?? UserRole.customer,
-      orders: MockData.seedOrders(city.center),
-      myOrders: _withoutExpiredOpen(MockData.seedMyOrders(city.center)),
-      reviews: MockData.seedReviews(),
+      orders: Env.hasPocketbase ? const [] : MockData.seedOrders(city.center),
+      myOrders: Env.hasPocketbase
+          ? const []
+          : _withoutExpiredOpen(MockData.seedMyOrders(city.center)),
+      reviews: Env.hasPocketbase ? const [] : MockData.seedReviews(),
       selectedCityId: cityId,
       executorActive: false,
       searchRadiusKm: 5,
@@ -93,8 +96,10 @@ class AppController extends Notifier<AppState> {
     final c = MockData.cities.firstWhere((c) => c.id == id);
     state = state.copyWith(
       selectedCityId: id,
-      orders: MockData.seedOrders(c.center),
-      myOrders: _withoutExpiredOpen(MockData.seedMyOrders(c.center)),
+      orders: Env.hasPocketbase ? const [] : MockData.seedOrders(c.center),
+      myOrders: Env.hasPocketbase
+          ? const []
+          : _withoutExpiredOpen(MockData.seedMyOrders(c.center)),
     );
     _prefs?.setCityId(id);
   }
@@ -110,6 +115,14 @@ class AppController extends Notifier<AppState> {
     );
     state = state.copyWith(user: u);
     _prefs?.saveUser(u);
+  }
+
+  /// Принять авторизованного пользователя из PocketBase (после verify SMS).
+  /// Сохраняем как локальный стейт — остальные экраны продолжают читать
+  /// `state.user` без изменений.
+  void completeAuthRemote(AppUser user) {
+    state = state.copyWith(user: user);
+    _prefs?.saveUser(user);
   }
 
   void completeProfile({
@@ -254,9 +267,10 @@ class AppController extends Notifier<AppState> {
     state = AppState(
       user: null,
       role: UserRole.customer,
-      orders: MockData.seedOrders(city.center),
-      myOrders: MockData.seedMyOrders(city.center),
-      reviews: MockData.seedReviews(),
+      orders: Env.hasPocketbase ? const [] : MockData.seedOrders(city.center),
+      myOrders:
+          Env.hasPocketbase ? const [] : MockData.seedMyOrders(city.center),
+      reviews: Env.hasPocketbase ? const [] : MockData.seedReviews(),
       selectedCityId: state.selectedCityId,
       executorActive: false,
       searchRadiusKm: state.searchRadiusKm,

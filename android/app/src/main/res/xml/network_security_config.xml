@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- В dev допускаем cleartext HTTP к локальному PocketBase (10.0.2.2 для
+     Android-эмулятора, 127.0.0.1 для unit-тестов, и любой IP в локальной
+     сети для тестов на физическом устройстве в той же Wi-Fi).
+     В проде используется HTTPS — этот файл влияет только на исключения. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <!-- Локальные сети для физических устройств в Wi-Fi -->
+        <domain includeSubdomains="true">192.168.0.0/16</domain>
+        <domain includeSubdomains="true">10.0.0.0/8</domain>
+    </domain-config>
+</network-security-config>

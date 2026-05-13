@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -14,6 +16,7 @@ import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/orders_repository.dart';
 import 'order_draft.dart';
 import 'select_payment_method_screen.dart';
 
@@ -211,7 +214,23 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       photoPaths: draft.photoPaths,
       forOtherPhone: draft.forOtherPhone,
     );
-    ref.read(appControllerProvider.notifier).createOrder(order);
+    // Если бэкенд подключён — отправляем в PB; репозиторий сам зеркалит
+    // в мок-состояние через AppController при отсутствии PB.
+    final photoFiles = draft.photoPaths
+        .map((p) => File(p))
+        .where((f) => f.existsSync())
+        .toList();
+    try {
+      await ref
+          .read(ordersRepositoryProvider)
+          .create(draft: order, photoFiles: photoFiles);
+      // Обновляем стрим «Моих заказов», чтобы новый заказ появился сразу.
+      ref.invalidate(myOrdersStreamProvider);
+    } catch (e) {
+      // Мягкий фоллбэк: записываем в локальный стейт даже при ошибке PB,
+      // чтобы пользователь видел заказ в «Моих заказах».
+      ref.read(appControllerProvider.notifier).createOrder(order);
+    }
     ref.read(orderDraftProvider.notifier).reset();
     await showDialog<void>(
       context: context,

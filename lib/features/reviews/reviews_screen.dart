@@ -6,21 +6,30 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/app_colors.dart';
-import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import 'reviews_providers.dart';
 
 class ReviewsScreen extends ConsumerWidget {
   const ReviewsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final reviews = ref
+    // Берём отзывы из репозитория (live или mock-fallback) для текущего юзера.
+    // Если пользователь не загружен — пустой список.
+    final me = ref.watch(appControllerProvider.select((s) => s.user));
+    final myId = me?.id ?? 'me';
+    final mockFallback = ref
         .watch(appControllerProvider)
         .reviews
-        .where((r) => r.toUserId == 'me')
+        .where((r) => r.toUserId == myId || r.toUserId == 'me')
         .toList();
+    final asyncReviews = ref.watch(reviewsForUserProvider(myId));
+    final reviews = asyncReviews.maybeWhen(
+      data: (list) => list.isEmpty ? mockFallback : list,
+      orElse: () => mockFallback,
+    );
     final ratingDistribution = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
     for (final r in reviews) {
       ratingDistribution[r.rating] = (ratingDistribution[r.rating] ?? 0) + 1;

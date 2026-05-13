@@ -10,6 +10,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/auth_repository.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -141,9 +142,12 @@ class ProfileScreen extends ConsumerWidget {
                       label: 'Выйти',
                       background: AppColors.primary,
                       textColor: Colors.white,
-                      onTap: () {
-                        ref.read(appControllerProvider.notifier).logout();
+                      onTap: () async {
+                        // authRepository.logout() сам зовёт appController + clear authStore.
+                        await ref.read(authRepositoryProvider).logout();
+                        if (!dialogCtx.mounted) return;
                         Navigator.of(dialogCtx).pop();
+                        if (!context.mounted) return;
                         context.go('/onboarding');
                       },
                     ),

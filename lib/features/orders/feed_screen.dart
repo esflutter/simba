@@ -11,6 +11,7 @@ import '../../core/widgets/city_pill.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/orders_repository.dart';
 import 'order_card.dart';
 
 class FeedScreen extends ConsumerStatefulWidget {
@@ -30,7 +31,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(appControllerProvider);
     final isExecutor = state.role == UserRole.executor;
-    final orders = state.orders
+    // Если бэкенд подключён — берём фид из PB, иначе из мок-стейта.
+    final remoteFeed = ref.watch(feedOrdersProvider).maybeWhen(
+          data: (xs) => xs,
+          orElse: () => null,
+        );
+    final source = remoteFeed ?? state.orders;
+    final orders = source
         .where((o) => o.status == OrderStatus.open && !o.isExpiredOpen)
         .toList();
 

@@ -13,6 +13,8 @@ import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/order_responses_repository.dart';
+import '../../data/remote/orders_repository.dart';
 
 class ResponsesScreen extends ConsumerWidget {
   const ResponsesScreen({super.key, required this.orderId});
@@ -58,26 +60,46 @@ class ResponsesScreen extends ConsumerWidget {
                           user: u,
                           onTap: () =>
                               context.push('/order/$orderId/user/${u.id}'),
-                          onDecline: () {
+                          onDecline: () async {
                             final isLast = users.length == 1;
-                            ref
-                                .read(appControllerProvider.notifier)
-                                .declineResponse(orderId, u.id);
-                            AppToast.show(context, 'Исполнитель отклонён');
-                            if (isLast) context.pop();
+                            try {
+                              await ref
+                                  .read(orderResponsesRepositoryProvider)
+                                  .decline(orderId, u.id);
+                              if (!context.mounted) return;
+                              ref.invalidate(myOrdersStreamProvider);
+                              AppToast.show(context, 'Исполнитель отклонён');
+                              if (isLast) context.pop();
+                            } catch (_) {
+                              if (!context.mounted) return;
+                              AppToast.show(
+                                context,
+                                'Ошибка. Попробуйте позже',
+                              );
+                            }
                           },
-                          onAccept: () {
-                            ref
-                                .read(appControllerProvider.notifier)
-                                .acceptResponse(orderId, u.id);
-                            AppToast.show(context, 'Исполнитель принят');
-                            // pushReplacement, а не go: go сбрасывает стек
-                            // и /home/orders уходит — потом back из заказа
-                            // не работает. Заменяем responses на профиль,
-                            // сохраняя [home, order, profile] в стеке.
-                            context.pushReplacement(
-                              '/order/$orderId/user/${u.id}',
-                            );
+                          onAccept: () async {
+                            try {
+                              await ref
+                                  .read(orderResponsesRepositoryProvider)
+                                  .accept(orderId, u.id);
+                              if (!context.mounted) return;
+                              ref.invalidate(myOrdersStreamProvider);
+                              AppToast.show(context, 'Исполнитель принят');
+                              // pushReplacement, а не go: go сбрасывает стек
+                              // и /home/orders уходит — потом back из заказа
+                              // не работает. Заменяем responses на профиль,
+                              // сохраняя [home, order, profile] в стеке.
+                              context.pushReplacement(
+                                '/order/$orderId/user/${u.id}',
+                              );
+                            } catch (_) {
+                              if (!context.mounted) return;
+                              AppToast.show(
+                                context,
+                                'Ошибка. Попробуйте позже',
+                              );
+                            }
                           },
                         );
                       },

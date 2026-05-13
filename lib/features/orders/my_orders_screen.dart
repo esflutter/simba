@@ -8,6 +8,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/orders_repository.dart';
 import 'order_card.dart';
 
 class MyOrdersScreen extends ConsumerWidget {
@@ -19,14 +20,31 @@ class MyOrdersScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(appControllerProvider);
-    final mine = state.myOrders.where((o) =>
+    // Если бэкенд подключён — берём «мои заказы» из PB; иначе из мок-стейта.
+    final remoteOrders = ref.watch(myOrdersStreamProvider).maybeWhen(
+          data: (xs) => xs,
+          orElse: () => null,
+        );
+    final remoteExecutor = ref.watch(myExecutorOrdersProvider).maybeWhen(
+          data: (xs) => xs,
+          orElse: () => null,
+        );
+    final myOrders = remoteOrders ?? state.myOrders;
+    final mine = myOrders.where((o) =>
         !o.isExpiredOpen &&
         (o.status == OrderStatus.open || o.status == OrderStatus.accepted));
-    final asExecutor = state.orders.where((o) =>
-        o.executorId == 'me' &&
-        (o.status == OrderStatus.accepted ||
-            o.status == OrderStatus.awaitingPayment));
-    final orders = [...mine, ...asExecutor];
+    final asExecutor = remoteExecutor ??
+        state.orders
+            .where((o) =>
+                o.executorId == 'me' &&
+                (o.status == OrderStatus.accepted ||
+                    o.status == OrderStatus.awaitingPayment))
+            .toList();
+    // Дедуп: если myOrders уже содержит executor-заказы (PB-репо возвращает
+    // и customer, и executor в одном списке) — повторно не добавляем.
+    final mineIds = mine.map((o) => o.id).toSet();
+    final extras = asExecutor.where((o) => !mineIds.contains(o.id));
+    final orders = [...mine, ...extras];
 
     return Scaffold(
       backgroundColor: AppColors.background,

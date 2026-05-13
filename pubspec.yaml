@@ -27,6 +27,9 @@ dependencies:
   iconsax_plus: ^1.0.0
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.1
+  http: ^1.2.2
+  geolocator: ^13.0.2
+  pocketbase: ^0.22.0
 
 dev_dependencies:
   flutter_test:

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/theme/app_colors.dart';
@@ -11,6 +12,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
+import '../../data/remote/pocketbase_client.dart';
 
 class ProfileSetupScreen extends ConsumerStatefulWidget {
   const ProfileSetupScreen({super.key});
@@ -117,11 +119,41 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
               PrimaryButton(
                 label: 'Далее',
                 onPressed: canContinue
-                    ? () {
+                    ? () async {
+                        final name = _ctrl.text.trim();
+                        final photoPath = _photoPath;
+                        // Локально (моки и UI) — сразу.
                         ref.read(appControllerProvider.notifier).completeProfile(
-                              name: _ctrl.text,
-                              photoPath: _photoPath,
+                              name: name,
+                              photoPath: photoPath,
                             );
+                        // Отправляем на сервер, если PB подключён и юзер есть.
+                        // Ошибка не блокирует переход — моки уже сработали.
+                        try {
+                          final pb = ref.read(pocketbaseProvider);
+                          final record = pb?.authStore.record;
+                          if (pb != null && record != null) {
+                            final files = <http.MultipartFile>[];
+                            if (photoPath != null) {
+                              final file = File(photoPath);
+                              if (await file.exists()) {
+                                files.add(http.MultipartFile.fromBytes(
+                                  'photo',
+                                  await file.readAsBytes(),
+                                  filename: photoPath.split(Platform.pathSeparator).last,
+                                ));
+                              }
+                            }
+                            await pb.collection('users').update(
+                              record.id,
+                              body: {'name': name},
+                              files: files,
+                            );
+                          }
+                        } catch (_) {
+                          // Игнор: фоллбэк на локальный mock-стейт.
+                        }
+                        if (!context.mounted) return;
                         context.go('/auth/role');
                       }
                     : null,
