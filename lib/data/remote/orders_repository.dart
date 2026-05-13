@@ -27,11 +27,14 @@ class OrdersRepository {
     final pb = _pb!;
     final auth = pb.authStore.record;
     if (auth == null) return const [];
-    final filter =
-        '(customer = "${auth.id}") || (executor = "${auth.id}" && (status = "accepted" || status = "completed"))';
+    final filter = pb.filter(
+      '(customer = {:uid}) || (executor = {:uid} && (status = "accepted" || status = "completed"))',
+      {'uid': auth.id},
+    );
     final records = await pb.collection('orders').getFullList(
           filter: filter,
           sort: '-created',
+          expand: 'customer,executor,category',
         );
     return records.map((r) => orderFromRecord(r, pb)).toList();
   }
@@ -39,6 +42,10 @@ class OrdersRepository {
   /// Активные заказы, где я — исполнитель (accepted / awaitingPayment).
   /// Используется в «Мои заказы» для добавления секции исполнителя.
   /// На моках — фильтр по `executorId == 'me'`.
+  ///
+  /// На бэке хранится только `status = "accepted"`; `awaitingPayment` —
+  /// клиентский статус, вычисляется в [orderFromRecord] по факту наличия
+  /// `work_done_by_executor_at` без `payment_received_at`.
   Future<List<Order>> myExecutorOrders() async {
     if (!_isLive) {
       return _ref
@@ -54,9 +61,12 @@ class OrdersRepository {
     final auth = pb.authStore.record;
     if (auth == null) return const [];
     final records = await pb.collection('orders').getFullList(
-          filter:
-              'executor = "${auth.id}" && (status = "accepted" || status = "awaiting_payment")',
+          filter: pb.filter(
+            'executor = {:uid} && status = "accepted"',
+            {'uid': auth.id},
+          ),
           sort: '-created',
+          expand: 'customer,executor,category',
         );
     return records.map((r) => orderFromRecord(r, pb)).toList();
   }
@@ -99,13 +109,23 @@ class OrdersRepository {
     } catch (_) {
       return const [];
     }
+    // Auth-flow: токен мог истечь, бэк отдаёт 401. Чистим pb.authStore +
+    // мок-AppController, чтобы redirect-guard в роутере отправил на /auth/phone
+    // при следующей навигации (см. `_buildRouter.redirect`).
+    if (resp.statusCode == 401 || resp.statusCode == 403) {
+      pb.authStore.clear();
+      try {
+        _ref.read(appControllerProvider.notifier).logout();
+      } catch (_) {}
+      return const [];
+    }
     if (resp.statusCode != 200) return const [];
     final body = jsonDecode(resp.body);
     final items = (body is Map && body['items'] is List)
         ? (body['items'] as List)
         : const [];
     return items
-        .map<Order?>((it) => _orderFromFeedItem(it))
+        .map<Order?>((it) => _orderFromFeedItem(it, pb))
         .whereType<Order>()
         .toList();
   }
@@ -121,7 +141,10 @@ class OrdersRepository {
     }
     try {
       final pb = _pb!;
-      final r = await pb.collection('orders').getOne(orderId);
+      final r = await pb.collection('orders').getOne(
+            orderId,
+            expand: 'customer,executor,category',
+          );
       return orderFromRecord(r, pb);
     } catch (_) {
       return null;
@@ -157,25 +180,38 @@ class OrdersRepository {
       'lng': draft.location.longitude,
       'price_kopecks': draft.priceRub * 100,
       'status': 'open',
-      'payment_method': 'cash',
+      // В SimbA в `PaymentMethod` сейчас только `cash`. Не хардкодим, а
+      // мапим из draft.paymentMethod: когда enum расширится (cashless и т.п.),
+      // правка останется в одном месте — `_paymentMethodToString`.
+      'payment_method': _paymentMethodToString(draft.paymentMethod),
       'asap': draft.asap,
       if (draft.scheduledAt != null)
         'scheduled_at': draft.scheduledAt!.toUtc().toIso8601String(),
       'for_other_phone': ?normalizedPhone,
     };
-    final files = (photoFiles ?? const <File>[])
-        .map((f) => http.MultipartFile.fromBytes(
-              'photos',
-              f.readAsBytesSync(),
-              filename: f.path.split(Platform.pathSeparator).last,
-            ))
-        .toList();
+    // Асинхронное чтение байтов, чтобы не блокировать UI-isolate на
+    // больших фото. fromBytes требует уже готовый буфер — поэтому
+    // последовательный await readAsBytes (а не fromPath/Stream — там
+    // нужны Length-заголовки на сервере).
+    final List<http.MultipartFile> files = [];
+    for (final f in photoFiles ?? const <File>[]) {
+      final bytes = await f.readAsBytes();
+      files.add(http.MultipartFile.fromBytes(
+        'photos',
+        bytes,
+        filename: f.path.split(Platform.pathSeparator).last,
+      ));
+    }
     final r = await pb.collection('orders').create(body: body, files: files);
     return orderFromRecord(r, pb);
   }
 
   /// Отмена заказа заказчиком. До accept — DELETE, после accept — PATCH
   /// `status: cancelled` (DELETE на accepted даст 403 из-за API-rules).
+  ///
+  /// Чтобы не было race condition «getOne → между ним и DELETE заказ
+  /// принят исполнителем», сначала пробуем DELETE: PB вернёт 403/404,
+  /// если заказ уже не в `open`-состоянии — тогда переключаемся на PATCH.
   Future<void> cancel(String orderId) async {
     if (!_isLive) {
       _ref.read(appControllerProvider.notifier).cancelOrder(orderId);
@@ -184,19 +220,18 @@ class OrdersRepository {
     final pb = _pb!;
     final coll = pb.collection('orders');
     try {
-      final r = await coll.getOne(orderId);
-      final status = r.getStringValue('status');
-      if (status == 'accepted') {
+      await coll.delete(orderId);
+    } on ClientException catch (e) {
+      if (e.statusCode == 403 || e.statusCode == 404) {
         await coll.update(orderId, body: {
           'status': 'cancelled',
           'cancel_reason': 'by_customer',
+          'cancelled_by': pb.authStore.record?.id,
         });
-        return;
+      } else {
+        rethrow;
       }
-    } catch (_) {
-      // если не смогли прочитать — попробуем DELETE, ниже
     }
-    await coll.delete(orderId);
   }
 
   /// Исполнитель отмечает «работа выполнена».
@@ -239,21 +274,60 @@ class OrdersRepository {
     });
   }
 
-  Order? _orderFromFeedItem(dynamic raw) {
+  /// Обратное преобразование [PaymentMethod] → строка для БД.
+  /// При расширении enum (cashless, card, etc.) — расширь switch.
+  String _paymentMethodToString(PaymentMethod m) {
+    switch (m) {
+      case PaymentMethod.cash:
+        return 'cash';
+    }
+  }
+
+  Order? _orderFromFeedItem(dynamic raw, PocketBase pb) {
     if (raw is! Map) return null;
     final m = raw.cast<String, dynamic>();
     try {
       final lat = (m['lat'] as num?)?.toDouble() ?? 0;
       final lng = (m['lng'] as num?)?.toDouble() ?? 0;
+      final id = m['id'] as String;
+      // Бэк-роут `/api/orders/feed` возвращает массив имён файлов в поле
+      // `photos`, но без collectionId/collectionName — `pb.files.getUrl`
+      // ожидает RecordModel. Cинтезируем минимальный RecordModel из id и
+      // имени коллекции, чтобы SDK сам собрал URL через canonical путь.
+      // Если `photos` помечено protected: true — pb.files.getUrl добавит
+      // token-параметр, наш ручной шаблон сломался бы.
+      final photoNames = (m['photos'] as List?)?.cast<String>() ?? const [];
+      final fakeRecord = RecordModel({
+        'id': id,
+        'collectionId': 'orders',
+        'collectionName': 'orders',
+      });
+      final photoUrls = photoNames
+          .map((name) => pb.files.getUrl(fakeRecord, name).toString())
+          .toList(growable: false);
+      // Поля customer/executor/payment_method опциональны в ответе
+      // `/api/orders/feed` (зависит от версии бэка). Если бэк их прокинул —
+      // используем; иначе остаётся дефолт. Заказчику/исполнителю обычно
+      // достаточно полей карточки в ленте; полная запись подтянется через
+      // `OrdersRepository.get()` при открытии деталей.
+      final customerIdRaw = m['customer']?.toString();
+      final executorIdRaw = m['executor']?.toString();
+      final paymentRaw = m['payment_method']?.toString();
       return Order(
-        id: m['id'] as String,
-        customerId: '', // в фид-ответе не возвращаем
+        id: id,
+        customerId: (customerIdRaw == null || customerIdRaw.isEmpty)
+            ? ''
+            : customerIdRaw,
         categoryId: m['category']?.toString() ?? '',
         title: m['title']?.toString() ?? '',
         description: '',
         address: m['address']?.toString() ?? '',
         location: LatLng(lat, lng),
-        priceRub: ((m['price_kopecks'] as num?)?.toInt() ?? 0) ~/ 100,
+        // Округление до рубля идентично `order_mapper.dart` для полной
+        // записи — иначе цены в ленте и деталях заказа могли бы
+        // расходиться на 1 рубль при kopecks не кратном 100.
+        priceRub:
+            (((m['price_kopecks'] as num?)?.toDouble() ?? 0) / 100).round(),
         status: OrderStatus.open,
         createdAt:
             DateTime.tryParse(m['created']?.toString() ?? '') ?? DateTime.now(),
@@ -261,7 +335,13 @@ class OrdersRepository {
             ? null
             : DateTime.tryParse(m['scheduled_at'].toString()),
         asap: m['asap'] == true,
-        photoPaths: (m['photos'] as List?)?.cast<String>() ?? const [],
+        executorId: (executorIdRaw == null || executorIdRaw.isEmpty)
+            ? null
+            : executorIdRaw,
+        paymentMethod: paymentRaw == 'cash'
+            ? PaymentMethod.cash
+            : PaymentMethod.cash,
+        photoPaths: photoUrls,
       );
     } catch (_) {
       return null;
@@ -287,12 +367,19 @@ final myExecutorOrdersProvider = FutureProvider<List<Order>>((ref) async {
 
 /// Лента заказов для текущего города/радиуса. Используется feed/search.
 /// На моках возвращает открытые заказы из `state.orders`.
+///
+/// ВАЖНО: используем `select`, чтобы провайдер пересоздавался ТОЛЬКО при
+/// смене города или радиуса. Иначе любая мутация AppState (createOrder,
+/// addReview, setRole, executorActive, …) триггерила бы новый HTTP-запрос
+/// в `/api/orders/feed` — HTTP-флуд и дёрганая лента.
 final feedOrdersProvider = FutureProvider<List<Order>>((ref) async {
-  final state = ref.watch(appControllerProvider);
-  final city = state.selectedCity;
+  final city =
+      ref.watch(appControllerProvider.select((s) => s.selectedCity));
+  final radiusKm =
+      ref.watch(appControllerProvider.select((s) => s.searchRadiusKm));
   return ref.read(ordersRepositoryProvider).feed(
         lat: city.center.latitude,
         lng: city.center.longitude,
-        radiusKm: state.searchRadiusKm,
+        radiusKm: radiusKm,
       );
 });

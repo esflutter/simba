@@ -17,18 +17,19 @@ class ReviewsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Берём отзывы из репозитория (live или mock-fallback) для текущего юзера.
-    // Если пользователь не загружен — пустой список.
+    // Пустой массив (data:[]) — валидный ответ для нового юзера: НЕ подменяем
+    // его моком, иначе пользователь увидит чужие demo-отзывы.
+    // На loading/error — fallback на локальный стейт.
     final me = ref.watch(appControllerProvider.select((s) => s.user));
     final myId = me?.id ?? 'me';
-    final mockFallback = ref
-        .watch(appControllerProvider)
-        .reviews
-        .where((r) => r.toUserId == myId || r.toUserId == 'me')
-        .toList();
     final asyncReviews = ref.watch(reviewsForUserProvider(myId));
     final reviews = asyncReviews.maybeWhen(
-      data: (list) => list.isEmpty ? mockFallback : list,
-      orElse: () => mockFallback,
+      data: (list) => list,
+      orElse: () => ref
+          .watch(appControllerProvider)
+          .reviews
+          .where((r) => r.toUserId == myId || r.toUserId == 'me')
+          .toList(),
     );
     final ratingDistribution = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
     for (final r in reviews) {

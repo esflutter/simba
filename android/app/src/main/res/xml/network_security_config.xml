@@ -1,15 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- В dev допускаем cleartext HTTP к локальному PocketBase (10.0.2.2 для
-     Android-эмулятора, 127.0.0.1 для unit-тестов, и любой IP в локальной
-     сети для тестов на физическом устройстве в той же Wi-Fi).
-     В проде используется HTTPS — этот файл влияет только на исключения. -->
+<!--
+  Cleartext-исключения для prod-сборки.
+
+  Разрешаем ТОЛЬКО локальные адреса разработчика:
+    - 10.0.2.2  — Android-эмулятор → host machine
+    - 127.0.0.1 / localhost — unit-тесты и iOS-симулятор
+
+  CIDR-диапазоны LAN (10.0.0.0/8, 192.168.0.0/16) удалены: для prod APK
+  это слишком широкое разрешение и потенциальный вектор атаки (MITM в
+  публичной Wi-Fi, downgrade-атаки). Если разработчику нужно тестировать
+  на физическом устройстве с локальным PocketBase — это должно делаться
+  через отдельный debug-flavor или режим adb reverse, а не релизный APK.
+
+  В проде всё ходит по HTTPS, этот файл влияет только на исключения.
+-->
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">10.0.2.2</domain>
         <domain includeSubdomains="true">127.0.0.1</domain>
         <domain includeSubdomains="true">localhost</domain>
-        <!-- Локальные сети для физических устройств в Wi-Fi -->
-        <domain includeSubdomains="true">192.168.0.0/16</domain>
-        <domain includeSubdomains="true">10.0.0.0/8</domain>
     </domain-config>
 </network-security-config>

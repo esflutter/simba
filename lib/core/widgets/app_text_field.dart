@@ -72,7 +72,6 @@ class _AppTextFieldState extends State<AppTextField> {
   @override
   Widget build(BuildContext context) {
     final hasFocus = _focus.hasFocus;
-    const showFloating = true;
     final labelColor = hasFocus ? AppColors.primary : const Color(0x99000000);
 
     return GestureDetector(
@@ -95,18 +94,16 @@ class _AppTextFieldState extends State<AppTextField> {
             child: Stack(
               children: [
                 AnimatedAlign(
-                  alignment: showFloating ? Alignment.topLeft : Alignment.centerLeft,
+                  alignment: Alignment.topLeft,
                   duration: const Duration(milliseconds: 150),
                   child: AnimatedDefaultTextStyle(
                     duration: const Duration(milliseconds: 150),
-                    style: showFloating
-                        ? AppText.caption(color: labelColor)
-                        : AppText.bodyLarge(color: labelColor),
+                    style: AppText.caption(color: labelColor),
                     child: Text(widget.label),
                   ),
                 ),
                 Padding(
-                  padding: EdgeInsets.only(top: showFloating ? 18.h : 0),
+                  padding: EdgeInsets.only(top: 18.h),
                   child: TextField(
                     controller: _ctrl,
                     focusNode: _focus,

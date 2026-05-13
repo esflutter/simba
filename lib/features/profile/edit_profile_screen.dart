@@ -4,12 +4,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_text_field.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
+import '../../data/remote/pocketbase_client.dart';
 
 class EditProfileScreen extends ConsumerStatefulWidget {
   const EditProfileScreen({super.key});
@@ -23,6 +26,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   String? _photoPath;
   bool _hasTools = false;
   bool _hasTransport = false;
+  bool _isSaving = false;
 
   @override
   void initState() {
@@ -77,14 +81,55 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     return nameChanged || photoChanged || toolsChanged || transportChanged;
   }
 
-  void _save() {
-    ref.read(appControllerProvider.notifier).completeProfile(
-          name: _name.text,
-          photoPath: _photoPath,
-          hasTools: _hasTools,
-          hasTransport: _hasTransport,
-        );
-    context.pop();
+  Future<void> _save() async {
+    if (_isSaving) return;
+    setState(() => _isSaving = true);
+    try {
+      // Если бэкенд подключён и юзер залогинен — пушим изменения в PB.
+      // Если фото — локальный путь (не URL), грузим как multipart-файл.
+      // На моках просто обновляем appController (как было раньше).
+      final pb = ref.read(pocketbaseProvider);
+      if (pb != null && pb.authStore.isValid) {
+        final body = <String, dynamic>{
+          'name': _name.text.trim(),
+        };
+        final files = <http.MultipartFile>[];
+        final photo = _photoPath;
+        if (photo != null && !photo.startsWith('http')) {
+          // Локальный файл из image_picker — отправляем байты как
+          // multipart. PocketBase поле `users.photo` уже сконфигурено
+          // как file (см. миграция 1700000000_init_users).
+          final bytes = await File(photo).readAsBytes();
+          files.add(http.MultipartFile.fromBytes(
+            'photo',
+            bytes,
+            filename: 'avatar.jpg',
+          ));
+        }
+        await pb.collection('users').update(
+              pb.authStore.record!.id,
+              body: body,
+              files: files,
+            );
+        // has_tools / has_transport — в коллекции users_private (отдельная
+        // приватная таблица). Обновление через REST требует доп. правил —
+        // оставляем как локальный UI-flag, чтобы не плодить запросы;
+        // полноценная синхронизация — отдельной задачей (TODO).
+      }
+      ref.read(appControllerProvider.notifier).completeProfile(
+            name: _name.text,
+            photoPath: _photoPath,
+            hasTools: _hasTools,
+            hasTransport: _hasTransport,
+          );
+      if (!mounted) return;
+      context.pop();
+    } catch (_) {
+      if (!mounted) return;
+      AppToast.show(context, 'Не удалось сохранить');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
   @override
@@ -151,10 +196,25 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                               ),
                               clipBehavior: Clip.antiAlias,
                               child: _photoPath != null
-                                  ? Image.file(
-                                      File(_photoPath!),
-                                      fit: BoxFit.cover,
-                                    )
+                                  ? (_photoPath!.startsWith('http')
+                                      ? Image.network(
+                                          _photoPath!,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, _, _) =>
+                                              Image.asset(
+                                            'assets/images/avatar_default.webp',
+                                            fit: BoxFit.contain,
+                                          ),
+                                        )
+                                      : Image.file(
+                                          File(_photoPath!),
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (_, _, _) =>
+                                              Image.asset(
+                                            'assets/images/avatar_default.webp',
+                                            fit: BoxFit.contain,
+                                          ),
+                                        ))
                                   : Image.asset(
                                       'assets/images/avatar_default.webp',
                                       fit: BoxFit.contain,
@@ -203,7 +263,11 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
             top: false,
             child: Padding(
               padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.h),
-              child: _SaveButton(enabled: _canSave, onTap: _save),
+              child: _SaveButton(
+                enabled: _canSave && !_isSaving,
+                isLoading: _isSaving,
+                onTap: _save,
+              ),
             ),
           ),
         ],
@@ -375,9 +439,14 @@ class _AvatarSheetItem extends StatelessWidget {
 }
 
 class _SaveButton extends StatelessWidget {
-  const _SaveButton({required this.enabled, required this.onTap});
+  const _SaveButton({
+    required this.enabled,
+    required this.onTap,
+    this.isLoading = false,
+  });
   final bool enabled;
   final VoidCallback onTap;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
@@ -391,16 +460,26 @@ class _SaveButton extends StatelessWidget {
           width: double.infinity,
           height: 50.h,
           child: Center(
-            child: Text(
-              'Сохранить',
-              style: TextStyle(
-                color: enabled ? Colors.white : const Color(0x4C3C3C43),
-                fontSize: 17.sp,
-                fontWeight: enabled ? FontWeight.w600 : FontWeight.w400,
-                height: 1.29,
-                letterSpacing: -0.43,
-              ),
-            ),
+            child: isLoading
+                ? SizedBox(
+                    width: 22.r,
+                    height: 22.r,
+                    child: const CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2.5,
+                    ),
+                  )
+                : Text(
+                    'Сохранить',
+                    style: TextStyle(
+                      color: enabled ? Colors.white : const Color(0x4C3C3C43),
+                      fontSize: 17.sp,
+                      fontWeight:
+                          enabled ? FontWeight.w600 : FontWeight.w400,
+                      height: 1.29,
+                      letterSpacing: -0.43,
+                    ),
+                  ),
           ),
         ),
       ),

@@ -29,14 +29,22 @@ class MyOrdersScreen extends ConsumerWidget {
           data: (xs) => xs,
           orElse: () => null,
         );
+    // Реальный id текущего пользователя для live-веток. На моках seed-юзер
+    // имеет id 'me' (см. MockData.demoCurrentUser), поэтому fallback на 'me'.
+    final myId = state.user?.id ?? 'me';
     final myOrders = remoteOrders ?? state.myOrders;
+    // Включаем `awaitingPayment` в customer-секцию: заказ ушёл в
+    // ожидание подтверждения оплаты от исполнителя, но он всё ещё
+    // активный для заказчика — должен висеть в «Мои заказы».
     final mine = myOrders.where((o) =>
         !o.isExpiredOpen &&
-        (o.status == OrderStatus.open || o.status == OrderStatus.accepted));
+        (o.status == OrderStatus.open ||
+            o.status == OrderStatus.accepted ||
+            o.status == OrderStatus.awaitingPayment));
     final asExecutor = remoteExecutor ??
         state.orders
             .where((o) =>
-                o.executorId == 'me' &&
+                o.executorId == myId &&
                 (o.status == OrderStatus.accepted ||
                     o.status == OrderStatus.awaitingPayment))
             .toList();

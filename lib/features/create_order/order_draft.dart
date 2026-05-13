@@ -21,6 +21,11 @@ class OrderDraft {
     this.photoPaths = const [],
     this.forOtherPhone,
     this.paymentMethod,
+    this.addressFiasId,
+    this.addressKladrId,
+    this.cityFiasId,
+    this.postalCode,
+    this.qcGeo,
   });
 
   final String? categoryId;
@@ -35,6 +40,26 @@ class OrderDraft {
   final String? forOtherPhone;
   final String? paymentMethod;
 
+  // ── Структурные поля адреса (DaData) ────────────────────────────────
+  // Адрес максимум до дома — квартира/подъезд/этаж/домофон в SimbA НЕ
+  // хранятся: заказчик уточняет место встречи по звонку, а лишняя PII
+  // только увеличивает поверхность утечки (152-ФЗ).
+  /// FIAS-идентификатор выбранного адреса (на уровне fias_level подсказки).
+  final String? addressFiasId;
+
+  /// КЛАДР-идентификатор выбранного адреса.
+  final String? addressKladrId;
+
+  /// FIAS города (для последующих follow-up DaData-запросов).
+  final String? cityFiasId;
+
+  /// Почтовый индекс.
+  final String? postalCode;
+
+  /// Качество геокодинга DaData (0..5). 0 — точные координаты дома,
+  /// 5 — координат нет. Бэкенд решает, дозволять ли заказ при низком qc_geo.
+  final int? qcGeo;
+
   Map<String, dynamic> toJson() => {
         if (categoryId != null) 'categoryId': categoryId,
         'title': title,
@@ -48,6 +73,11 @@ class OrderDraft {
         'photoPaths': photoPaths,
         if (forOtherPhone != null) 'forOtherPhone': forOtherPhone,
         if (paymentMethod != null) 'paymentMethod': paymentMethod,
+        if (addressFiasId != null) 'addressFiasId': addressFiasId,
+        if (addressKladrId != null) 'addressKladrId': addressKladrId,
+        if (cityFiasId != null) 'cityFiasId': cityFiasId,
+        if (postalCode != null) 'postalCode': postalCode,
+        if (qcGeo != null) 'qcGeo': qcGeo,
       };
 
   static OrderDraft fromJson(Map<String, dynamic> j) {
@@ -70,6 +100,11 @@ class OrderDraft {
       photoPaths: photos,
       forOtherPhone: j['forOtherPhone'] as String?,
       paymentMethod: j['paymentMethod'] as String?,
+      addressFiasId: j['addressFiasId'] as String?,
+      addressKladrId: j['addressKladrId'] as String?,
+      cityFiasId: j['cityFiasId'] as String?,
+      postalCode: j['postalCode'] as String?,
+      qcGeo: (j['qcGeo'] as num?)?.toInt(),
     );
   }
 
@@ -84,14 +119,20 @@ class OrderDraft {
       asap == true &&
       photoPaths.isEmpty &&
       forOtherPhone == null &&
-      paymentMethod == null;
+      paymentMethod == null &&
+      addressFiasId == null &&
+      addressKladrId == null &&
+      cityFiasId == null &&
+      postalCode == null &&
+      qcGeo == null;
 
   bool get isReady =>
       categoryId != null &&
       title.trim().isNotEmpty &&
       address.trim().isNotEmpty &&
       location != null &&
-      priceRub >= 100;
+      priceRub >= 100 &&
+      priceRub <= 100000;
 
   OrderDraft copyWith({
     String? categoryId,
@@ -105,8 +146,14 @@ class OrderDraft {
     List<String>? photoPaths,
     String? forOtherPhone,
     String? paymentMethod,
+    String? addressFiasId,
+    String? addressKladrId,
+    String? cityFiasId,
+    String? postalCode,
+    int? qcGeo,
     bool clearScheduled = false,
     bool clearForOther = false,
+    bool clearAddressMeta = false,
   }) =>
       OrderDraft(
         categoryId: categoryId ?? this.categoryId,
@@ -120,6 +167,13 @@ class OrderDraft {
         photoPaths: photoPaths ?? this.photoPaths,
         forOtherPhone: clearForOther ? null : forOtherPhone ?? this.forOtherPhone,
         paymentMethod: paymentMethod ?? this.paymentMethod,
+        addressFiasId:
+            clearAddressMeta ? null : addressFiasId ?? this.addressFiasId,
+        addressKladrId:
+            clearAddressMeta ? null : addressKladrId ?? this.addressKladrId,
+        cityFiasId: clearAddressMeta ? null : cityFiasId ?? this.cityFiasId,
+        postalCode: clearAddressMeta ? null : postalCode ?? this.postalCode,
+        qcGeo: clearAddressMeta ? null : qcGeo ?? this.qcGeo,
       );
 }
 
@@ -166,8 +220,14 @@ class OrderDraftController extends Notifier<OrderDraft> {
     List<String>? photoPaths,
     String? forOtherPhone,
     String? paymentMethod,
+    String? addressFiasId,
+    String? addressKladrId,
+    String? cityFiasId,
+    String? postalCode,
+    int? qcGeo,
     bool clearScheduled = false,
     bool clearForOther = false,
+    bool clearAddressMeta = false,
   }) {
     state = state.copyWith(
       categoryId: categoryId,
@@ -181,8 +241,14 @@ class OrderDraftController extends Notifier<OrderDraft> {
       photoPaths: photoPaths,
       forOtherPhone: forOtherPhone,
       paymentMethod: paymentMethod,
+      addressFiasId: addressFiasId,
+      addressKladrId: addressKladrId,
+      cityFiasId: cityFiasId,
+      postalCode: postalCode,
+      qcGeo: qcGeo,
       clearScheduled: clearScheduled,
       clearForOther: clearForOther,
+      clearAddressMeta: clearAddressMeta,
     );
     _persist(state);
   }

@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +9,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/auth_repository.dart';
 
 class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
@@ -23,7 +22,29 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    Timer(const Duration(milliseconds: 1600), _go);
+    _bootstrap();
+  }
+
+  /// Бутстрап с двумя гарантиями:
+  ///   1) Splash показывается минимум 1.2 с (UX: пользователь успевает
+  ///      увидеть бренд, не получает «вспышку»).
+  ///   2) Если в authStore есть сохранённый токен — дожидаемся authRefresh
+  ///      (≤3 с) ДО навигации, иначе при холодном старте с валидным токеном
+  ///      пользователь видел бы экран онбординга на доли секунды.
+  Future<void> _bootstrap() async {
+    final minSplash = Future<void>.delayed(const Duration(milliseconds: 1200));
+    try {
+      await ref
+          .read(authRepositoryProvider)
+          .tryRefreshAuth()
+          .timeout(const Duration(seconds: 3), onTimeout: () => false);
+    } catch (_) {
+      // Любая ошибка refresh не блокирует переход — пойдём по
+      // обычному ветвлению onboarding (state.user может быть null).
+    }
+    await minSplash;
+    if (!mounted) return;
+    _go();
   }
 
   void _go() {

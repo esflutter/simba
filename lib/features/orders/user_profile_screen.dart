@@ -9,7 +9,6 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
-import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_toast.dart';
@@ -18,6 +17,9 @@ import '../../data/models/models.dart';
 import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
 import '../../data/remote/users_repository.dart';
+import '../reviews/reviews_providers.dart' show reviewsForUserProvider;
+import 'order_details_screen.dart' show orderByIdProvider;
+import 'responses_screen.dart' show pendingExecutorIdsProvider;
 
 class UserProfileScreen extends ConsumerWidget {
   const UserProfileScreen({super.key, required this.userId, this.orderId});
@@ -28,21 +30,23 @@ class UserProfileScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(appControllerProvider);
     final user = userById(userId);
-    final allReviews = state.reviews;
-    final reviews = allReviews
-        .where((r) => r.toUserId == userId || r.toUserId == 'me')
-        .toList();
+    // Отзывы берём из репозитория (live → PB, иначе мок-fallback внутри
+    // провайдера). Раньше код читал `state.reviews` напрямую — в live этот
+    // список всегда пуст, поэтому отзывы на профиле не отображались.
+    final asyncReviews = ref.watch(reviewsForUserProvider(userId));
+    final reviews = asyncReviews.maybeWhen(
+      data: (xs) => xs,
+      orElse: () =>
+          state.reviews.where((r) => r.toUserId == userId).toList(),
+    );
     final order = orderId == null
         ? null
         : [...state.myOrders, ...state.orders]
             .cast<Order?>()
             .firstWhere((o) => o?.id == orderId, orElse: () => null);
-    final isAcceptedExecutor =
-        order != null && order.executorId == userId;
     final isPendingCandidate = order != null &&
         order.status == OrderStatus.open &&
         order.responses.contains(userId);
-    final accepted = isAcceptedExecutor;
     final canContact = order != null &&
         (order.status == OrderStatus.accepted ||
             order.status == OrderStatus.awaitingPayment) &&
@@ -52,10 +56,6 @@ class UserProfileScreen extends ConsumerWidget {
     for (final r in reviews) {
       ratingDistribution[r.rating] = (ratingDistribution[r.rating] ?? 0) + 1;
     }
-    final maxCount = ratingDistribution.values.fold<int>(
-      0,
-      (p, c) => c > p ? c : p,
-    );
     final avgRating = reviews.isEmpty
         ? user.rating
         : reviews.map((r) => r.rating).reduce((a, b) => a + b) / reviews.length;
@@ -103,10 +103,24 @@ class UserProfileScreen extends ConsumerWidget {
                           clipBehavior: Clip.antiAlias,
                           child: user.photoPath != null
                               ? (user.photoPath!.startsWith('http')
-                                  ? Image.network(user.photoPath!,
-                                      fit: BoxFit.cover)
-                                  : Image.file(File(user.photoPath!),
-                                      fit: BoxFit.cover))
+                                  ? Image.network(
+                                      user.photoPath!,
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, _, _) => Icon(
+                                        IconsaxPlusLinear.user,
+                                        color: AppColors.primary,
+                                        size: 32.r,
+                                      ),
+                                    )
+                                  : Image.file(
+                                      File(user.photoPath!),
+                                      fit: BoxFit.cover,
+                                      errorBuilder: (_, _, _) => Icon(
+                                        IconsaxPlusLinear.user,
+                                        color: AppColors.primary,
+                                        size: 32.r,
+                                      ),
+                                    ))
                               : Icon(
                                   IconsaxPlusLinear.user,
                                   color: AppColors.primary,
@@ -291,6 +305,9 @@ class UserProfileScreen extends ConsumerWidget {
                       .accept(orderId!, userId);
                   if (!context.mounted) return;
                   ref.invalidate(myOrdersStreamProvider);
+                  ref.invalidate(feedOrdersProvider);
+                  ref.invalidate(pendingExecutorIdsProvider(orderId!));
+                  ref.invalidate(orderByIdProvider(orderId!));
                   AppToast.show(context, 'Исполнитель принят');
                   // После принятия остальные отклики автоматически отклонены —
                   // экран откликов под нами теперь пустой. Убираем его из
@@ -315,6 +332,9 @@ class UserProfileScreen extends ConsumerWidget {
                       .decline(orderId!, userId);
                   if (!context.mounted) return;
                   ref.invalidate(myOrdersStreamProvider);
+                  ref.invalidate(feedOrdersProvider);
+                  ref.invalidate(pendingExecutorIdsProvider(orderId!));
+                  ref.invalidate(orderByIdProvider(orderId!));
                   AppToast.show(context, 'Исполнитель отклонён');
                   context.pop();
                   if (wasLast) context.pop();
@@ -347,10 +367,27 @@ class UserProfileScreen extends ConsumerWidget {
   }
 }
 
-class _CandidateActionBar extends StatelessWidget {
+class _CandidateActionBar extends StatefulWidget {
   const _CandidateActionBar({required this.onAccept, required this.onDecline});
-  final VoidCallback onAccept;
-  final VoidCallback onDecline;
+  final Future<void> Function() onAccept;
+  final Future<void> Function() onDecline;
+
+  @override
+  State<_CandidateActionBar> createState() => _CandidateActionBarState();
+}
+
+class _CandidateActionBarState extends State<_CandidateActionBar> {
+  bool _busy = false;
+
+  Future<void> _run(Future<void> Function() action) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await action();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -380,14 +417,14 @@ class _CandidateActionBar extends StatelessWidget {
                 label: 'Принять',
                 background: AppColors.primary,
                 textColor: Colors.white,
-                onTap: onAccept,
+                onTap: _busy ? null : () => _run(widget.onAccept),
               ),
               SizedBox(height: 8.h),
               _ActionBarButton(
                 label: 'Отклонить',
                 background: AppColors.surfaceVariant,
                 textColor: AppColors.error,
-                onTap: onDecline,
+                onTap: _busy ? null : () => _run(widget.onDecline),
               ),
             ],
           ),
@@ -407,12 +444,13 @@ class _ActionBarButton extends StatelessWidget {
   final String label;
   final Color background;
   final Color textColor;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final disabled = onTap == null;
     return Material(
-      color: background,
+      color: disabled ? AppColors.surfaceVariant : background,
       borderRadius: BorderRadius.circular(16.r),
       child: InkWell(
         borderRadius: BorderRadius.circular(16.r),
@@ -424,7 +462,7 @@ class _ActionBarButton extends StatelessWidget {
             child: Text(
               label,
               style: TextStyle(
-                color: textColor,
+                color: disabled ? AppColors.textTertiary : textColor,
                 fontSize: 17.sp,
                 fontWeight: FontWeight.w600,
                 height: 1.29,
@@ -739,9 +777,24 @@ class _ReviewItem extends StatelessWidget {
               clipBehavior: Clip.antiAlias,
               child: author.photoPath != null
                   ? (author.photoPath!.startsWith('http')
-                      ? Image.network(author.photoPath!, fit: BoxFit.cover)
-                      : Image.file(File(author.photoPath!),
-                          fit: BoxFit.cover))
+                      ? Image.network(
+                          author.photoPath!,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Icon(
+                            IconsaxPlusLinear.user,
+                            color: AppColors.primary,
+                            size: 20.r,
+                          ),
+                        )
+                      : Image.file(
+                          File(author.photoPath!),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, _, _) => Icon(
+                            IconsaxPlusLinear.user,
+                            color: AppColors.primary,
+                            size: 20.r,
+                          ),
+                        ))
                   : Icon(
                       IconsaxPlusLinear.user,
                       color: AppColors.primary,

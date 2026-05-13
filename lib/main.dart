@@ -37,7 +37,12 @@ Future<void> main() async {
   }
   // PocketBase создаётся ОДИН раз здесь, чтобы привязать AsyncAuthStore к
   // тем же SharedPreferences и persist'ить токен между запусками.
+  //
+  // NB: authRefresh при бутстрапе НЕ дёргаем здесь — это делает
+  // SplashScreen через authRepository.tryRefreshAuth (там же показывается
+  // лоадер и обрабатывается результат). Иначе получали дубль запроса.
   final pb = buildPocketBase(prefs);
+
   runApp(
     ProviderScope(
       overrides: [
@@ -55,7 +60,11 @@ class SimbaApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return ScreenUtilInit(
-      designSize: const Size(375, 812),
+      // 360×800 — медианная logical-size современного Android (Pixel 6+/9
+      // ≈ 360×808, Galaxy S22 ≈ 360×780). На iPhone 13 mini (375×812)
+      // разница 4% — допустимая. См. memory `feedback_adaptive_layout`:
+      // целевой эмулятор Pixel 9, вёрстка адаптивная.
+      designSize: const Size(360, 800),
       minTextAdapt: true,
       splitScreenMode: false,
       builder: (context, child) {

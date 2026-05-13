@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,9 +13,35 @@ import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
+import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
+import 'order_details_screen.dart' show orderByIdProvider;
+
+/// Future-провайдер: список id исполнителей с pending-откликом на заказ.
+/// На моках берётся из `state.myOrders[i].responses`, на live — из коллекции
+/// `order_responses` через PB-репозиторий.
+final pendingExecutorIdsProvider =
+    FutureProvider.autoDispose.family<List<String>, String>((ref, orderId) async {
+  return ref.read(orderResponsesRepositoryProvider).pendingExecutorIds(orderId);
+});
+
+/// Возвращает AppUser для отображения карточки отклика.
+/// Для seed-id из MockData используем готового мок-юзера (с фото/рейтингом).
+/// Для PB-id формируем placeholder с укороченным id вместо «Иван Иванов»,
+/// чтобы исполнители визуально различались в списке откликов.
+AppUser _userForResponder(String id) {
+  final isKnownMock = id == 'me' ||
+      MockData.otherUsers.any((u) => u.id == id);
+  if (isKnownMock) return userById(id);
+  final shortId = id.substring(0, math.min(6, id.length));
+  return AppUser(
+    id: id,
+    name: 'Исполнитель $shortId',
+    phone: '',
+  );
+}
 
 class ResponsesScreen extends ConsumerWidget {
   const ResponsesScreen({super.key, required this.orderId});
@@ -22,12 +49,7 @@ class ResponsesScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(appControllerProvider);
-    final order = state.myOrders.firstWhere(
-      (o) => o.id == orderId,
-      orElse: () => state.myOrders.first,
-    );
-    final users = order.responses.map(userById).toList();
+    final asyncIds = ref.watch(pendingExecutorIdsProvider(orderId));
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -43,67 +65,100 @@ class ResponsesScreen extends ConsumerWidget {
               ),
             ),
             Expanded(
-              child: users.isEmpty
-                  ? Center(
+              child: asyncIds.when(
+                data: (executorIds) {
+                  if (executorIds.isEmpty) {
+                    return Center(
                       child: Text(
                         'Откликов пока нет',
                         style: AppText.body(color: AppColors.textSecondary),
                       ),
-                    )
-                  : ListView.separated(
-                      padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
-                      itemCount: users.length,
-                      separatorBuilder: (_, _) => SizedBox(height: 16.h),
-                      itemBuilder: (_, i) {
-                        final u = users[i];
-                        return _ResponseCard(
-                          user: u,
-                          onTap: () =>
-                              context.push('/order/$orderId/user/${u.id}'),
-                          onDecline: () async {
-                            final isLast = users.length == 1;
-                            try {
-                              await ref
-                                  .read(orderResponsesRepositoryProvider)
-                                  .decline(orderId, u.id);
-                              if (!context.mounted) return;
-                              ref.invalidate(myOrdersStreamProvider);
-                              AppToast.show(context, 'Исполнитель отклонён');
-                              if (isLast) context.pop();
-                            } catch (_) {
-                              if (!context.mounted) return;
-                              AppToast.show(
-                                context,
-                                'Ошибка. Попробуйте позже',
-                              );
-                            }
-                          },
-                          onAccept: () async {
-                            try {
-                              await ref
-                                  .read(orderResponsesRepositoryProvider)
-                                  .accept(orderId, u.id);
-                              if (!context.mounted) return;
-                              ref.invalidate(myOrdersStreamProvider);
-                              AppToast.show(context, 'Исполнитель принят');
-                              // pushReplacement, а не go: go сбрасывает стек
-                              // и /home/orders уходит — потом back из заказа
-                              // не работает. Заменяем responses на профиль,
-                              // сохраняя [home, order, profile] в стеке.
-                              context.pushReplacement(
-                                '/order/$orderId/user/${u.id}',
-                              );
-                            } catch (_) {
-                              if (!context.mounted) return;
-                              AppToast.show(
-                                context,
-                                'Ошибка. Попробуйте позже',
-                              );
-                            }
-                          },
-                        );
-                      },
-                    ),
+                    );
+                  }
+                  // userById даёт мок-данные только для seed-id из MockData;
+                  // для PB-id оно подставило бы demoCurrentUser (Иван Иванов),
+                  // и все исполнители выглядели бы одинаково. Делаем явный
+                  // placeholder по id-шорту. TODO(users-repo): когда появится
+                  // usersRepository.getById — перейти на async с подгрузкой
+                  // реального имени/фото.
+                  final users = executorIds.map(_userForResponder).toList(
+                        growable: false,
+                      );
+                  return ListView.separated(
+                    padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
+                    itemCount: users.length,
+                    separatorBuilder: (_, _) => SizedBox(height: 16.h),
+                    itemBuilder: (_, i) {
+                      final u = users[i];
+                      return _ResponseCard(
+                        user: u,
+                        onTap: () =>
+                            context.push('/order/$orderId/user/${u.id}'),
+                        onDecline: () async {
+                          final isLast = users.length == 1;
+                          try {
+                            await ref
+                                .read(orderResponsesRepositoryProvider)
+                                .decline(orderId, u.id);
+                            if (!context.mounted) return;
+                            ref.invalidate(myOrdersStreamProvider);
+                            ref.invalidate(feedOrdersProvider);
+                            ref.invalidate(
+                                pendingExecutorIdsProvider(orderId));
+                            ref.invalidate(orderByIdProvider(orderId));
+                            AppToast.show(context, 'Исполнитель отклонён');
+                            if (isLast) context.pop();
+                          } catch (_) {
+                            if (!context.mounted) return;
+                            AppToast.show(
+                              context,
+                              'Ошибка. Попробуйте позже',
+                            );
+                          }
+                        },
+                        onAccept: () async {
+                          try {
+                            await ref
+                                .read(orderResponsesRepositoryProvider)
+                                .accept(orderId, u.id);
+                            if (!context.mounted) return;
+                            ref.invalidate(myOrdersStreamProvider);
+                            // После accept заказ становится "не open"
+                            // → должен исчезнуть из фида у других исполнителей.
+                            ref.invalidate(feedOrdersProvider);
+                            ref.invalidate(
+                                pendingExecutorIdsProvider(orderId));
+                            ref.invalidate(orderByIdProvider(orderId));
+                            AppToast.show(context, 'Исполнитель принят');
+                            // pushReplacement, а не go: go сбрасывает стек
+                            // и /home/orders уходит — потом back из заказа
+                            // не работает. Заменяем responses на профиль,
+                            // сохраняя [home, order, profile] в стеке.
+                            context.pushReplacement(
+                              '/order/$orderId/user/${u.id}',
+                            );
+                          } catch (_) {
+                            if (!context.mounted) return;
+                            AppToast.show(
+                              context,
+                              'Ошибка. Попробуйте позже',
+                            );
+                          }
+                        },
+                      );
+                    },
+                  );
+                },
+                loading: () => const Center(
+                  child: CircularProgressIndicator(color: AppColors.primary),
+                ),
+                error: (_, _) => Center(
+                  child: Text(
+                    'Не удалось загрузить отклики',
+                    style: AppText.body(color: AppColors.textSecondary),
+                  ),
+                ),
+              ),
             ),
           ],
         ),
@@ -112,7 +167,7 @@ class ResponsesScreen extends ConsumerWidget {
   }
 }
 
-class _ResponseCard extends StatelessWidget {
+class _ResponseCard extends StatefulWidget {
   const _ResponseCard({
     required this.user,
     required this.onTap,
@@ -122,18 +177,46 @@ class _ResponseCard extends StatelessWidget {
 
   final AppUser user;
   final VoidCallback onTap;
-  final VoidCallback onDecline;
-  final VoidCallback onAccept;
+  final Future<void> Function() onDecline;
+  final Future<void> Function() onAccept;
+
+  @override
+  State<_ResponseCard> createState() => _ResponseCardState();
+}
+
+class _ResponseCardState extends State<_ResponseCard> {
+  bool _busy = false;
+
+  Future<void> _handleAccept() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onAccept();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _handleDecline() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onDecline();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final user = widget.user;
     return AppCard(
       padding: EdgeInsets.zero,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           InkWell(
-            onTap: onTap,
+            onTap: _busy ? null : widget.onTap,
             borderRadius: BorderRadius.only(
               topLeft: Radius.circular(16.r),
               topRight: Radius.circular(16.r),
@@ -152,9 +235,24 @@ class _ResponseCard extends StatelessWidget {
                     clipBehavior: Clip.antiAlias,
                     child: user.photoPath != null
                         ? (user.photoPath!.startsWith('http')
-                            ? Image.network(user.photoPath!, fit: BoxFit.cover)
-                            : Image.file(File(user.photoPath!),
-                                fit: BoxFit.cover))
+                            ? Image.network(
+                                user.photoPath!,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) => Icon(
+                                  IconsaxPlusLinear.user,
+                                  color: AppColors.primary,
+                                  size: 32.r,
+                                ),
+                              )
+                            : Image.file(
+                                File(user.photoPath!),
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, _, _) => Icon(
+                                  IconsaxPlusLinear.user,
+                                  color: AppColors.primary,
+                                  size: 32.r,
+                                ),
+                              ))
                         : Icon(
                             IconsaxPlusLinear.user,
                             color: AppColors.primary,
@@ -225,7 +323,7 @@ class _ResponseCard extends StatelessWidget {
                     label: 'Отклонить',
                     background: AppColors.surfaceVariant,
                     color: AppColors.error,
-                    onTap: onDecline,
+                    onTap: _busy ? null : _handleDecline,
                   ),
                 ),
                 SizedBox(width: 8.w),
@@ -234,7 +332,7 @@ class _ResponseCard extends StatelessWidget {
                     label: 'Принять',
                     background: AppColors.primary,
                     color: const Color(0xFFF5F5F5),
-                    onTap: onAccept,
+                    onTap: _busy ? null : _handleAccept,
                   ),
                 ),
               ],
@@ -257,12 +355,13 @@ class _ResponseAction extends StatelessWidget {
   final String label;
   final Color background;
   final Color color;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    final disabled = onTap == null;
     return Material(
-      color: background,
+      color: disabled ? AppColors.surfaceVariant : background,
       borderRadius: BorderRadius.circular(10.r),
       child: InkWell(
         borderRadius: BorderRadius.circular(10.r),
@@ -274,7 +373,7 @@ class _ResponseAction extends StatelessWidget {
               label,
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: color,
+                color: disabled ? AppColors.textTertiary : color,
                 fontSize: 17.sp,
                 fontWeight: FontWeight.w600,
                 height: 1.29,

@@ -38,6 +38,10 @@ class AppUser {
     this.photoPath,
     this.rating = 0.0,
     this.reviewsCount = 0,
+    this.ratingAsCustomer = 0.0,
+    this.reviewsCountAsCustomer = 0,
+    this.ratingAsExecutor = 0.0,
+    this.reviewsCountAsExecutor = 0,
     this.cityId,
     this.hasTools = false,
     this.hasTransport = false,
@@ -47,11 +51,37 @@ class AppUser {
   final String name;
   final String phone;
   final String? photoPath;
+
+  /// Legacy-поле. В маркетплейсе основная роль — исполнитель, поэтому при
+  /// маппинге из PB сюда кладётся [ratingAsExecutor]. UI, выбирающий рейтинг
+  /// по текущей роли пользователя, должен читать [ratingAsCustomer] /
+  /// [ratingAsExecutor] напрямую.
   final double rating;
+
+  /// Legacy-поле — соответствует [reviewsCountAsExecutor] (см. [rating]).
   final int reviewsCount;
+
+  /// Рейтинг пользователя как заказчика (агрегируется триггерами PB).
+  final double ratingAsCustomer;
+  final int reviewsCountAsCustomer;
+
+  /// Рейтинг пользователя как исполнителя — основной для маркетплейса.
+  final double ratingAsExecutor;
+  final int reviewsCountAsExecutor;
+
   final String? cityId;
   final bool hasTools;
   final bool hasTransport;
+
+  /// Возвращает рейтинг для конкретной роли. Используется на экранах,
+  /// где видна роль контрагента (карточка отклика, профиль).
+  double ratingFor(UserRole role) => role == UserRole.customer
+      ? ratingAsCustomer
+      : ratingAsExecutor;
+
+  int reviewsCountFor(UserRole role) => role == UserRole.customer
+      ? reviewsCountAsCustomer
+      : reviewsCountAsExecutor;
 
   AppUser copyWith({
     String? name,
@@ -59,6 +89,10 @@ class AppUser {
     Object? photoPath = _sentinel,
     double? rating,
     int? reviewsCount,
+    double? ratingAsCustomer,
+    int? reviewsCountAsCustomer,
+    double? ratingAsExecutor,
+    int? reviewsCountAsExecutor,
     String? cityId,
     bool? hasTools,
     bool? hasTransport,
@@ -73,6 +107,12 @@ class AppUser {
           : photoPath as String?,
       rating: rating ?? this.rating,
       reviewsCount: reviewsCount ?? this.reviewsCount,
+      ratingAsCustomer: ratingAsCustomer ?? this.ratingAsCustomer,
+      reviewsCountAsCustomer:
+          reviewsCountAsCustomer ?? this.reviewsCountAsCustomer,
+      ratingAsExecutor: ratingAsExecutor ?? this.ratingAsExecutor,
+      reviewsCountAsExecutor:
+          reviewsCountAsExecutor ?? this.reviewsCountAsExecutor,
       cityId: cityId ?? this.cityId,
       hasTools: hasTools ?? this.hasTools,
       hasTransport: hasTransport ?? this.hasTransport,
@@ -102,6 +142,15 @@ class Order {
     this.responses = const [],
     this.paymentMethod = PaymentMethod.cash,
     this.forOtherPhone,
+    this.customerName,
+    this.customerPhotoUrl,
+    this.executorName,
+    this.executorPhotoUrl,
+    this.categoryName,
+    this.completedAt,
+    this.workDoneAt,
+    this.workConfirmedAt,
+    this.paymentReceivedAt,
   });
 
   final String id;
@@ -122,12 +171,36 @@ class Order {
   final PaymentMethod paymentMethod;
   final String? forOtherPhone;
 
+  /// Поля, материализованные из `record.expand` при чтении из PocketBase.
+  /// На моках всегда null — UI продолжает резолвить имена через локальные
+  /// справочники (userById / MockData.categories).
+  final String? customerName;
+  final String? customerPhotoUrl;
+  final String? executorName;
+  final String? executorPhotoUrl;
+  final String? categoryName;
+
+  /// Дата перевода в status=completed. Источник правды для 30-дневного окна
+  /// отзывов (см. `leave_review_screen`). На моках всегда null — там окно
+  /// считается от scheduledAt / createdAt как best-effort fallback.
+  final DateTime? completedAt;
+
+  /// 3-step FSM-вехи. Все три заполнены ⇒ заказ автоматически переходит в
+  /// completed (см. backend `onRecordUpdate("orders")`).
+  final DateTime? workDoneAt;
+  final DateTime? workConfirmedAt;
+  final DateTime? paymentReceivedAt;
+
   Order copyWith({
     OrderStatus? status,
     String? executorId,
     List<String>? responses,
     DateTime? scheduledAt,
     int? priceRub,
+    DateTime? completedAt,
+    DateTime? workDoneAt,
+    DateTime? workConfirmedAt,
+    DateTime? paymentReceivedAt,
   }) =>
       Order(
         id: id,
@@ -147,6 +220,15 @@ class Order {
         responses: responses ?? this.responses,
         paymentMethod: paymentMethod,
         forOtherPhone: forOtherPhone,
+        customerName: customerName,
+        customerPhotoUrl: customerPhotoUrl,
+        executorName: executorName,
+        executorPhotoUrl: executorPhotoUrl,
+        categoryName: categoryName,
+        completedAt: completedAt ?? this.completedAt,
+        workDoneAt: workDoneAt ?? this.workDoneAt,
+        workConfirmedAt: workConfirmedAt ?? this.workConfirmedAt,
+        paymentReceivedAt: paymentReceivedAt ?? this.paymentReceivedAt,
       );
 }
 

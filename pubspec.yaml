@@ -21,6 +21,16 @@ dependencies:
   flutter_map: ^7.0.2
   latlong2: ^0.9.1
   vector_map_tiles: ^8.0.0
+  # Прямая зависимость нужна для типов `Theme` / `ThemeLayer` —
+  # фильтруем слои стиля positron, чтобы скрыть государственные
+  # границы (см. `_hideAdminBoundaries` в openfreemap_view.dart).
+  # Транзитивно уже подтянута через vector_map_tiles, но без явного
+  # объявления Dart-анализатор запрещает импорт.
+  vector_tile_renderer: ^5.2.1
+  # Путь к application cache directory — используется для дискового
+  # кэша тайлов OpenFreeMap (vector_map_tiles), чтобы карта не качала
+  # одни и те же тайлы при каждом открытии.
+  path_provider: ^2.1.4
 
   image_picker: ^1.2.2
   pin_code_fields: ^9.3.0

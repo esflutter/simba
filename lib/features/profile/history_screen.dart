@@ -32,44 +32,45 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(appControllerProvider);
-    // Берём «мои заказы» из репозитория (live) с fallback на мок-стейт.
-    // Репозиторий уже возвращает заказы и как заказчика, и как исполнителя
-    // (см. `OrdersRepository.myOrders()`).
+    // Берём «мои заказы» из репозитория (live) с fallback на мок-стейт
+    // только когда репозиторий ещё не ответил или вернул ошибку.
+    // Пустой массив data:[] — это валидный ответ (новый юзер без заказов),
+    // и подменять его моком нельзя — иначе получит чужие demo-заказы.
     final asyncMine = ref.watch(myOrdersStreamProvider);
-    final liveMine = asyncMine.asData?.value;
     final myId = state.user?.id ?? 'me';
 
     // Размещённые: заказы, которые я создал как заказчик и завершил со
     // своей стороны (статус awaitingPayment, либо completed).
-    final mockPosted = state.myOrders
+    List<Order> mockPosted() => state.myOrders
         .where((o) =>
             o.status == OrderStatus.awaitingPayment ||
             o.status == OrderStatus.completed)
         .toList();
-    final livePosted = liveMine
-        ?.where((o) =>
-            (o.customerId == myId || o.customerId == 'me') &&
-            (o.status == OrderStatus.awaitingPayment ||
-                o.status == OrderStatus.completed))
-        .toList();
-    final posted = (livePosted == null || livePosted.isEmpty)
-        ? mockPosted
-        : livePosted;
+    final posted = asyncMine.maybeWhen(
+      data: (xs) => xs
+          .where((o) =>
+              (o.customerId == myId || o.customerId == 'me') &&
+              (o.status == OrderStatus.awaitingPayment ||
+                  o.status == OrderStatus.completed))
+          .toList(),
+      orElse: mockPosted,
+    );
 
     // Выполненные: заказы, в которых я был исполнителем и они завершены.
     // Отдельного `myExecutorOrders()` нет — берём из общего `myOrders()`.
-    final mockExecuted = state.orders
+    List<Order> mockExecuted() => state.orders
         .where((o) =>
-            o.executorId == 'me' && o.status == OrderStatus.completed)
-        .toList();
-    final liveExecuted = liveMine
-        ?.where((o) =>
             (o.executorId == myId || o.executorId == 'me') &&
             o.status == OrderStatus.completed)
         .toList();
-    final executed = (liveExecuted == null || liveExecuted.isEmpty)
-        ? mockExecuted
-        : liveExecuted;
+    final executed = asyncMine.maybeWhen(
+      data: (xs) => xs
+          .where((o) =>
+              (o.executorId == myId || o.executorId == 'me') &&
+              o.status == OrderStatus.completed)
+          .toList(),
+      orElse: mockExecuted,
+    );
 
     final list = _tab == _Tab.posted ? posted : executed;
     final groups = _groupByDate(list);

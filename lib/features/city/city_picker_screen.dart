@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -13,8 +15,12 @@ import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/cities_repository.dart';
+import '../../data/remote/pocketbase_client.dart';
 
-// Города-миллионники России по убыванию населения
+// Города-миллионники России по убыванию населения.
+// TODO(P2): после миграции переехать на флаг `is_million_plus` в коллекции
+// cities (или отдельную view) — сейчас хардкод, потому что seed/миграция
+// такого поля не предоставляет.
 const _millionCityIds = [
   'msk', 'spb', 'nsk', 'ekb', 'kzn', 'nn',
   'krs', 'chl', 'sam', 'ufa', 'rnd', 'krd', 'omk',
@@ -325,7 +331,7 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
   }
 
   Future<void> _showRequestSheet(BuildContext context) async {
-    final submitted = await showModalBottomSheet<bool>(
+    final submitted = await showModalBottomSheet<String>(
       context: context,
       isScrollControlled: true,
       backgroundColor: AppColors.background,
@@ -334,7 +340,26 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
       ),
       builder: (_) => _RequestCitySheet(initialName: _query),
     );
-    if (!mounted || submitted != true) return;
+    if (!context.mounted || submitted == null || submitted.isEmpty) return;
+    // Заявка на новый город уходит в коллекцию city_requests (public-create
+    // правило в миграции). Если PB недоступен — fire-and-forget, юзеру всё
+    // равно показываем «спасибо», т.к. он не должен страдать от наших
+    // backend-проблем.
+    final pb = ref.read(pocketbaseProvider);
+    if (pb != null) {
+      // Не блокируем UI на сетевом запросе — заказчику нужно вернуться к
+      // поиску города. Сетевые/валидационные ошибки игнорим — заявка
+      // некритична для дальнейшего флоу.
+      unawaited(() async {
+        try {
+          await pb.collection('city_requests').create(body: {
+            'city_name': submitted,
+            if (pb.authStore.record?.id.isNotEmpty == true)
+              'user': pb.authStore.record!.id,
+          });
+        } catch (_) {/* swallow */}
+      }());
+    }
     // Для пользователей, меняющих город из «Заказов», страница уже открыта в
     // режиме поиска — не сворачиваем её в шапку «Укажите город», чтобы они
     // могли продолжить искать. Сбрасываем только текст и фокус.
@@ -454,7 +479,7 @@ class _RequestCitySheetState extends State<_RequestCitySheet> {
           PrimaryButton(
             label: 'Отправить',
             onPressed: _enabled
-                ? () => Navigator.of(context).pop(true)
+                ? () => Navigator.of(context).pop(_ctrl.text.trim())
                 : null,
           ),
           ],

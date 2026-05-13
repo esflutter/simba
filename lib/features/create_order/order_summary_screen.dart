@@ -12,6 +12,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_text_field.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
@@ -21,6 +22,7 @@ import 'order_draft.dart';
 import 'select_payment_method_screen.dart';
 
 const _minPrice = 100;
+const _maxPrice = 100000;
 
 class OrderSummaryScreen extends ConsumerStatefulWidget {
   const OrderSummaryScreen({super.key});
@@ -33,6 +35,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
   late TextEditingController _priceCtrl;
   late TextEditingController _dateCtrl;
   late TextEditingController _timeCtrl;
+  bool _isPublishing = false;
 
   @override
   void initState() {
@@ -69,12 +72,29 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
         );
   }
 
+  /// Текущая цена из контроллера (строка → int), безопасный фолбэк 0.
+  int get _priceRub =>
+      int.tryParse(_priceCtrl.text.replaceAll(RegExp(r'\D'), '')) ?? 0;
+
+  /// Полная валидация перед публикацией. Кнопка дизейблится, если хоть одно
+  /// условие не выполнено: категория, адрес + координаты, цена в диапазоне
+  /// [_minPrice .. _maxPrice], выбран способ оплаты.
+  bool get _canPublish {
+    final draft = ref.read(orderDraftProvider);
+    final p = _priceRub;
+    return !_isPublishing &&
+        draft.categoryId != null &&
+        draft.address.trim().isNotEmpty &&
+        draft.location != null &&
+        p >= _minPrice &&
+        p <= _maxPrice &&
+        (draft.paymentMethod?.isNotEmpty ?? false);
+  }
+
   @override
   Widget build(BuildContext context) {
     final draft = ref.watch(orderDraftProvider);
-    final price = int.tryParse(_priceCtrl.text.replaceAll(RegExp(r'\D'), '')) ?? 0;
-    final canContinue =
-        price >= _minPrice && (draft.paymentMethod?.isNotEmpty ?? false);
+    final canContinue = _canPublish;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -157,24 +177,26 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
                 SizedBox(height: 16.h),
                 _PaymentMethod(
                   value: draft.paymentMethod ?? 'Укажите способ оплаты',
-                  onTap: () async {
-                    await showModalBottomSheet<void>(
-                      context: context,
-                      isScrollControlled: true,
-                      backgroundColor: Colors.transparent,
-                      useSafeArea: true,
-                      builder: (_) => ClipRRect(
-                        borderRadius:
-                            BorderRadius.vertical(top: Radius.circular(20.r)),
-                        child: SizedBox(
-                          height: MediaQuery.of(context).size.height * 0.92,
-                          child: const SelectPaymentMethodScreen(),
-                        ),
-                      ),
-                    );
-                    if (!mounted) return;
-                    setState(() {});
-                  },
+                  onTap: _isPublishing
+                      ? () {}
+                      : () async {
+                          await showModalBottomSheet<void>(
+                            context: context,
+                            isScrollControlled: true,
+                            backgroundColor: Colors.transparent,
+                            useSafeArea: true,
+                            builder: (_) => ClipRRect(
+                              borderRadius:
+                                  BorderRadius.vertical(top: Radius.circular(20.r)),
+                              child: SizedBox(
+                                height: MediaQuery.of(context).size.height * 0.92,
+                                child: const SelectPaymentMethodScreen(),
+                              ),
+                            ),
+                          );
+                          if (!mounted) return;
+                          setState(() {});
+                        },
                 ),
               ],
             ),
@@ -183,8 +205,8 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
             top: false,
             child: Padding(
               padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.h),
-              child: PrimaryButton(
-                label: 'Создать заказ',
+              child: _PublishButton(
+                isBusy: _isPublishing,
                 onPressed: canContinue ? () => _publish(context, ref, draft) : null,
               ),
             ),
@@ -195,50 +217,127 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
   }
 
   Future<void> _publish(BuildContext context, WidgetRef ref, OrderDraft draft) async {
-    final city = ref.read(appControllerProvider).selectedCity;
-    final loc = draft.location ?? city.center;
-    final id = MockData.generateOrderId();
-    final order = Order(
-      id: id,
-      customerId: 'me',
-      categoryId: draft.categoryId!,
-      title: draft.title,
-      description: draft.description,
-      address: draft.address.isEmpty ? city.name : draft.address,
-      location: loc,
-      priceRub: draft.priceRub,
-      status: OrderStatus.open,
-      createdAt: DateTime.now(),
-      scheduledAt: draft.scheduledAt,
-      asap: draft.asap,
-      photoPaths: draft.photoPaths,
-      forOtherPhone: draft.forOtherPhone,
-    );
-    // Если бэкенд подключён — отправляем в PB; репозиторий сам зеркалит
-    // в мок-состояние через AppController при отсутствии PB.
-    final photoFiles = draft.photoPaths
-        .map((p) => File(p))
-        .where((f) => f.existsSync())
-        .toList();
+    if (_isPublishing) return;
+    // Жёсткие предварительные проверки. Дублируют _canPublish, но защищают
+    // на случай, если кто-то обошёл UI-блокировку (например, гонка после
+    // bottom-sheet адреса). Лучше показать тост, чем создать «фантомный»
+    // заказ без координат, который не покажется в ленте исполнителям.
+    if (draft.location == null) {
+      AppToast.show(context, 'Укажите адрес');
+      return;
+    }
+    if (draft.address.trim().isEmpty) {
+      AppToast.show(context, 'Укажите адрес');
+      return;
+    }
+    if (draft.categoryId == null) {
+      AppToast.show(context, 'Выберите категорию');
+      return;
+    }
+    final price = _priceRub;
+    if (price < _minPrice) {
+      AppToast.show(context, 'Минимальная цена $_minPrice ₽');
+      return;
+    }
+    if (price > _maxPrice) {
+      AppToast.show(context, 'Максимальная цена 100 000 ₽');
+      return;
+    }
+    setState(() => _isPublishing = true);
     try {
+      final id = MockData.generateOrderId();
+      // customer_id: при live-флоу `OrdersRepository.create()` сам подставит
+      // `pb.authStore.record.id`, наш локальный объект не уходит дальше
+      // мок-AppController (см. ниже invalidate myOrders/feed). На моках
+      // (без бэка) берём id из state.user. Старый хардкод `'me'` ломал
+      // фильтр «мои заказы» при гибридных режимах.
+      final myId = ref.read(appControllerProvider).user?.id ?? 'me';
+      final order = Order(
+        id: id,
+        customerId: myId,
+        categoryId: draft.categoryId!,
+        title: draft.title,
+        description: draft.description,
+        address: draft.address,
+        location: draft.location!,
+        priceRub: draft.priceRub,
+        status: OrderStatus.open,
+        createdAt: DateTime.now(),
+        scheduledAt: draft.scheduledAt,
+        asap: draft.asap,
+        photoPaths: draft.photoPaths,
+        forOtherPhone: draft.forOtherPhone,
+        // PaymentMethod enum сейчас содержит только cash, поэтому
+        // draft.paymentMethod (String, человекочитаемая подпись) играет роль
+        // флага «способ выбран» в _canPublish, а в Order передаём
+        // единственно валидный enum-вариант. При расширении enum здесь
+        // понадобится явный маппинг draft.paymentMethod → PaymentMethod.
+        paymentMethod: PaymentMethod.cash,
+      );
+      final photoFiles = draft.photoPaths
+          .map((p) => File(p))
+          .where((f) => f.existsSync())
+          .toList();
+      // Создаём заказ; при ошибке НЕ показываем «Заказ создан!» — иначе
+      // у пользователя складывается ложное впечатление успеха, а заказ
+      // в фид к исполнителям так и не попал.
       await ref
           .read(ordersRepositoryProvider)
           .create(draft: order, photoFiles: photoFiles);
-      // Обновляем стрим «Моих заказов», чтобы новый заказ появился сразу.
+      // Успех — обновляем мои заказы и ленту исполнителей, чистим черновик.
       ref.invalidate(myOrdersStreamProvider);
-    } catch (e) {
-      // Мягкий фоллбэк: записываем в локальный стейт даже при ошибке PB,
-      // чтобы пользователь видел заказ в «Моих заказах».
-      ref.read(appControllerProvider.notifier).createOrder(order);
+      ref.invalidate(feedOrdersProvider);
+      ref.read(orderDraftProvider.notifier).reset();
+      if (!context.mounted) return;
+      await showDialog<void>(
+        context: context,
+        barrierColor: Colors.black.withValues(alpha: 0.40),
+        builder: (ctx) => const _OrderCreatedDialog(),
+      );
+      if (!context.mounted) return;
+      context.go('/home/my');
+    } catch (_) {
+      // При ошибке остаёмся на экране, показываем тост. Никаких
+      // «фантомных» fallback-создаваний через appController.createOrder.
+      if (!context.mounted) return;
+      AppToast.show(context, 'Не удалось создать заказ. Попробуйте позже.');
+    } finally {
+      if (mounted) setState(() => _isPublishing = false);
     }
-    ref.read(orderDraftProvider.notifier).reset();
-    await showDialog<void>(
-      context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.40),
-      builder: (ctx) => const _OrderCreatedDialog(),
+  }
+}
+
+class _PublishButton extends StatelessWidget {
+  const _PublishButton({required this.isBusy, required this.onPressed});
+
+  final bool isBusy;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isBusy) {
+      return PrimaryButton(label: 'Создать заказ', onPressed: onPressed);
+    }
+    return SizedBox(
+      width: double.infinity,
+      child: Material(
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(16.r),
+        child: SizedBox(
+          height: 50.h,
+          child: Center(
+            child: SizedBox(
+              width: 22.r,
+              height: 22.r,
+              child: const CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2.5,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
-    if (!context.mounted) return;
-    context.go('/home/my');
   }
 }
 

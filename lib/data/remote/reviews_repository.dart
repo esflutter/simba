@@ -25,8 +25,10 @@ class ReviewsRepository {
     }
     final pb = _pb!;
     final records = await pb.collection('reviews').getFullList(
-          filter:
-              'to_user = "$userId" && is_hidden = false && visible_after != "" && visible_after <= @now',
+          filter: pb.filter(
+            'to_user = {:uid} && is_hidden = false && visible_after != "" && visible_after <= @now',
+            {'uid': userId},
+          ),
           sort: '-created',
         );
     return records.map(_fromRecord).toList();

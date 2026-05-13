@@ -28,7 +28,10 @@ class OrderResponsesRepository {
     }
     final pb = _pb!;
     final records = await pb.collection('order_responses').getFullList(
-          filter: 'order_ref = "$orderId" && status = "pending"',
+          filter: pb.filter(
+            'order_ref = {:oid} && status = "pending"',
+            {'oid': orderId},
+          ),
           sort: 'created',
         );
     return records.map((r) => r.getStringValue('executor')).toList();
@@ -47,7 +50,7 @@ class OrderResponsesRepository {
       'order_ref': orderId,
       'executor': me.id,
       'status': 'pending',
-      if (etaMin != null) 'eta_min': etaMin,
+      'eta_min': ?etaMin,
       if (comment != null && comment.isNotEmpty) 'comment': comment,
     });
   }
@@ -63,8 +66,10 @@ class OrderResponsesRepository {
     }
     final pb = _pb!;
     final list = await pb.collection('order_responses').getFullList(
-          filter:
-              'order_ref = "$orderId" && executor = "$executorId" && status = "pending"',
+          filter: pb.filter(
+            'order_ref = {:oid} && executor = {:eid} && status = "pending"',
+            {'oid': orderId, 'eid': executorId},
+          ),
         );
     if (list.isEmpty) return;
     await pb
@@ -82,8 +87,10 @@ class OrderResponsesRepository {
     }
     final pb = _pb!;
     final list = await pb.collection('order_responses').getFullList(
-          filter:
-              'order_ref = "$orderId" && executor = "$executorId" && status = "pending"',
+          filter: pb.filter(
+            'order_ref = {:oid} && executor = {:eid} && status = "pending"',
+            {'oid': orderId, 'eid': executorId},
+          ),
         );
     if (list.isEmpty) return;
     await pb.collection('order_responses').update(list.first.id, body: {

@@ -6,8 +6,11 @@ import '../../data/remote/reviews_repository.dart';
 
 /// Отзывы на указанного юзера. На моках вернёт `state.reviews` фильтрованные
 /// по `toUserId`. На live — реальный список из PocketBase.
+///
+/// `autoDispose` — чтобы кэш не жил вечно: при возврате на экран profile
+/// делается свежий запрос, а не показывается stale-список двухчасовой давности.
 final reviewsForUserProvider =
-    FutureProvider.family<List<Review>, String>((ref, userId) async {
+    FutureProvider.autoDispose.family<List<Review>, String>((ref, userId) async {
   try {
     return await ref.read(reviewsRepositoryProvider).forUser(userId);
   } catch (_) {

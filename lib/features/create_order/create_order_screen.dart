@@ -4,18 +4,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/location_permission.dart';
 import '../../core/utils/ru_phone_formatter.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_text_field.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
-import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
+import '../../data/remote/dadata_client.dart';
 import 'order_draft.dart';
 import 'select_address_screen.dart';
 import 'select_category_screen.dart';
@@ -33,6 +37,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   late TextEditingController _descCtrl;
   late TextEditingController _addressCtrl;
   late TextEditingController _phoneCtrl;
+  bool _isLocating = false;
 
   @override
   void initState() {
@@ -44,6 +49,17 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     _phoneCtrl = TextEditingController(
       text: widget.forOther ? (d.forOtherPhone?.isNotEmpty == true ? d.forOtherPhone! : '+7') : '',
     );
+    // Защита от удалённой/невалидной категории: если в драфте лежит
+    // categoryId, которого больше нет в каталоге — сбрасываем,
+    // иначе firstWhere ниже упадёт исключением при build.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final draft = ref.read(orderDraftProvider);
+      if (draft.categoryId != null &&
+          !MockData.categories.any((c) => c.id == draft.categoryId)) {
+        ref.read(orderDraftProvider.notifier).update(categoryId: null);
+      }
+    });
   }
 
   @override
@@ -75,19 +91,83 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     ref.read(orderDraftProvider.notifier).update(photoPaths: list);
   }
 
+  /// «Моё местоположение» через geolocator + reverse-geocode DaData.
+  /// До этого экран выставлял центр города и текст «Моё местоположение»,
+  /// что было неинформативно (исполнитель видел метку в центре города).
+  Future<void> _useMyLocation() async {
+    if (_isLocating) return;
+    setState(() => _isLocating = true);
+    try {
+      // Проверяем системный сервис локации до запроса permission — иначе
+      // на устройствах с выключенным GPS permission-диалог не имеет смысла.
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        if (!mounted) return;
+        AppToast.show(context, 'Включите геолокацию в настройках');
+        return;
+      }
+      final ok = await ensureLocationPermission();
+      if (!ok) {
+        if (!mounted) return;
+        AppToast.show(context, 'Разрешите доступ к геолокации');
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 8),
+        ),
+      );
+      final point = LatLng(pos.latitude, pos.longitude);
+      final addr = await ref.read(dadataClientProvider).geolocate(point);
+      if (!mounted) return;
+      // Если reverse-geocode не сработал (нет PB или DaData офлайн) —
+      // оставляем хотя бы координаты + дефолтную подпись.
+      final addressString = (addr?.value.isNotEmpty == true)
+          ? addr!.value
+          : 'Точка на карте';
+      ref.read(orderDraftProvider.notifier).update(
+            address: addressString,
+            location: point,
+            addressFiasId: addr?.fiasId,
+            addressKladrId: addr?.kladrId,
+            cityFiasId: addr?.cityFiasId,
+            postalCode: addr?.postalCode,
+            qcGeo: addr?.qcGeo,
+          );
+      _addressCtrl.text = addressString;
+      setState(() {});
+    } catch (_) {
+      if (!mounted) return;
+      AppToast.show(context, 'Не удалось получить местоположение');
+    } finally {
+      if (mounted) setState(() => _isLocating = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final draft = ref.watch(orderDraftProvider);
     final phoneDigits = _phoneCtrl.text.replaceAll(RegExp(r'\D'), '');
-    final phoneOk = !widget.forOther || phoneDigits.length == 11;
+    // Принимаем только мобильные RU (79xxxxxxxxx); городские/8-800 — нет.
+    final phoneOk = !widget.forOther ||
+        (phoneDigits.length == 11 && phoneDigits.startsWith('79'));
     final canContinue = draft.categoryId != null &&
         _titleCtrl.text.trim().isNotEmpty &&
         _addressCtrl.text.trim().isNotEmpty &&
         phoneOk;
 
-    final categoryName = draft.categoryId == null
-        ? 'Выберите категорию'
-        : MockData.categories.firstWhere((c) => c.id == draft.categoryId).name;
+    // Защита от исчезнувшей категории при рендере: orElse → дефолт, но
+    // отображаем placeholder. categoryId сбрасывается в initState через
+    // postFrameCallback, чтобы не мутировать состояние во время build.
+    final catMatch = draft.categoryId == null
+        ? null
+        : MockData.categories.firstWhere(
+            (c) => c.id == draft.categoryId,
+            orElse: () => MockData.categories.first,
+          );
+    final categoryKnown =
+        catMatch != null && catMatch.id == draft.categoryId;
+    final categoryName = !categoryKnown ? 'Выберите категорию' : catMatch.name;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -127,7 +207,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                   _Pickable(
                     label: 'Категория работ',
                     value: categoryName,
-                    isPlaceholder: draft.categoryId == null,
+                    isPlaceholder: !categoryKnown,
                     height: 64.h,
                     onTap: () async {
                       await showModalBottomSheet<void>(
@@ -217,20 +297,22 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                   SizedBox(height: 6.h),
                   _Pickable(
                     label: '',
-                    value: 'Моё местоположение',
-                    leading: Icon(IconsaxPlusLinear.gps, color: AppColors.primary, size: 24.r),
+                    value: _isLocating
+                        ? 'Определяем местоположение…'
+                        : 'Моё местоположение',
+                    leading: _isLocating
+                        ? SizedBox(
+                            width: 24.r,
+                            height: 24.r,
+                            child: const CircularProgressIndicator(
+                              strokeWidth: 2.2,
+                              color: AppColors.primary,
+                            ),
+                          )
+                        : Icon(IconsaxPlusLinear.gps,
+                            color: AppColors.primary, size: 24.r),
                     compact: true,
-                    onTap: () {
-                      // TODO: подключить geolocator для реальной геолокации.
-                      // Пока используем центр выбранного города как mock текущего местоположения.
-                      final city = ref.read(appControllerProvider).selectedCity;
-                      ref.read(orderDraftProvider.notifier).update(
-                            location: city.center,
-                            address: 'Моё местоположение',
-                          );
-                      _addressCtrl.text = 'Моё местоположение';
-                      setState(() {});
-                    },
+                    onTap: _isLocating ? () {} : _useMyLocation,
                   ),
                   SizedBox(height: 16.h),
                   _PhotoRow(
@@ -455,4 +537,3 @@ class _PhotoTile extends StatelessWidget {
     );
   }
 }
-

@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/city_pill.dart';
+import '../../core/widgets/openfreemap_view.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
@@ -67,6 +68,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                           _MapView(
                             orders: orders,
                             center: state.selectedCity.center,
+                            onMarkerTap: (id) =>
+                                context.push('/order/$id?mode=feed'),
                           ),
                         Positioned(
                           left: 0,
@@ -245,18 +248,49 @@ class _ListView extends StatelessWidget {
 }
 
 class _MapView extends StatelessWidget {
-  const _MapView({required this.orders, required this.center});
+  const _MapView({
+    required this.orders,
+    required this.center,
+    this.onMarkerTap,
+  });
   final List<Order> orders;
   final LatLng center;
+  final ValueChanged<String>? onMarkerTap;
 
   @override
   Widget build(BuildContext context) {
-    return Image.asset(
-      'assets/images/map_mock.webp',
-      fit: BoxFit.cover,
-      width: double.infinity,
-      height: double.infinity,
+    // Только заказы с валидной геоточкой попадают на карту. Маркеры
+    // окрашиваются по статусу: красный — open, оранжевый — accepted/
+    // awaiting_payment, зелёный — completed, серый — cancelled.
+    final markers = orders
+        .map((o) => OpenFreeMapMarker(
+              id: o.id,
+              point: o.location,
+              color: _markerColorByStatus(o.status),
+            ))
+        .toList();
+    return OpenFreeMapView(
+      markers: markers,
+      initialCenter: center,
+      initialZoom: 11,
+      showMyLocation: true,
+      showZoomControls: true,
+      onMarkerTap: onMarkerTap,
     );
+  }
+}
+
+Color _markerColorByStatus(OrderStatus s) {
+  switch (s) {
+    case OrderStatus.open:
+      return AppColors.markerRed;
+    case OrderStatus.accepted:
+    case OrderStatus.awaitingPayment:
+      return Colors.orange;
+    case OrderStatus.completed:
+      return Colors.green;
+    case OrderStatus.cancelled:
+      return AppColors.textTertiary;
   }
 }
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -20,12 +21,6 @@ import '../../data/mock/app_state.dart';
 import '../../data/remote/dadata_client.dart';
 import 'order_draft.dart';
 
-final _dadataProvider = Provider<DaDataClient>((ref) {
-  final c = DaDataClient();
-  ref.onDispose(c.dispose);
-  return c;
-});
-
 class SelectAddressScreen extends ConsumerStatefulWidget {
   const SelectAddressScreen({super.key});
 
@@ -45,6 +40,25 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
 
   LatLng? _selectedPoint;
   String _selectedAddress = '';
+  AddressSuggestion? _selectedSuggestion;
+
+  // ── Race-protection + LRU-кеш для suggest ──────────────────────────
+  // Растущий счётчик: каждый новый запрос увеличивает _suggestSeq, и колбэк
+  // ответа сравнивает свой mySeq с текущим — устаревшие ответы отбрасываются.
+  int _suggestSeq = 0;
+  final Map<String, List<AddressSuggestion>> _suggestCache = {};
+  final List<String> _suggestCacheOrder = []; // LRU-порядок (head = oldest)
+  static const int _kMaxCacheEntries = 50;
+
+  void _cacheSuggest(String key, List<AddressSuggestion> value) {
+    _suggestCache[key] = value;
+    _suggestCacheOrder.remove(key);
+    _suggestCacheOrder.add(key);
+    if (_suggestCacheOrder.length > _kMaxCacheEntries) {
+      final oldest = _suggestCacheOrder.removeAt(0);
+      _suggestCache.remove(oldest);
+    }
+  }
 
   @override
   void initState() {
@@ -57,6 +71,7 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
           _selectedPoint = draft.location;
           _selectedAddress = draft.address;
           _ctrl.text = draft.address;
+          _selectedSuggestion = null; // ранее сохранённый адрес — без свежей подсказки
         });
       } else if (_ctrl.text.isEmpty && _selectedPoint == null) {
         // UX-совместимость с HEAD: стартовая подпись поля.
@@ -83,10 +98,27 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
 
   void _onQueryChanged(String value) {
     _debounce?.cancel();
-    if (value.trim().isEmpty) {
+    final trimmed = value.trim();
+    if (trimmed.length < 3) {
+      // Меньше 3 символов — DaData всё равно не даёт осмысленных подсказок,
+      // экономим запросы и не дёргаем сеть.
       setState(() {
         _suggestions = const [];
-        _showSuggestions = false;
+        _showSuggestions = trimmed.isNotEmpty ? _showSuggestions : false;
+        _loading = false;
+      });
+      return;
+    }
+    // Если query уже в LRU — показываем мгновенно, без сетевого запроса.
+    final cached = _suggestCache[trimmed];
+    if (cached != null) {
+      _suggestCacheOrder
+        ..remove(trimmed)
+        ..add(trimmed);
+      setState(() {
+        _suggestions = cached;
+        _showSuggestions = true;
+        _loading = false;
       });
       return;
     }
@@ -99,13 +131,33 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
 
   Future<void> _runSuggest() async {
     final query = _ctrl.text.trim();
-    if (query.isEmpty) return;
+    if (query.length < 3) return;
+    // Двойная проверка кеша: пока тикал debounce, могло прилететь дубль-значение.
+    final cached = _suggestCache[query];
+    if (cached != null) {
+      _suggestCacheOrder
+        ..remove(query)
+        ..add(query);
+      if (!mounted) return;
+      setState(() {
+        _suggestions = cached;
+        _loading = false;
+      });
+      return;
+    }
+    final mySeq = ++_suggestSeq;
+    final client = ref.read(dadataClientProvider);
     final city = ref.read(appControllerProvider).selectedCity;
-    final results = await ref.read(_dadataProvider).suggest(
-          query,
-          cityName: city.name,
-        );
-    if (!mounted) return;
+    final results = await client.suggest(
+      query,
+      count: 7,
+      cityName: city.name,
+      // TODO: прокинуть regionFiasId из City, когда seed добавит это поле.
+    );
+    // Игнорируем устаревшие ответы: пока летел запрос, юзер мог продолжить
+    // печатать, и пришёл уже более новый mySeq.
+    if (mySeq != _suggestSeq || !mounted) return;
+    _cacheSuggest(query, results);
     setState(() {
       _suggestions = results;
       _loading = false;
@@ -116,6 +168,7 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     setState(() {
       _selectedAddress = s.value;
       _selectedPoint = s.point;
+      _selectedSuggestion = s;
       _ctrl.text = s.value;
       _showSuggestions = false;
       _suggestions = const [];
@@ -130,15 +183,17 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     setState(() {
       _selectedPoint = point;
       _selectedAddress = 'Точка на карте';
+      _selectedSuggestion = null;
       _ctrl.text = '';
       _showSuggestions = false;
     });
     // Реверс-геокодинг для красивого адреса.
-    final result = await ref.read(_dadataProvider).geolocate(point);
+    final result = await ref.read(dadataClientProvider).geolocate(point);
     if (!mounted) return;
     if (result != null) {
       setState(() {
         _selectedAddress = result.value;
+        _selectedSuggestion = result;
         _ctrl.text = result.value;
       });
     }
@@ -148,6 +203,13 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     if (_isLocating) return;
     setState(() => _isLocating = true);
     try {
+      // Системный сервис локации (GPS) — обязательная предпосылка. Если
+      // выключен, нет смысла запрашивать permission: пользователю всё
+      // равно сначала придётся открыть настройки.
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        if (mounted) AppToast.show(context, 'Включите геолокацию в настройках');
+        return;
+      }
       final perm = await Geolocator.checkPermission();
       var status = perm;
       if (status == LocationPermission.denied) {
@@ -291,8 +353,13 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
                         loading: _loading,
                         items: _suggestions,
                         onPick: _pickSuggestion,
-                        empty: !Env.hasDadata
-                            ? 'DaData не настроена. Запустите через run_dev.bat'
+                        empty: !Env.hasPocketbase
+                            // Тех-сообщение «бэкенд не настроен / run_dev.bat»
+                            // имеет смысл только разработчику — в release
+                            // показываем пользовательский текст.
+                            ? (kDebugMode
+                                ? 'Подсказки недоступны: бэкенд не настроен. Запустите через run_dev.bat'
+                                : 'Не удалось загрузить подсказки. Попробуйте позже.')
                             : (!_loading && _ctrl.text.trim().isNotEmpty &&
                                     _suggestions.isEmpty
                                 ? 'Ничего не найдено. Попробуйте указать точнее или выбрать точку на карте'
@@ -314,9 +381,21 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
                         height: 50.h,
                         onPressed: canSubmit
                             ? () {
+                                final s = _selectedSuggestion;
+                                // Если адрес выбран свежей подсказкой/реверс-геокодом —
+                                // сохраняем структурные поля. Если юзер оставил
+                                // ранее сохранённый адрес из драфта (s == null) — не
+                                // затираем лежащие в драфте FIAS/КЛАДР: передаём только
+                                // address/location (метаполя останутся прежними благодаря
+                                // copyWith).
                                 ref.read(orderDraftProvider.notifier).update(
                                       location: _selectedPoint!,
                                       address: _selectedAddress.trim(),
+                                      addressFiasId: s?.fiasId,
+                                      addressKladrId: s?.kladrId,
+                                      cityFiasId: s?.cityFiasId,
+                                      postalCode: s?.postalCode,
+                                      qcGeo: s?.qcGeo,
                                     );
                                 context.pop();
                               }

@@ -10,6 +10,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_text_field.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/remote/pocketbase_client.dart';
@@ -24,6 +25,7 @@ class ProfileSetupScreen extends ConsumerStatefulWidget {
 class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
   final _ctrl = TextEditingController();
   String? _photoPath;
+  bool _isSaving = false;
 
   @override
   void dispose() {
@@ -39,9 +41,69 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     } catch (_) {}
   }
 
+  Future<void> _onContinue() async {
+    if (_isSaving) return;
+    final name = _ctrl.text.trim();
+    if (name.isEmpty) return;
+    final photoPath = _photoPath;
+    setState(() => _isSaving = true);
+    try {
+      final pb = ref.read(pocketbaseProvider);
+      // Если бэкенд подключён — пробуем PATCH, но НЕ блокируем flow при
+      // сетевой ошибке: юзер не должен запираться на экране. Локальное
+      // зеркало AppController сохранится в любом случае; повторный sync
+      // в будущем будет вынесен в фоновый job (TODO).
+      if (pb != null && pb.authStore.isValid && pb.authStore.record != null) {
+        try {
+          final files = <http.MultipartFile>[];
+          if (photoPath != null) {
+            final file = File(photoPath);
+            if (await file.exists()) {
+              files.add(http.MultipartFile.fromBytes(
+                'photo',
+                await file.readAsBytes(),
+                filename: photoPath.split(Platform.pathSeparator).last,
+              ));
+            }
+          }
+          await pb
+              .collection('users')
+              .update(
+                pb.authStore.record!.id,
+                body: {'name': name},
+                files: files,
+              )
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {
+          // Сеть/таймаут/серверная ошибка — показываем тост, но flow
+          // продолжаем: имя/фото уже лежат в AppController, sync позже.
+          if (mounted) {
+            AppToast.show(
+              context,
+              'Профиль сохранён локально. Синхронизируем позже.',
+            );
+          }
+        }
+      }
+      // Зеркалим имя/фото в локальный AppController — UI-консьюмеры
+      // продолжают читать state.user без изменений.
+      ref.read(appControllerProvider.notifier).completeProfile(
+            name: name,
+            photoPath: photoPath,
+          );
+      if (!mounted) return;
+      context.go('/auth/role');
+    } catch (_) {
+      if (!mounted) return;
+      AppToast.show(context, 'Не удалось сохранить профиль');
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final canContinue = _ctrl.text.trim().isNotEmpty;
+    final canContinue = _ctrl.text.trim().isNotEmpty && !_isSaving;
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -64,7 +126,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                       SizedBox(height: 24.h),
                       Center(
                         child: GestureDetector(
-                          onTap: _pickPhoto,
+                          onTap: _isSaving ? null : _pickPhoto,
                           child: SizedBox(
                             width: 100.r,
                             height: 100.r,
@@ -110,55 +172,52 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                         onChanged: (_) => setState(() {}),
                         maxLength: 50,
                         textCapitalization: TextCapitalization.words,
+                        enabled: !_isSaving,
                       ),
                     ],
                   ),
                 ),
               ),
               SizedBox(height: 16.h),
-              PrimaryButton(
-                label: 'Далее',
-                onPressed: canContinue
-                    ? () async {
-                        final name = _ctrl.text.trim();
-                        final photoPath = _photoPath;
-                        // Локально (моки и UI) — сразу.
-                        ref.read(appControllerProvider.notifier).completeProfile(
-                              name: name,
-                              photoPath: photoPath,
-                            );
-                        // Отправляем на сервер, если PB подключён и юзер есть.
-                        // Ошибка не блокирует переход — моки уже сработали.
-                        try {
-                          final pb = ref.read(pocketbaseProvider);
-                          final record = pb?.authStore.record;
-                          if (pb != null && record != null) {
-                            final files = <http.MultipartFile>[];
-                            if (photoPath != null) {
-                              final file = File(photoPath);
-                              if (await file.exists()) {
-                                files.add(http.MultipartFile.fromBytes(
-                                  'photo',
-                                  await file.readAsBytes(),
-                                  filename: photoPath.split(Platform.pathSeparator).last,
-                                ));
-                              }
-                            }
-                            await pb.collection('users').update(
-                              record.id,
-                              body: {'name': name},
-                              files: files,
-                            );
-                          }
-                        } catch (_) {
-                          // Игнор: фоллбэк на локальный mock-стейт.
-                        }
-                        if (!context.mounted) return;
-                        context.go('/auth/role');
-                      }
-                    : null,
+              _ContinueButton(
+                isSaving: _isSaving,
+                onPressed: canContinue ? _onContinue : null,
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ContinueButton extends StatelessWidget {
+  const _ContinueButton({required this.isSaving, required this.onPressed});
+
+  final bool isSaving;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isSaving) {
+      return PrimaryButton(label: 'Далее', onPressed: onPressed);
+    }
+    return SizedBox(
+      width: double.infinity,
+      child: Material(
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(16.r),
+        child: SizedBox(
+          height: 50.h,
+          child: Center(
+            child: SizedBox(
+              width: 22.r,
+              height: 22.r,
+              child: const CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2.5,
+              ),
+            ),
           ),
         ),
       ),

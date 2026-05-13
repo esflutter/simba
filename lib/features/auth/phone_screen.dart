@@ -22,12 +22,15 @@ class PhoneScreen extends ConsumerStatefulWidget {
 class _PhoneScreenState extends ConsumerState<PhoneScreen> {
   final _ctrl = TextEditingController(text: '+7');
   bool _agreed = false;
+  bool _isSending = false;
 
   String _digits(String s) => s.replaceAll(RegExp(r'\D'), '');
 
+  /// Принимаем только мобильные RU-номера: 11 цифр, начинающиеся с `79`.
+  /// Городские/стационарные (8 4xx…) — отсеиваем сразу: SMS на них не уйдёт.
   bool get _valid {
     final d = _digits(_ctrl.text);
-    return d.length == 11 && _agreed;
+    return d.length == 11 && d.startsWith('79') && _agreed;
   }
 
   @override
@@ -36,21 +39,86 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
     super.dispose();
   }
 
-  Future<void> _onNext() async {
-    final phone = _ctrl.text;
-    final auth = ref.read(authRepositoryProvider);
-    // Если бэкенд подключён — отправляем OTP; иначе сразу переходим
-    // на экран кода с мок-проверкой.
-    if (auth.isLive) {
-      final ok = await auth.sendOtp(phone);
-      if (!mounted) return;
-      if (!ok) {
-        AppToast.show(context, 'Не удалось отправить SMS');
-        return;
-      }
+  /// Маппинг error-кодов от auth-репозитория → текст для пользователя.
+  /// `retryAfter` приходит в секундах из AuthResult. Если значение > 60 —
+  /// форматируем в минутах с правильной плюрализацией.
+  String _errorMessage(String? code, int? retryAfter) {
+    switch (code) {
+      case 'rate_limited':
+        return 'Слишком много попыток. Попробуйте через ${_formatRetry(retryAfter)}.';
+      case 'phone_unavailable':
+        return 'Этот номер недоступен';
+      case 'sms_provider_failed':
+        return 'SMS-провайдер временно недоступен';
+      case 'network':
+        return 'Нет подключения';
+      default:
+        return 'Не удалось отправить SMS';
     }
-    if (!mounted) return;
-    context.push('/auth/sms?phone=${Uri.encodeComponent(phone)}');
+  }
+
+  /// Плюрализация для русского: сек/мин с правильным окончанием.
+  String _formatRetry(int? retryAfter) {
+    final s = retryAfter ?? 60;
+    if (s >= 60) {
+      final m = s ~/ 60;
+      return '$m ${_pluralMin(m)}';
+    }
+    return '$s ${_pluralSec(s)}';
+  }
+
+  String _pluralSec(int n) {
+    final mod10 = n % 10;
+    final mod100 = n % 100;
+    if (mod10 == 1 && mod100 != 11) return 'секунду';
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'секунды';
+    return 'секунд';
+  }
+
+  String _pluralMin(int n) {
+    final mod10 = n % 10;
+    final mod100 = n % 100;
+    if (mod10 == 1 && mod100 != 11) return 'минуту';
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'минуты';
+    return 'минут';
+  }
+
+  Future<void> _onNext() async {
+    if (_isSending) return;
+    setState(() => _isSending = true);
+    try {
+      final phone = _ctrl.text;
+      final auth = ref.read(authRepositoryProvider);
+      if (auth.isLive) {
+        final result = await auth.sendOtpDetailed(phone);
+        if (!mounted) return;
+        if (!result.ok) {
+          AppToast.show(context, _errorMessage(result.errorCode, result.retryAfter));
+          return;
+        }
+        // Live: SMS Aero Mobile Authorization вернул session_id. Идём на
+        // экран ожидания SIM-PUSH; он сам переключится на форму ввода кода
+        // если оператор не отдаст ответ за ~30с.
+        final sessionId = result.sessionId ?? '';
+        final encPhone = Uri.encodeComponent(phone);
+        final encSid = Uri.encodeComponent(sessionId);
+        // status==otp_required (SMS Aero сразу отказался от SIM-PUSH —
+        // редко, но возможно при rate-limit / no-Mobile-ID на тарифе) →
+        // сразу на форму ввода, без paussingo на waiting-экран.
+        if (result.status == 'otp_required') {
+          context.push('/auth/sms?session_id=$encSid&phone=$encPhone');
+        } else {
+          context.push('/auth/sms-waiting?session_id=$encSid&phone=$encPhone');
+        }
+      } else {
+        // Mock-режим: бэка нет, переходим сразу на форму ввода — там
+        // принимается любой 4-значный код кроме `0000`.
+        if (!mounted) return;
+        context.push('/auth/sms?phone=${Uri.encodeComponent(phone)}');
+      }
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
   }
 
   @override
@@ -90,6 +158,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                         inputFormatters: [RuPhoneFormatter()],
                         onChanged: (_) => setState(() {}),
                         autofocus: true,
+                        enabled: !_isSending,
                       ),
                     ],
                   ),
@@ -100,7 +169,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   GestureDetector(
-                    onTap: () => setState(() => _agreed = !_agreed),
+                    onTap: _isSending ? null : () => setState(() => _agreed = !_agreed),
                     child: Container(
                       margin: EdgeInsets.only(top: 2.h),
                       width: 22.r,
@@ -152,9 +221,9 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                 ],
               ),
               SizedBox(height: 18.h),
-              PrimaryButton(
-                label: 'Далее',
-                onPressed: _valid ? _onNext : null,
+              _PhoneNextButton(
+                isSending: _isSending,
+                onPressed: (_valid && !_isSending) ? _onNext : null,
               ),
             ],
           ),
@@ -164,3 +233,40 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
   }
 }
 
+/// PrimaryButton с возможностью показать индикатор вместо текста.
+/// Выделено в отдельный виджет, чтобы не править общий PrimaryButton —
+/// он используется по всему приложению.
+class _PhoneNextButton extends StatelessWidget {
+  const _PhoneNextButton({required this.isSending, required this.onPressed});
+
+  final bool isSending;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isSending) {
+      return PrimaryButton(label: 'Далее', onPressed: onPressed);
+    }
+    // Индикатор поверх отключённой кнопки — сохраняет высоту/радиус как у PrimaryButton.
+    return SizedBox(
+      width: double.infinity,
+      child: Material(
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(16.r),
+        child: SizedBox(
+          height: 50.h,
+          child: Center(
+            child: SizedBox(
+              width: 22.r,
+              height: 22.r,
+              child: const CircularProgressIndicator(
+                color: Colors.white,
+                strokeWidth: 2.5,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

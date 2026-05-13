@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' as http;
 import 'package:iconsax_plus/iconsax_plus.dart';
 
 import '../../core/theme/app_colors.dart';
@@ -11,6 +12,8 @@ import '../../core/theme/app_text_styles.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/auth_repository.dart';
+import '../../data/remote/pocketbase_client.dart';
+import '../reviews/reviews_providers.dart' show reviewsForUserProvider;
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -20,14 +23,21 @@ class ProfileScreen extends ConsumerWidget {
     // Подписываемся отдельно на user — иначе ConsumerWidget может пропустить
     // ребилд из-за const-канонизации screens в HomeShell.
     final user = ref.watch(appControllerProvider.select((s) => s.user));
-    final reviews =
-        ref.watch(appControllerProvider.select((s) => s.reviews));
     if (user == null) {
       return const Scaffold(body: SizedBox.shrink());
     }
-    // Считаем рейтинг из реальных отзывов на «me», а не из user.rating
-    // (он у новых пользователей 0).
-    final myReviews = reviews.where((r) => r.toUserId == 'me').toList();
+    // Считаем рейтинг из реальных отзывов на текущего юзера, а не из
+    // user.rating (он у новых пользователей 0). В live тянем отзывы через
+    // reviewsForUserProvider (PB), на моках/ошибке падаем в state.reviews.
+    final myId = user.id;
+    final asyncReviews = ref.watch(reviewsForUserProvider(myId));
+    final myReviews = asyncReviews.maybeWhen(
+      data: (xs) => xs,
+      orElse: () => ref
+          .watch(appControllerProvider.select((s) => s.reviews))
+          .where((r) => r.toUserId == myId || r.toUserId == 'me')
+          .toList(),
+    );
     final computedRating = myReviews.isEmpty
         ? 0.0
         : myReviews.map((r) => r.rating).reduce((a, b) => a + b) /
@@ -177,6 +187,30 @@ class ProfileScreen extends ConsumerWidget {
   }
 
   void _confirmDeleteAccount(BuildContext context, WidgetRef ref) {
+    Future<void> doDelete() async {
+      // Реальный вызов /api/profile/delete (только если PB подключён).
+      // На сервере хук помечает users.deleted_at, переводит активные
+      // open/accepted заказы в cancelled, чистит push_tokens и т.д.
+      final pb = ref.read(pocketbaseProvider);
+      if (pb != null && pb.authStore.isValid) {
+        try {
+          await http
+              .post(
+                Uri.parse('${pb.baseURL}/api/profile/delete'),
+                headers: {
+                  'Authorization': 'Bearer ${pb.authStore.token}',
+                  'Content-Type': 'application/json',
+                },
+              )
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {
+          // Даже при сетевой ошибке — продолжаем logout (UX-soft).
+          // Запрос можно повторить при следующем логине (есть аудит).
+        }
+      }
+      await ref.read(authRepositoryProvider).logout();
+    }
+
     showDialog<void>(
       context: context,
       barrierColor: Colors.black.withValues(alpha: 0.20),
@@ -224,12 +258,11 @@ class ProfileScreen extends ConsumerWidget {
                       label: 'Удалить',
                       background: AppColors.primary,
                       textColor: Colors.white,
-                      onTap: () {
-                        // TODO: реальное удаление аккаунта (Supabase RPC).
-                        // Пока имитируем выходом — данные локального mock-стейта
-                        // не сохранятся между запусками.
-                        ref.read(appControllerProvider.notifier).logout();
+                      onTap: () async {
+                        await doDelete();
+                        if (!dialogCtx.mounted) return;
                         Navigator.of(dialogCtx).pop();
+                        if (!context.mounted) return;
                         context.go('/onboarding');
                       },
                     ),
@@ -365,6 +398,15 @@ class _Avatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // PB возвращает аватар как URL (http://...), а image_picker — как
+    // локальный path. Раньше код всегда звал Image.file — для URL это
+    // даёт PathNotFoundException. Разделяем явно.
+    final path = photoPath;
+    final isUrl = path != null &&
+        (path.startsWith('http://') || path.startsWith('https://'));
+    final fallback = Center(
+      child: Icon(IconsaxPlusLinear.user, size: 64.r, color: AppColors.primary),
+    );
     return Container(
       width: 100.r,
       height: 100.r,
@@ -373,11 +415,19 @@ class _Avatar extends StatelessWidget {
         shape: BoxShape.circle,
       ),
       clipBehavior: Clip.antiAlias,
-      child: photoPath != null
-          ? Image.file(File(photoPath!), fit: BoxFit.cover)
-          : Center(
-              child: Icon(IconsaxPlusLinear.user, size: 64.r, color: AppColors.primary),
-            ),
+      child: path == null
+          ? fallback
+          : isUrl
+              ? Image.network(
+                  path,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => fallback,
+                )
+              : Image.file(
+                  File(path),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => fallback,
+                ),
     );
   }
 }

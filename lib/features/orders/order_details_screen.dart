@@ -20,7 +20,37 @@ import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
+import '../../data/remote/pocketbase_client.dart';
 import '../reviews/leave_review_screen.dart';
+
+/// Future-провайдер одного заказа по id. На моках `OrdersRepository.get`
+/// сам ищет заказ в локальном AppState, на live — делает запрос к PB.
+final orderByIdProvider =
+    FutureProvider.autoDispose.family<Order?, String>((ref, id) async {
+  return ref.read(ordersRepositoryProvider).get(id);
+});
+
+/// Проверяет, есть ли у текущего исполнителя pending-отклик на заказ.
+/// В live `order.responses` не наполняется маппером, поэтому без
+/// отдельного запроса кнопка «Откликнуться» дублировалась бы — даже
+/// если PB уже знает наш отклик. Используем
+/// `OrderResponsesRepository.pendingExecutorIds`.
+final _hasMyResponseProvider = FutureProvider.autoDispose
+    .family<bool, ({String orderId, String executorId})>((ref, args) async {
+  if (args.executorId.isEmpty || args.executorId == 'me') {
+    // На моках поле `responses` корректно показывает отклик локально —
+    // отдельный запрос не нужен.
+    return false;
+  }
+  try {
+    final ids = await ref
+        .read(orderResponsesRepositoryProvider)
+        .pendingExecutorIds(args.orderId);
+    return ids.contains(args.executorId);
+  } catch (_) {
+    return false;
+  }
+});
 
 class OrderDetailsScreen extends ConsumerWidget {
   const OrderDetailsScreen({super.key, required this.orderId, required this.mode});
@@ -30,15 +60,161 @@ class OrderDetailsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(appControllerProvider);
-    final all = [...state.myOrders, ...state.orders];
-    final order = all.firstWhere(
-      (o) => o.id == orderId,
-      orElse: () => state.myOrders.isNotEmpty ? state.myOrders.first : state.orders.first,
+    final asyncOrder = ref.watch(orderByIdProvider(orderId));
+    return asyncOrder.when(
+      data: (order) {
+        if (order == null) return _NotFoundScreen();
+        return _OrderDetailsBody(orderId: orderId, mode: mode, order: order);
+      },
+      loading: () => const _LoadingScreen(),
+      error: (_, _) => _LoadFailedScreen(),
     );
-    final isCustomer = order.customerId == 'me';
+  }
+}
+
+class _LoadingScreen extends StatelessWidget {
+  const _LoadingScreen();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Column(
+        children: [
+          Container(
+            color: AppColors.surface,
+            child: SafeArea(
+              bottom: false,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                  child: const AppBackButton(),
+                ),
+              ),
+            ),
+          ),
+          const Expanded(
+            child: Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _NotFoundScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Column(
+        children: [
+          Container(
+            color: AppColors.surface,
+            child: SafeArea(
+              bottom: false,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                  child: const AppBackButton(),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 32.w),
+                child: Text(
+                  'Заказ не найден',
+                  textAlign: TextAlign.center,
+                  style: AppText.h3(),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoadFailedScreen extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Column(
+        children: [
+          Container(
+            color: AppColors.surface,
+            child: SafeArea(
+              bottom: false,
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
+                  child: const AppBackButton(),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 32.w),
+                child: Text(
+                  'Не удалось загрузить заказ',
+                  textAlign: TextAlign.center,
+                  style: AppText.h3(),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _OrderDetailsBody extends ConsumerWidget {
+  const _OrderDetailsBody({
+    required this.orderId,
+    required this.mode,
+    required this.order,
+  });
+
+  final String orderId;
+  final String mode;
+  final Order order;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Реальный id текущего пользователя. На cold-start state.user
+    // восстанавливается из prefs асинхронно, поэтому полагаемся
+    // в первую очередь на PB authStore: токен валиден сразу.
+    // Без этого гарда `isCustomer` ошибочно становился `false` для
+    // заказчика, и ему показывались кнопки исполнителя.
+    final pb = ref.watch(pocketbaseProvider);
+    final pbUserId = pb?.authStore.record?.id;
+    final stateUserId = ref.watch(appControllerProvider.select((s) => s.user?.id));
+    final myId = pbUserId ?? stateUserId ?? 'me';
+    final isCustomer = order.customerId == myId;
     final isMine = isCustomer;
-    final hasMyResponse = order.responses.contains('me');
+    // В live `order.responses` может быть пуст (маппер не подгружает),
+    // поэтому дополнительно проверяем через async-провайдер ниже.
+    final hasMyResponseFromOrder = order.responses.contains(myId);
+    final hasMyResponseAsync = ref.watch(
+      _hasMyResponseProvider((orderId: order.id, executorId: myId)),
+    );
+    final hasMyResponse = hasMyResponseAsync.maybeWhen(
+      data: (v) => v,
+      orElse: () => hasMyResponseFromOrder,
+    );
 
     final isCompleted = order.status == OrderStatus.completed;
     final isCancelled = order.status == OrderStatus.cancelled;
@@ -117,14 +293,38 @@ class OrderDetailsScreen extends ConsumerWidget {
                         return ClipRRect(
                           borderRadius: BorderRadius.circular(12.r),
                           child: isUrl
-                              ? Image.network(path, width: 96.w, fit: BoxFit.cover)
-                              : Image.file(File(path), width: 96.w, fit: BoxFit.cover),
+                              ? Image.network(
+                                  path,
+                                  width: 96.w,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => Container(
+                                    width: 96.w,
+                                    color: AppColors.surfaceVariant,
+                                    child: Icon(
+                                      IconsaxPlusLinear.image,
+                                      color: AppColors.textTertiary,
+                                    ),
+                                  ),
+                                )
+                              : Image.file(
+                                  File(path),
+                                  width: 96.w,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (_, _, _) => Container(
+                                    width: 96.w,
+                                    color: AppColors.surfaceVariant,
+                                    child: Icon(
+                                      IconsaxPlusLinear.image,
+                                      color: AppColors.textTertiary,
+                                    ),
+                                  ),
+                                ),
                         );
                       },
                     ),
                   ),
                 ],
-                if (order.executorId != null && order.executorId != 'me' && isMine) ...[
+                if (order.executorId != null && order.executorId != myId && isMine) ...[
                   SizedBox(height: 16.h),
                   _FieldLabel('Исполнитель'),
                   SizedBox(height: 4.h),
@@ -141,7 +341,14 @@ class OrderDetailsScreen extends ConsumerWidget {
           ),
           // ── White sticky action bar ──
           _ActionBar(
-            children: _buildActions(context, ref, order, isMine, hasMyResponse),
+            children: _buildActions(
+              context,
+              ref,
+              order,
+              isMine,
+              hasMyResponse,
+              myId,
+            ),
           ),
         ],
       ),
@@ -155,10 +362,17 @@ class OrderDetailsScreen extends ConsumerWidget {
     }
   }
 
-  List<Widget> _buildActions(BuildContext context, WidgetRef ref, Order order, bool isMine, bool hasMyResponse) {
+  List<Widget> _buildActions(
+    BuildContext context,
+    WidgetRef ref,
+    Order order,
+    bool isMine,
+    bool hasMyResponse,
+    String myId,
+  ) {
     final reviews = ref.watch(appControllerProvider).reviews;
     final hasMyReview =
-        reviews.any((r) => r.orderId == order.id && r.fromUserId == 'me');
+        reviews.any((r) => r.orderId == order.id && r.fromUserId == myId);
     final widgets = <Widget>[];
 
     Future<void> markWorkDone() async {
@@ -167,6 +381,7 @@ class OrderDetailsScreen extends ConsumerWidget {
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
         ref.invalidate(feedOrdersProvider);
+        ref.invalidate(orderByIdProvider(order.id));
       } catch (_) {
         if (!context.mounted) return;
         AppToast.show(context, 'Ошибка. Попробуйте позже');
@@ -179,6 +394,7 @@ class OrderDetailsScreen extends ConsumerWidget {
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
         ref.invalidate(feedOrdersProvider);
+        ref.invalidate(orderByIdProvider(order.id));
       } catch (_) {
         if (!context.mounted) return;
         AppToast.show(context, 'Ошибка. Попробуйте позже');
@@ -193,6 +409,7 @@ class OrderDetailsScreen extends ConsumerWidget {
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
         ref.invalidate(feedOrdersProvider);
+        ref.invalidate(orderByIdProvider(order.id));
       } catch (_) {
         if (!context.mounted) return;
         AppToast.show(context, 'Ошибка. Попробуйте позже');
@@ -205,6 +422,10 @@ class OrderDetailsScreen extends ConsumerWidget {
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
         ref.invalidate(feedOrdersProvider);
+        ref.invalidate(orderByIdProvider(order.id));
+        ref.invalidate(
+          _hasMyResponseProvider((orderId: order.id, executorId: myId)),
+        );
         AppToast.show(context, 'Отклик отправлен');
       } catch (_) {
         if (!context.mounted) return;
@@ -226,7 +447,7 @@ class OrderDetailsScreen extends ConsumerWidget {
           break;
         case OrderStatus.accepted:
           // Заказчик подтверждает выполнение работы (= передал наличные).
-          widgets.add(PrimaryButton(
+          widgets.add(_AsyncPrimaryButton(
             label: 'Подтверждаю работу',
             onPressed: confirmWork,
           ));
@@ -253,16 +474,16 @@ class OrderDetailsScreen extends ConsumerWidget {
               label: 'Отклик отправлен',
             ));
           } else {
-            widgets.add(PrimaryButton(
+            widgets.add(_AsyncPrimaryButton(
               label: 'Откликнуться на заказ',
               onPressed: respond,
             ));
           }
           break;
         case OrderStatus.accepted:
-          if (order.executorId == 'me') {
+          if (order.executorId == myId) {
             // Исполнитель отмечает «Работа выполнена».
-            widgets.add(PrimaryButton(
+            widgets.add(_AsyncPrimaryButton(
               label: 'Работа выполнена',
               onPressed: markWorkDone,
             ));
@@ -275,9 +496,9 @@ class OrderDetailsScreen extends ConsumerWidget {
           }
           break;
         case OrderStatus.awaitingPayment:
-          if (order.executorId == 'me') {
+          if (order.executorId == myId) {
             // Заказчик подтвердил работу — исполнитель подтверждает получение оплаты.
-            widgets.add(PrimaryButton(
+            widgets.add(_AsyncPrimaryButton(
               label: 'Оплата получена',
               onPressed: confirmPaymentReceived,
             ));
@@ -736,9 +957,24 @@ class _PartyCard extends StatelessWidget {
                 clipBehavior: Clip.antiAlias,
                 child: user.photoPath != null
                     ? (user.photoPath!.startsWith('http')
-                        ? Image.network(user.photoPath!, fit: BoxFit.cover)
-                        : Image.file(File(user.photoPath!),
-                            fit: BoxFit.cover))
+                        ? Image.network(
+                            user.photoPath!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Icon(
+                              IconsaxPlusLinear.user,
+                              color: AppColors.primary,
+                              size: 32.r,
+                            ),
+                          )
+                        : Image.file(
+                            File(user.photoPath!),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, _, _) => Icon(
+                              IconsaxPlusLinear.user,
+                              color: AppColors.primary,
+                              size: 32.r,
+                            ),
+                          ))
                     : Icon(
                         IconsaxPlusLinear.user,
                         color: AppColors.primary,
@@ -793,6 +1029,39 @@ class _StatusBanner extends StatelessWidget {
         textAlign: TextAlign.center,
         style: AppText.body(color: textColor, weight: FontWeight.w500),
       ),
+    );
+  }
+}
+
+/// PrimaryButton, который сам блокирует себя на время `onPressed`-future.
+/// Защищает от двойного тапа в момент отправки запроса в репозиторий.
+class _AsyncPrimaryButton extends StatefulWidget {
+  const _AsyncPrimaryButton({required this.label, required this.onPressed});
+  final String label;
+  final Future<void> Function() onPressed;
+
+  @override
+  State<_AsyncPrimaryButton> createState() => _AsyncPrimaryButtonState();
+}
+
+class _AsyncPrimaryButtonState extends State<_AsyncPrimaryButton> {
+  bool _busy = false;
+
+  Future<void> _run() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onPressed();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PrimaryButton(
+      label: widget.label,
+      onPressed: _busy ? null : _run,
     );
   }
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -26,15 +27,24 @@ class UsersRepository {
   }) async {
     final pb = _pb;
     if (pb == null) return null;
-    final resp = await http.post(
-      Uri.parse('${pb.baseURL}/api/users/$userId/contact-phone'),
-      headers: {
-        if (pb.authStore.token.isNotEmpty)
-          'Authorization': pb.authStore.token,
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({'order_id': orderId}),
-    );
+    final http.Response resp;
+    try {
+      resp = await http
+          .post(
+            Uri.parse('${pb.baseURL}/api/users/$userId/contact-phone'),
+            headers: {
+              if (pb.authStore.token.isNotEmpty)
+                'Authorization': 'Bearer ${pb.authStore.token}',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({'order_id': orderId}),
+          )
+          .timeout(const Duration(seconds: 8));
+    } on TimeoutException {
+      return null;
+    } catch (_) {
+      return null;
+    }
     if (resp.statusCode != 200) return null;
     try {
       final j = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -79,8 +89,13 @@ class ContactPhoneArgs {
 /// Запрашивает телефон контрагента (исполнитель ↔ заказчик) для заданного
 /// заказа через `POST /api/users/:userId/contact-phone`. Возвращает `null`
 /// если PB не подключён (тогда экран показывает mock-phone).
-final contactPhoneProvider =
-    FutureProvider.family<String?, ContactPhoneArgs>((ref, args) async {
+///
+/// `autoDispose` обязателен: без него кэш family-провайдера растёт
+/// неограниченно — на каждую пару (userId, orderId) висит запись, пока
+/// контейнер жив. autoDispose сбросит запись, когда последний слушатель
+/// уйдёт с экрана.
+final contactPhoneProvider = FutureProvider.autoDispose
+    .family<String?, ContactPhoneArgs>((ref, args) async {
   final repo = ref.read(usersRepositoryProvider);
   if (!repo.isLive) return null;
   final res = await repo.contactPhone(

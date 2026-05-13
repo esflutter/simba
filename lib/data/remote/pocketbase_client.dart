@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
 import 'package:pocketbase/pocketbase.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -22,6 +23,17 @@ final pocketbaseProvider = Provider<PocketBase?>(
 /// Ключ, под которым AsyncAuthStore сохраняет JSON {token, model} в prefs.
 const String kPbAuthPrefsKey = 'pb_auth';
 
+/// Один общий `http.Client` на всё приложение — переиспользует TCP-соединение
+/// и TLS-сессию между запросами. SDK 0.22 не имеет параметра `reuseHTTPClient`,
+/// но принимает кастомный `httpClientFactory`: возвращаем одну и ту же
+/// инстанцию — эффект тот же.
+final http.Client _sharedHttpClient = http.Client();
+
+/// Тот же общий клиент, экспортированный для других репозиториев (DaData,
+/// auth, users) — чтобы избежать создания собственного `http.Client` на
+/// каждый репозиторий и тоже переиспользовать keep-alive соединение.
+http.Client get sharedHttpClient => _sharedHttpClient;
+
 /// Фабрика клиента: создаётся один раз в `main()` после `SharedPreferences.getInstance()`.
 /// Возвращает null, если URL не задан (моки).
 PocketBase? buildPocketBase(SharedPreferences prefs) {
@@ -31,7 +43,11 @@ PocketBase? buildPocketBase(SharedPreferences prefs) {
     initial: prefs.getString(kPbAuthPrefsKey),
     clear: () async => prefs.remove(kPbAuthPrefsKey),
   );
-  return PocketBase(Env.pocketbaseUrl, authStore: store);
+  return PocketBase(
+    Env.pocketbaseUrl,
+    authStore: store,
+    httpClientFactory: () => _sharedHttpClient,
+  );
 }
 
 /// Проверка доступности бэкенда — используем для feature-toggle между

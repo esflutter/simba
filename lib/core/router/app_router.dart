@@ -1,11 +1,18 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
+import 'package:iconsax_plus/iconsax_plus.dart';
 
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../theme/app_colors.dart';
+import '../theme/app_text_styles.dart';
+import '../widgets/primary_button.dart';
 import '../../features/auth/phone_screen.dart';
 import '../../features/auth/profile_setup_screen.dart';
 import '../../features/auth/role_picker_screen.dart';
+import '../../features/auth/sim_push_waiting_screen.dart';
 import '../../features/auth/sms_code_screen.dart';
 import '../../features/city/city_picker_screen.dart';
 import '../../features/create_order/create_order_screen.dart';
@@ -36,6 +43,21 @@ String? nextOnboardingRoute(AppState state) {
   return null;
 }
 
+/// Куда направить юзера после успешной авторизации.
+/// Новый юзер (только что зарегистрирован) → на profile-setup независимо от
+/// прочего состояния — нужно собрать имя/город перед первым входом.
+/// Существующий — по стандартному onboarding (city / home), который решит
+/// `nextOnboardingRoute` исходя из заполненности профиля.
+///
+/// Используется обоими auth-экранами ([sms_code_screen], [sim_push_waiting_screen]),
+/// чтобы логика "куда дальше" не дублировалась. Принимает [WidgetRef] —
+/// тип ConsumerState/ConsumerWidget, под которым этот хелпер вызывается.
+String postAuthRoute(WidgetRef ref, {required bool isNewUser}) {
+  if (isNewUser) return '/auth/profile';
+  final state = ref.read(appControllerProvider);
+  return nextOnboardingRoute(state) ?? '/home/my';
+}
+
 GoRouter _buildRouter(Ref ref) {
   return GoRouter(
     initialLocation: '/splash',
@@ -45,8 +67,18 @@ GoRouter _buildRouter(Ref ref) {
       GoRoute(path: '/city', builder: (_, _) => const CityPickerScreen()),
       GoRoute(path: '/auth/phone', builder: (_, _) => const PhoneScreen()),
       GoRoute(
+        path: '/auth/sms-waiting',
+        builder: (_, s) => SimPushWaitingScreen(
+          sessionId: s.uri.queryParameters['session_id'] ?? '',
+          phone: s.uri.queryParameters['phone'] ?? '',
+        ),
+      ),
+      GoRoute(
         path: '/auth/sms',
-        builder: (_, s) => SmsCodeScreen(phone: s.uri.queryParameters['phone'] ?? ''),
+        builder: (_, s) => SmsCodeScreen(
+          phone: s.uri.queryParameters['phone'] ?? '',
+          sessionId: s.uri.queryParameters['session_id'],
+        ),
       ),
       GoRoute(path: '/auth/profile', builder: (_, _) => const ProfileSetupScreen()),
       GoRoute(path: '/auth/role', builder: (_, _) => const RolePickerScreen()),
@@ -102,7 +134,55 @@ GoRouter _buildRouter(Ref ref) {
       if (isGuarded && next != null) return next;
       return null;
     },
+    // Fallback для нераспознанных маршрутов (например, deeplink на /order/INVALID_ID
+    // вне нашей схемы, или старые ссылки после рефакторинга). Показываем
+    // дружелюбную «404» с кнопкой возврата вместо системного Flutter-screen.
+    errorBuilder: (context, st) => _NotFoundPage(uri: st.uri.toString()),
   );
+}
+
+class _NotFoundPage extends StatelessWidget {
+  const _NotFoundPage({required this.uri});
+  final String uri;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16.w, 24.h, 16.w, 16.h),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Icon(IconsaxPlusLinear.danger,
+                  size: 80.r, color: AppColors.textTertiary),
+              SizedBox(height: 16.h),
+              Text(
+                'Страница не найдена',
+                style: AppText.h2().copyWith(letterSpacing: -0.10),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 9.h),
+              Text(
+                'Ссылка устарела или ведёт в недоступный раздел.',
+                style: AppText.body().copyWith(
+                  color: Colors.black.withValues(alpha: 0.60),
+                  height: 1.38,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 28.h),
+              PrimaryButton(
+                label: 'На главный экран',
+                onPressed: () => context.go('/home/my'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 extension AppRoles on UserRole {
