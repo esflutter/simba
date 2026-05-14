@@ -352,13 +352,23 @@ class _OrderDetailsBody extends ConsumerWidget {
                   SizedBox(height: 16.h),
                   _FieldLabel('Исполнитель'),
                   SizedBox(height: 4.h),
-                  _PartyCard(userId: order.executorId!, orderId: order.id),
+                  _PartyCard(
+                    userId: order.executorId!,
+                    orderId: order.id,
+                    nameFromOrder: order.executorName,
+                    photoUrlFromOrder: order.executorPhotoUrl,
+                  ),
                 ],
                 if (!isMine) ...[
                   SizedBox(height: 16.h),
                   _FieldLabel('Заказчик'),
                   SizedBox(height: 4.h),
-                  _PartyCard(userId: order.customerId, orderId: order.id),
+                  _PartyCard(
+                    userId: order.customerId,
+                    orderId: order.id,
+                    nameFromOrder: order.customerName,
+                    photoUrlFromOrder: order.customerPhotoUrl,
+                  ),
                 ],
               ],
             ),
@@ -491,17 +501,19 @@ class _OrderDetailsBody extends ConsumerWidget {
           ));
           break;
         case OrderStatus.accepted:
-          // Заказчик подтверждает выполнение работы (= передал наличные).
+          // Пока исполнитель не нажал «Работа выполнена» — заказчику нечего
+          // подтверждать. Раньше кнопка «Подтверждаю работу» показывалась
+          // сразу на accepted, и заказчик мог отправить запрос мимо FSM
+          // (бэк бы вернул 400 «work_confirm_before_work_done», но UX
+          // путался — кнопка есть, а нажать её правильно нельзя).
+          break;
+        case OrderStatus.awaitingPayment:
+          // Исполнитель уже отметил «Работа выполнена» — теперь очередь
+          // заказчика подтвердить выполнение и передать наличные.
           widgets.add(_AsyncPrimaryButton(
             label: 'Подтверждаю работу',
             onPressed: confirmWork,
           ));
-          break;
-        case OrderStatus.awaitingPayment:
-          // Исполнитель ещё не подтвердил получение оплаты — пока заказ
-          // не перейдёт в `completed`, отзывы оставлять нельзя (бэк всё равно
-          // отклонит). Для заказчика на этом шаге UI — пустой action-bar:
-          // он уже нажал «Подтверждаю работу», ждёт исполнителя.
           break;
         case OrderStatus.completed:
           if (!hasMyReview) {
@@ -965,20 +977,31 @@ class _AddressBlock extends StatelessWidget {
   Future<void> _openMap() async {
     final lat = location.latitude;
     final lng = location.longitude;
-    // Цепочка попыток: сначала маршрут от моего местоположения,
-    // если ничего не открылось — просто координаты места.
-    final attempts = <Uri>[
-      Uri.parse('https://www.google.com/maps/dir/?api=1&destination=$lat,$lng'),
-      Uri.parse('geo:$lat,$lng?q=$lat,$lng'),
-    ];
-    for (final uri in attempts) {
-      try {
-        final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-        if (ok) return;
-      } catch (_) {
-        // переходим к следующему варианту
-      }
-    }
+    // Отдаём координаты системе и она показывает chooser среди установленных
+    // приложений карт (Яндекс.Карты, 2ГИС, Google Maps, Apple Maps и т.п.) —
+    // пользователь сам выбирает, чем строить маршрут. Не навязываем порядок:
+    // у россиян чаще стоит Яндекс/2ГИС, у других — Google Maps, и каждому
+    // удобнее свой.
+    //   - iOS: maps:// откроет Apple Maps; если у юзера ещё стоит Яндекс/2ГИС,
+    //          они тоже зарегистрированы как обработчики и попадут в chooser.
+    //   - Android: geo: показывает все приложения, объявившие <intent-filter>
+    //              на геоданные — это и есть нативный chooser.
+    final encodedAddr = Uri.encodeComponent(address);
+    final uri = Platform.isIOS
+        ? Uri.parse('maps://?daddr=$lat,$lng&q=$encodedAddr')
+        : Uri.parse('geo:$lat,$lng?q=$lat,$lng($encodedAddr)');
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (ok) return;
+    } catch (_) {}
+    // Жёсткий fallback на случай, если приложений карт нет вообще —
+    // открываем веб-Яндекс в браузере.
+    try {
+      await launchUrl(
+        Uri.parse('https://yandex.ru/maps/?rtext=~$lat,$lng&rtt=auto'),
+        mode: LaunchMode.externalApplication,
+      );
+    } catch (_) {}
   }
 
   @override
@@ -1021,7 +1044,11 @@ class _AddressBlock extends StatelessWidget {
                   fontWeight: FontWeight.w500,
                   height: 1.60,
                 ),
-                maxLines: 1,
+                // Раньше было maxLines: 1 — длинные адреса с корпусом/строением
+                // обрезались, и исполнитель не мог дочитать. Квартиры/подъезды
+                // в SimbA не хранятся, но базовый адрес с «д. 12 стр. 3» уже
+                // не влезал на 360px. 2 строки покрывают 99% реальных адресов.
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
               ),
             ),
@@ -1098,13 +1125,28 @@ class _Field extends StatelessWidget {
 }
 
 class _PartyCard extends StatelessWidget {
-  const _PartyCard({required this.userId, required this.orderId});
+  const _PartyCard({
+    required this.userId,
+    required this.orderId,
+    this.nameFromOrder,
+    this.photoUrlFromOrder,
+  });
   final String userId;
   final String orderId;
+  // Имя и фото контрагента, пришедшие из expand'а Order (PB live-mode).
+  // userById на проде возвращал бы demoCurrentUser ("Иван Иванов") для любого
+  // незнакомого id — теперь сначала берём данные из самого заказа, а в
+  // mock-окружении fall-back на справочник пользователей.
+  final String? nameFromOrder;
+  final String? photoUrlFromOrder;
 
   @override
   Widget build(BuildContext context) {
-    final user = userById(userId);
+    final mockUser = userById(userId);
+    final name = (nameFromOrder != null && nameFromOrder!.isNotEmpty)
+        ? nameFromOrder!
+        : (mockUser?.name ?? 'Пользователь');
+    final photoPath = photoUrlFromOrder ?? mockUser?.photoPath;
     return InkWell(
       onTap: () => context.push('/order/$orderId/user/$userId'),
       child: SizedBox(
@@ -1121,10 +1163,10 @@ class _PartyCard extends StatelessWidget {
                   shape: BoxShape.circle,
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: user.photoPath != null
-                    ? (user.photoPath!.startsWith('http')
+                child: photoPath != null
+                    ? (photoPath.startsWith('http')
                         ? Image.network(
-                            user.photoPath!,
+                            photoPath,
                             fit: BoxFit.cover,
                             errorBuilder: (_, _, _) => Icon(
                               IconsaxPlusLinear.user,
@@ -1133,7 +1175,7 @@ class _PartyCard extends StatelessWidget {
                             ),
                           )
                         : Image.file(
-                            File(user.photoPath!),
+                            File(photoPath),
                             fit: BoxFit.cover,
                             errorBuilder: (_, _, _) => Icon(
                               IconsaxPlusLinear.user,
@@ -1150,7 +1192,7 @@ class _PartyCard extends StatelessWidget {
               SizedBox(width: 16.w),
               Expanded(
                 child: Text(
-                  user.name,
+                  name,
                   style: TextStyle(
                     color: Colors.black,
                     fontSize: 16.sp,

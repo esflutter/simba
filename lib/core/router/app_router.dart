@@ -13,7 +13,6 @@ import '../widgets/primary_button.dart';
 import '../../features/auth/phone_screen.dart';
 import '../../features/auth/profile_setup_screen.dart';
 import '../../features/auth/role_picker_screen.dart';
-import '../../features/auth/sim_push_waiting_screen.dart';
 import '../../features/auth/sms_code_screen.dart';
 import '../../features/city/city_picker_screen.dart';
 import '../../features/create_order/create_order_screen.dart';
@@ -29,7 +28,6 @@ import '../../features/orders/search_screen.dart';
 import '../../features/orders/user_profile_screen.dart';
 import '../../features/profile/edit_profile_screen.dart';
 import '../../features/profile/history_screen.dart';
-import '../../features/profile/support_screen.dart';
 import '../../features/reviews/reviews_screen.dart';
 
 final routerProvider = Provider<GoRouter>((ref) => _buildRouter(ref));
@@ -61,9 +59,9 @@ String? nextOnboardingRoute(AppState state) {
 /// Существующий — по стандартному onboarding (city / home), который решит
 /// `nextOnboardingRoute` исходя из заполненности профиля.
 ///
-/// Используется обоими auth-экранами ([sms_code_screen], [sim_push_waiting_screen]),
-/// чтобы логика "куда дальше" не дублировалась. Принимает [WidgetRef] —
-/// тип ConsumerState/ConsumerWidget, под которым этот хелпер вызывается.
+/// Используется auth-экраном ([sms_code_screen]), чтобы логика "куда дальше"
+/// не дублировалась. Принимает [WidgetRef] — тип ConsumerState/ConsumerWidget,
+/// под которым этот хелпер вызывается.
 String postAuthRoute(WidgetRef ref, {required bool isNewUser}) {
   if (isNewUser) return '/auth/profile';
   final state = ref.read(appControllerProvider);
@@ -78,13 +76,6 @@ GoRouter _buildRouter(Ref ref) {
       GoRoute(path: '/onboarding', builder: (_, _) => const OnboardingScreen()),
       GoRoute(path: '/city', builder: (_, _) => const CityPickerScreen()),
       GoRoute(path: '/auth/phone', builder: (_, _) => const PhoneScreen()),
-      GoRoute(
-        path: '/auth/sms-waiting',
-        builder: (_, s) => SimPushWaitingScreen(
-          sessionId: s.uri.queryParameters['session_id'] ?? '',
-          phone: s.uri.queryParameters['phone'] ?? '',
-        ),
-      ),
       GoRoute(
         path: '/auth/sms',
         builder: (_, s) => SmsCodeScreen(
@@ -135,7 +126,6 @@ GoRouter _buildRouter(Ref ref) {
       GoRoute(path: '/profile/edit', builder: (_, _) => const EditProfileScreen()),
       GoRoute(path: '/profile/history', builder: (_, _) => const HistoryScreen()),
       GoRoute(path: '/profile/reviews', builder: (_, _) => const ReviewsScreen()),
-      GoRoute(path: '/profile/support', builder: (_, _) => const SupportScreen()),
     ],
     redirect: (context, st) {
       final loc = st.matchedLocation;
@@ -151,12 +141,6 @@ GoRouter _buildRouter(Ref ref) {
       if (loc == '/auth/sms') {
         final phone = st.uri.queryParameters['phone'];
         if (phone == null || phone.isEmpty) return '/auth/phone';
-      } else if (loc == '/auth/sms-waiting') {
-        final sid = st.uri.queryParameters['session_id'];
-        final phone = st.uri.queryParameters['phone'];
-        if (sid == null || sid.isEmpty || phone == null || phone.isEmpty) {
-          return '/auth/phone';
-        }
       } else if (loc == '/auth/profile') {
         final pb = ref.read(pocketbaseProvider);
         final pbValid = pb != null && pb.authStore.isValid;

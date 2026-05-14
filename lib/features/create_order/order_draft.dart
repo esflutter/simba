@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../core/utils/date_time_formatters.dart' show kPriceMax;
 import '../../data/local/preferences_store.dart';
 
 @immutable
@@ -132,7 +133,7 @@ class OrderDraft {
       address.trim().isNotEmpty &&
       location != null &&
       priceRub >= 100 &&
-      priceRub <= 100000;
+      priceRub <= kPriceMax;
 
   OrderDraft copyWith({
     String? categoryId,
@@ -154,13 +155,14 @@ class OrderDraft {
     bool clearScheduled = false,
     bool clearForOther = false,
     bool clearAddressMeta = false,
+    bool clearLocation = false,
   }) =>
       OrderDraft(
         categoryId: categoryId ?? this.categoryId,
         title: title ?? this.title,
         description: description ?? this.description,
         address: address ?? this.address,
-        location: location ?? this.location,
+        location: clearLocation ? null : location ?? this.location,
         priceRub: priceRub ?? this.priceRub,
         scheduledAt: clearScheduled ? null : scheduledAt ?? this.scheduledAt,
         asap: asap ?? this.asap,
@@ -256,6 +258,20 @@ class OrderDraftController extends Notifier<OrderDraft> {
   void reset() {
     state = const OrderDraft();
     _prefs?.clearDraft();
+  }
+
+  /// Сброс адресных полей draft'а при смене города. Категория, название,
+  /// описание, цена, дата — остаются. Раньше адрес/координаты/FIAS висели
+  /// от старого города, и заказчик упирался в гард «адрес не в вашем городе»
+  /// только на summary после заполнения формы заново.
+  void clearAddress() {
+    state = state.copyWith(
+      address: '',
+      location: null,
+      clearLocation: true,
+      clearAddressMeta: true,
+    );
+    _persist(state);
   }
 }
 

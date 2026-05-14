@@ -385,6 +385,14 @@ class OrdersRepository {
     try {
       final lat = (m['lat'] as num?)?.toDouble() ?? 0;
       final lng = (m['lng'] as num?)?.toDouble() ?? 0;
+      // (0,0) — заведомо битая запись. Лента/карта показали бы маркер
+      // в Гвинейском заливе, что хуже чем «заказ не отобразился вообще».
+      // Реальный заказ из РФ имеет lat≈41..82 и lng≈19..170 — нулевые
+      // координаты сюда не попадают по бизнесу.
+      if (lat == 0 && lng == 0) {
+        debugPrint('[orders_repository] feed item ${m['id']} has 0/0 coords — skipping');
+        return null;
+      }
       final id = m['id'] as String;
       // Бэк-роут `/api/orders/feed` возвращает массив имён файлов в поле
       // `photos`, но без collectionId. Собираем canonical-URL через helper

@@ -11,24 +11,30 @@ import 'core/theme/app_theme.dart';
 import 'data/local/preferences_store.dart';
 import 'data/remote/pocketbase_client.dart';
 
+/// Единое описание стиля системных баров. Раньше тот же список параметров
+/// был продублирован в `main()` (через `SystemChrome.setSystemUIOverlayStyle`)
+/// и в `AnnotatedRegion` глобального билдера — любые изменения требовали
+/// править оба места. Теперь источник один.
+const _kSystemBarStyle = SystemUiOverlayStyle(
+  statusBarColor: Colors.transparent,
+  statusBarIconBrightness: Brightness.dark,
+  statusBarBrightness: Brightness.light,
+  systemNavigationBarColor: Color(0xFFF5F5F5),
+  systemNavigationBarDividerColor: Color(0xFFF5F5F5),
+  systemNavigationBarIconBrightness: Brightness.dark,
+  // На Android 10+ ОС может рисовать полупрозрачный «контрастный» оверлей
+  // поверх нижней панели — на цветных скринах это выглядит как синеватый
+  // оттенок системных кнопок. Отключаем.
+  systemNavigationBarContrastEnforced: false,
+  systemStatusBarContrastEnforced: false,
+);
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-    statusBarBrightness: Brightness.light,
-    systemNavigationBarColor: Color(0xFFF5F5F5),
-    systemNavigationBarDividerColor: Color(0xFFF5F5F5),
-    systemNavigationBarIconBrightness: Brightness.dark,
-    // На Android 10+ ОС может рисовать полупрозрачный «контрастный»
-    // оверлей поверх нижней панели — на цветных скринах это выглядит
-    // как синеватый оттенок системных кнопок. Отключаем.
-    systemNavigationBarContrastEnforced: false,
-    systemStatusBarContrastEnforced: false,
-  ));
+  SystemChrome.setSystemUIOverlayStyle(_kSystemBarStyle);
   final prefs = await SharedPreferences.getInstance();
   // В debug-режиме очищаем сохранённое состояние при каждом hot restart /
   // cold start, чтобы поток splash → онбординг прогонялся целиком.
@@ -71,16 +77,7 @@ class SimbaApp extends ConsumerWidget {
         // Глобальный AnnotatedRegion удерживает стиль системных баров —
         // некоторые плагины/модалки/переходы могут его сбрасывать.
         return AnnotatedRegion<SystemUiOverlayStyle>(
-          value: const SystemUiOverlayStyle(
-            statusBarColor: Colors.transparent,
-            statusBarIconBrightness: Brightness.dark,
-            statusBarBrightness: Brightness.light,
-            systemNavigationBarColor: Color(0xFFF5F5F5),
-            systemNavigationBarDividerColor: Color(0xFFF5F5F5),
-            systemNavigationBarIconBrightness: Brightness.dark,
-            systemNavigationBarContrastEnforced: false,
-            systemStatusBarContrastEnforced: false,
-          ),
+          value: _kSystemBarStyle,
           child: MaterialApp.router(
             title: 'SimbA',
             debugShowCheckedModeBanner: false,

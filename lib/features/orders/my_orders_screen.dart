@@ -14,8 +14,15 @@ import 'order_card.dart';
 class MyOrdersScreen extends ConsumerWidget {
   const MyOrdersScreen({super.key});
 
-  String _categoryName(String id) =>
-      MockData.categories.firstWhere((c) => c.id == id, orElse: () => MockData.categories.last).name;
+  String _categoryName(Order o) {
+    if (o.categoryName != null && o.categoryName!.isNotEmpty) {
+      return o.categoryName!;
+    }
+    return MockData.categories
+        .firstWhere((c) => c.id == o.categoryId,
+            orElse: () => MockData.categories.last)
+        .name;
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -107,7 +114,7 @@ class MyOrdersScreen extends ConsumerWidget {
                         final o = orders[i];
                         return OrderCard(
                           order: o,
-                          categoryName: _categoryName(o.categoryId),
+                          categoryName: _categoryName(o),
                           onTap: () =>
                               context.push('/order/${o.id}?mode=mine'),
                         );

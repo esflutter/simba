@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:pocketbase/pocketbase.dart';
 
+import '../mock/app_state.dart';
+import '../models/models.dart';
 import 'pocketbase_client.dart';
 
 /// Кастомные эндпоинты по пользователям, которых нет в стандартном
@@ -73,6 +75,46 @@ class UsersRepository {
       return null;
     }
   }
+
+  /// Публичные поля юзера: имя, фото, рейтинги, hasTools/hasTransport.
+  /// Используется на экране чужого профиля (вход с детали заказа или из
+  /// карточки отклика). На моке возвращает запись из `userById`.
+  Future<AppUser?> publicProfile(String userId) async {
+    final pb = _pb;
+    if (pb == null) return null;
+    try {
+      final r = await pb
+          .collection('users')
+          .getOne(userId)
+          .timeout(const Duration(seconds: 10));
+      final photoRaw = r.get<dynamic>('photo');
+      String? photoUrl;
+      if (photoRaw is String && photoRaw.isNotEmpty) {
+        photoUrl = pb.files.getUrl(r, photoRaw).toString();
+      } else if (photoRaw is List && photoRaw.isNotEmpty) {
+        final first = photoRaw.first;
+        if (first is String && first.isNotEmpty) {
+          photoUrl = pb.files.getUrl(r, first).toString();
+        }
+      }
+      return AppUser(
+        id: r.id,
+        name: r.getStringValue('name'),
+        phone: '', // публичный профиль не возвращает телефон — он по contact-phone
+        photoPath: photoUrl,
+        rating: r.getDoubleValue('rating_as_executor'),
+        reviewsCount: r.getIntValue('reviews_count_as_executor'),
+        ratingAsCustomer: r.getDoubleValue('rating_as_customer'),
+        reviewsCountAsCustomer: r.getIntValue('reviews_count_as_customer'),
+        ratingAsExecutor: r.getDoubleValue('rating_as_executor'),
+        reviewsCountAsExecutor: r.getIntValue('reviews_count_as_executor'),
+        hasTools: r.getBoolValue('has_tools'),
+        hasTransport: r.getBoolValue('has_transport'),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 class ContactPhone {
@@ -118,4 +160,15 @@ final contactPhoneProvider = FutureProvider.autoDispose
     orderId: args.orderId,
   );
   return res?.phone;
+});
+
+/// Публичные поля пользователя по id (имя, фото, рейтинги, has_tools/has_transport).
+/// Live: один HTTP-запрос к коллекции `users`. Mock: `userById` (может вернуть null).
+/// Без этого провайдера экран чужого профиля валился в NPE, потому что
+/// `userById(<PB-id>)` теперь возвращает null для неизвестных id.
+final publicUserProvider = FutureProvider.autoDispose
+    .family<AppUser?, String>((ref, userId) async {
+  final repo = ref.read(usersRepositoryProvider);
+  if (!repo.isLive) return userById(userId);
+  return repo.publicProfile(userId);
 });

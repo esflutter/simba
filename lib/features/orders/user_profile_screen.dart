@@ -29,7 +29,6 @@ class UserProfileScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(appControllerProvider);
-    final user = userById(userId);
     // Отзывы берём из репозитория (live → PB, иначе мок-fallback внутри
     // провайдера). Раньше код читал `state.reviews` напрямую — в live этот
     // список всегда пуст, поэтому отзывы на профиле не отображались.
@@ -44,6 +43,42 @@ class UserProfileScreen extends ConsumerWidget {
         : [...state.myOrders, ...state.orders]
             .cast<Order?>()
             .firstWhere((o) => o?.id == orderId, orElse: () => null);
+    // Имя/фото берём в первую очередь из expand'а Order (PB live-mode), и
+    // только fall-back на справочник моков. До фикса userById возвращал
+    // demoCurrentUser («Иван Иванов») для любого незнакомого PB-id, что в
+    // проде сводило профиль контрагента к одной и той же мок-карточке.
+    final nameFromOrder = order == null
+        ? null
+        : (order.customerId == userId
+            ? order.customerName
+            : order.executorId == userId
+                ? order.executorName
+                : null);
+    final photoFromOrder = order == null
+        ? null
+        : (order.customerId == userId
+            ? order.customerPhotoUrl
+            : order.executorId == userId
+                ? order.executorPhotoUrl
+                : null);
+    // Тянем публичный профиль из PB: имя, фото, рейтинги, has_tools/has_transport.
+    // На моке провайдер вернёт `userById(userId)` (или null для неизвестного id).
+    final asyncPublic = ref.watch(publicUserProvider(userId));
+    final publicUser = asyncPublic.maybeWhen(data: (u) => u, orElse: () => null);
+    final mockUser = userById(userId);
+    final user = publicUser ??
+        mockUser ??
+        AppUser(
+          id: userId,
+          name: nameFromOrder ?? 'Пользователь',
+          phone: '',
+          photoPath: photoFromOrder,
+        );
+    // Если есть данные из Order — они побеждают (свежие из expand'а).
+    final displayName = (nameFromOrder != null && nameFromOrder.isNotEmpty)
+        ? nameFromOrder
+        : user.name;
+    final displayPhoto = photoFromOrder ?? user.photoPath;
     final isPendingCandidate = order != null &&
         order.status == OrderStatus.open &&
         order.responses.contains(userId);
@@ -101,10 +136,10 @@ class UserProfileScreen extends ConsumerWidget {
                             shape: BoxShape.circle,
                           ),
                           clipBehavior: Clip.antiAlias,
-                          child: user.photoPath != null
-                              ? (user.photoPath!.startsWith('http')
+                          child: displayPhoto != null
+                              ? (displayPhoto.startsWith('http')
                                   ? Image.network(
-                                      user.photoPath!,
+                                      displayPhoto,
                                       fit: BoxFit.cover,
                                       errorBuilder: (_, _, _) => Icon(
                                         IconsaxPlusLinear.user,
@@ -113,7 +148,7 @@ class UserProfileScreen extends ConsumerWidget {
                                       ),
                                     )
                                   : Image.file(
-                                      File(user.photoPath!),
+                                      File(displayPhoto),
                                       fit: BoxFit.cover,
                                       errorBuilder: (_, _, _) => Icon(
                                         IconsaxPlusLinear.user,
@@ -137,7 +172,7 @@ class UserProfileScreen extends ConsumerWidget {
                                 children: [
                                   Expanded(
                                     child: Text(
-                                      user.name,
+                                      displayName,
                                       style: TextStyle(
                                         color: Colors.black,
                                         fontSize: 20.sp,
@@ -761,7 +796,12 @@ class _ReviewItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // PB-id, отсутствующий в локальном моке, → null. Раньше fallback был
+    // на demoCurrentUser («Иван Иванов»), и в live-режиме все авторы
+    // отзывов отображались как один и тот же мок-юзер.
     final author = userById(review.fromUserId);
+    final authorName = author?.name ?? 'Пользователь';
+    final authorPhoto = author?.photoPath;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -775,10 +815,10 @@ class _ReviewItem extends StatelessWidget {
                 shape: BoxShape.circle,
               ),
               clipBehavior: Clip.antiAlias,
-              child: author.photoPath != null
-                  ? (author.photoPath!.startsWith('http')
+              child: authorPhoto != null
+                  ? (authorPhoto.startsWith('http')
                       ? Image.network(
-                          author.photoPath!,
+                          authorPhoto,
                           fit: BoxFit.cover,
                           errorBuilder: (_, _, _) => Icon(
                             IconsaxPlusLinear.user,
@@ -787,7 +827,7 @@ class _ReviewItem extends StatelessWidget {
                           ),
                         )
                       : Image.file(
-                          File(author.photoPath!),
+                          File(authorPhoto),
                           fit: BoxFit.cover,
                           errorBuilder: (_, _, _) => Icon(
                             IconsaxPlusLinear.user,
@@ -804,7 +844,7 @@ class _ReviewItem extends StatelessWidget {
             SizedBox(width: 12.w),
             Expanded(
               child: Text(
-                author.name,
+                authorName,
                 style: TextStyle(
                   color: Colors.black,
                   fontSize: 15.sp,

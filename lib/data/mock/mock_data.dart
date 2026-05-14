@@ -396,7 +396,7 @@ class MockData {
         Review(
           id: 'r7', fromUserId: 'u1', toUserId: 'me', orderId: 'm3',
           rating: 5, comment: 'Хороший мастер, рекомендую.',
-          tags: const ['Профессионал'],
+          tags: const ['Опытный'],
           createdAt: DateTime.now().subtract(const Duration(days: 22)),
         ),
         Review(
@@ -408,7 +408,7 @@ class MockData {
         Review(
           id: 'r9', fromUserId: 'u3', toUserId: 'me', orderId: 'm3',
           rating: 5, comment: 'Всё отлично, советую всем!',
-          tags: const ['Профессионал', 'Пунктуальный'],
+          tags: const ['Опытный', 'Пунктуальный'],
           createdAt: DateTime.now().subtract(const Duration(days: 31)),
         ),
         Review(
@@ -426,7 +426,7 @@ class MockData {
         Review(
           id: 'r12', fromUserId: 'u2', toUserId: 'me', orderId: 'm3',
           rating: 5, comment: 'Профи. Спасибо за работу.',
-          tags: const ['Профессионал'],
+          tags: const ['Опытный'],
           createdAt: DateTime.now().subtract(const Duration(days: 48)),
         ),
         Review(
@@ -444,7 +444,7 @@ class MockData {
         Review(
           id: 'r15', fromUserId: 'u1', toUserId: 'me', orderId: 'm3',
           rating: 5, comment: 'Замечательно, буду обращаться ещё.',
-          tags: const ['Профессионал', 'Надёжный'],
+          tags: const ['Опытный', 'Надёжный'],
           createdAt: DateTime.now().subtract(const Duration(days: 71)),
         ),
         Review(
@@ -463,7 +463,7 @@ class MockData {
         Review(
           id: 'r4', fromUserId: 'me', toUserId: 'u1', orderId: 'm10',
           rating: 5, comment: 'Стиралка работает как новая, спасибо!',
-          tags: const ['Профессионал', 'Аккуратный'],
+          tags: const ['Опытный', 'Аккуратный'],
           createdAt: DateTime.now().subtract(const Duration(days: 5)),
         ),
         Review(

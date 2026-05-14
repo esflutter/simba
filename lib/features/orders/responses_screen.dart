@@ -14,7 +14,6 @@ import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
-import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
@@ -38,9 +37,8 @@ const _kResponseGoneMessage = 'Этот отклик уже недоступен
 /// Для PB-id формируем placeholder с укороченным id вместо «Иван Иванов»,
 /// чтобы исполнители визуально различались в списке откликов.
 AppUser _userForResponder(String id) {
-  final isKnownMock = id == 'me' ||
-      MockData.otherUsers.any((u) => u.id == id);
-  if (isKnownMock) return userById(id);
+  final known = userById(id);
+  if (known != null) return known;
   final shortId = id.substring(0, math.min(6, id.length));
   return AppUser(
     id: id,

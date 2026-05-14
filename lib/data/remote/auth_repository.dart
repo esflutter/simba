@@ -302,6 +302,8 @@ class AuthRepository {
       ratingAsExecutor: record.getDoubleValue('rating_as_executor'),
       reviewsCountAsExecutor: record.getIntValue('reviews_count_as_executor'),
       cityId: cityId.isEmpty ? null : cityId,
+      hasTools: record.getBoolValue('has_tools'),
+      hasTransport: record.getBoolValue('has_transport'),
     );
     _ref.read(appControllerProvider.notifier).completeAuthRemote(user);
     return AuthResult(ok: true, isNewUser: isNew, status: 'verified');
@@ -406,10 +408,13 @@ class AuthRepository {
     final pb = _pb;
     if (pb == null || !pb.authStore.isValid) return false;
     try {
+      // 6с синхронизировано с обёрткой в splash_screen — иначе внутренний
+      // таймаут срабатывал раньше, и splash думал что refresh не дошёл,
+      // хотя он мог ещё успеть.
       await pb
           .collection('users')
           .authRefresh()
-          .timeout(const Duration(seconds: 5));
+          .timeout(const Duration(seconds: 6));
       final record = pb.authStore.record;
       if (record != null) {
         // Зеркалим record в AppController.state.user тем же путём, что и

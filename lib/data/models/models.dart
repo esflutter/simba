@@ -193,8 +193,6 @@ class AppUser {
       reviewsCountAsExecutor:
           reviewsCountAsExecutor ?? this.reviewsCountAsExecutor,
       cityId: cityId ?? this.cityId,
-      hasTools: hasTools ?? this.hasTools,
-      hasTransport: hasTransport ?? this.hasTransport,
     );
   }
 }

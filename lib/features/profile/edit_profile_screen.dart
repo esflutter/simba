@@ -122,6 +122,8 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       if (pb != null && pb.authStore.isValid) {
         final body = <String, dynamic>{
           'name': _name.text.trim(),
+          'has_tools': _hasTools,
+          'has_transport': _hasTransport,
         };
         final files = <http.MultipartFile>[];
         final photo = _photoPath;
@@ -146,10 +148,6 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
               files: files,
             )
             .timeout(const Duration(seconds: 30));
-        // has_tools / has_transport — в коллекции users_private (отдельная
-        // приватная таблица). Обновление через REST требует доп. правил —
-        // оставляем как локальный UI-flag, чтобы не плодить запросы;
-        // полноценная синхронизация — отдельной задачей (TODO).
       }
       ref.read(appControllerProvider.notifier).completeProfile(
             name: _name.text,

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
 
@@ -267,7 +266,7 @@ class _DistributionRow extends StatelessWidget {
             '$count',
             softWrap: false,
             overflow: TextOverflow.visible,
-            style: GoogleFonts.inter(
+            style: TextStyle(
               color: Colors.black,
               fontSize: 13.sp,
               fontWeight: FontWeight.w500,
@@ -286,7 +285,10 @@ class _ReviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final author = userById(review.fromUserId);
+    // userById может вернуть null для PB-id, отсутствующего в локальном моке.
+    // В UI отзыва нам важно только имя автора — фолбэк на «Пользователь»
+    // лучше, чем падение или подмена «Иваном Ивановым» (что было раньше).
+    final authorName = userById(review.fromUserId)?.name ?? 'Пользователь';
     return Container(
       padding: EdgeInsets.all(12.w),
       decoration: BoxDecoration(
@@ -316,7 +318,7 @@ class _ReviewCard extends StatelessWidget {
                 child: Padding(
                   padding: EdgeInsets.only(left: 8.w),
                   child: Text(
-                    author.name,
+                    authorName,
                     style: TextStyle(
                       color: Colors.black,
                       fontSize: 15.sp,

@@ -25,9 +25,15 @@ class HistoryScreen extends ConsumerStatefulWidget {
 class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   _Tab _tab = _Tab.posted;
 
-  String _categoryName(String id) => MockData.categories
-      .firstWhere((c) => c.id == id, orElse: () => MockData.categories.last)
-      .name;
+  String _categoryName(Order o) {
+    if (o.categoryName != null && o.categoryName!.isNotEmpty) {
+      return o.categoryName!;
+    }
+    return MockData.categories
+        .firstWhere((c) => c.id == o.categoryId,
+            orElse: () => MockData.categories.last)
+        .name;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -161,7 +167,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                                 ),
                                 child: OrderCard(
                                   order: o,
-                                  categoryName: _categoryName(o.categoryId),
+                                  categoryName: _categoryName(o),
                                   showTime: false,
                                   onTap: () => context
                                       .push('/order/${o.id}?mode=mine'),
@@ -201,9 +207,14 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     final today = DateTime(now.year, now.month, now.day);
     final that = DateTime(d.year, d.month, d.day);
     final diff = today.difference(that).inDays;
-    final fmt = DateFormat('d MMMM', 'ru_RU').format(d);
-    if (diff == 0) return 'Сегодня, $fmt';
-    if (diff == 1) return 'Вчера, $fmt';
+    // Для прошлогодних заказов добавляем год — иначе «5 марта» двухлетней
+    // давности неотличимо от «5 марта» текущего года. Порог 365 дней —
+    // календарный год; для високосного года разница в 1 день не критична.
+    final showYear = d.year != now.year;
+    final pattern = showYear ? 'd MMMM yyyy' : 'd MMMM';
+    final fmt = DateFormat(pattern, 'ru_RU').format(d);
+    if (diff == 0) return 'Сегодня, ${DateFormat('d MMMM', 'ru_RU').format(d)}';
+    if (diff == 1) return 'Вчера, ${DateFormat('d MMMM', 'ru_RU').format(d)}';
     return fmt;
   }
 }

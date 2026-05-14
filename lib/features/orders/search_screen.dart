@@ -42,16 +42,22 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     super.dispose();
   }
 
-  String _categoryName(String id) => MockData.categories
-      .firstWhere((c) => c.id == id, orElse: () => MockData.categories.last)
-      .name;
+  String _categoryName(Order o) {
+    if (o.categoryName != null && o.categoryName!.isNotEmpty) {
+      return o.categoryName!;
+    }
+    return MockData.categories
+        .firstWhere((c) => c.id == o.categoryId,
+            orElse: () => MockData.categories.last)
+        .name;
+  }
 
   bool _matches(Order o, String q) {
     if (q.isEmpty) return false;
     final lq = q.toLowerCase();
     return o.title.toLowerCase().contains(lq) ||
         o.address.toLowerCase().contains(lq) ||
-        _categoryName(o.categoryId).toLowerCase().contains(lq);
+        _categoryName(o).toLowerCase().contains(lq);
   }
 
   @override
@@ -123,7 +129,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                           final o = results[i];
                           return OrderCard(
                             order: o,
-                            categoryName: _categoryName(o.categoryId),
+                            categoryName: _categoryName(o),
                             onTap: () =>
                                 context.push('/order/${o.id}?mode=feed'),
                           );

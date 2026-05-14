@@ -25,8 +25,19 @@ class FeedScreen extends ConsumerStatefulWidget {
 class _FeedScreenState extends ConsumerState<FeedScreen> {
   bool _mapMode = false;
 
-  String _categoryName(String id) =>
-      MockData.categories.firstWhere((c) => c.id == id, orElse: () => MockData.categories.last).name;
+  // Сначала пробуем имя категории из expand'а Order (PB live-mode). Это
+  // нужно для категорий, которых нет в локальном MockData.categories
+  // (бэк может завести новые без обновления клиента) — раньше такие
+  // заказы все показывались как «Другое».
+  String _categoryName(Order o) {
+    if (o.categoryName != null && o.categoryName!.isNotEmpty) {
+      return o.categoryName!;
+    }
+    return MockData.categories
+        .firstWhere((c) => c.id == o.categoryId,
+            orElse: () => MockData.categories.last)
+        .name;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -223,7 +234,7 @@ class _Header extends StatelessWidget {
 class _ListView extends ConsumerWidget {
   const _ListView({required this.orders, required this.categoryNameOf});
   final List<Order> orders;
-  final String Function(String) categoryNameOf;
+  final String Function(Order) categoryNameOf;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -282,7 +293,7 @@ class _ListView extends ConsumerWidget {
           final o = orders[i];
           return OrderCard(
             order: o,
-            categoryName: categoryNameOf(o.categoryId),
+            categoryName: categoryNameOf(o),
             onTap: () => context.push('/order/${o.id}?mode=feed'),
           );
         },

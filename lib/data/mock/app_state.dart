@@ -374,9 +374,18 @@ class AppController extends Notifier<AppState> {
 final appControllerProvider =
     NotifierProvider<AppController, AppState>(AppController.new);
 
-AppUser userById(String id) {
+/// Поиск юзера по id в локальных моках. Если id неизвестен — возвращает
+/// nullable. Раньше fallback был на `MockData.demoCurrentUser` («Иван
+/// Иванов» с рейтингом 4.9), и в live-режиме контрагент любого PB-id
+/// отображался как этот мок-юзер; для отзывов это превращалось в
+/// «я оставил отзыв сам себе»-эффект. UI должен сам решать что показать
+/// для unknown (имя из expand, обезличенное «Пользователь» и т.п.).
+AppUser? userById(String id) {
   if (id == 'me') return MockData.demoCurrentUser;
-  return MockData.otherUsers.firstWhere((u) => u.id == id, orElse: () => MockData.demoCurrentUser);
+  for (final u in MockData.otherUsers) {
+    if (u.id == id) return u;
+  }
+  return null;
 }
 
 LatLng locationOf(City city) => city.center;
