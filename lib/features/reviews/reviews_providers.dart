@@ -22,3 +22,21 @@ final reviewsForUserProvider =
         .toList();
   }
 });
+
+/// Отзывы по конкретному заказу. Используется на «деталях заказа» для
+/// определения, оставил ли текущий пользователь свой отзыв — это позволяет
+/// прятать кнопку «Оставить отзыв» после успешной отправки в live-режиме
+/// (где `state.reviews` маппером не наполняется).
+final reviewsByOrderProvider = FutureProvider.autoDispose
+    .family<List<Review>, String>((ref, orderId) async {
+  try {
+    return await ref.read(reviewsRepositoryProvider).forOrder(orderId);
+  } catch (_) {
+    // Fallback на локальный стейт (мок-режим / сетевая ошибка).
+    return ref
+        .read(appControllerProvider)
+        .reviews
+        .where((r) => r.orderId == orderId)
+        .toList();
+  }
+});

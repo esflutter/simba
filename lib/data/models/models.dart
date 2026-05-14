@@ -11,7 +11,65 @@ enum OrderStatus {
   cancelled,
 }
 
-enum PaymentMethod { cash }
+/// Способ расчёта по заказу. Оплаты внутри приложения нет — оба варианта
+/// подразумевают расчёт напрямую между заказчиком и исполнителем на месте.
+enum PaymentMethod {
+  /// Наличными при встрече.
+  cash,
+
+  /// Безналичный перевод на месте (СБП / перевод по номеру / карта на карту).
+  cashlessTransfer,
+}
+
+extension PaymentMethodMapping on PaymentMethod {
+  /// Ключ для коллекции `orders.payment_method` в PocketBase.
+  /// Значения совпадают с enum-values в миграции 003 + расширение в 019.
+  String get dbValue {
+    switch (this) {
+      case PaymentMethod.cash:
+        return 'cash';
+      case PaymentMethod.cashlessTransfer:
+        return 'cashless_transfer';
+    }
+  }
+
+  /// Человекочитаемая подпись для UI (карточка деталей, экран выбора).
+  /// Один и тот же текст должен показываться везде, поэтому держим его
+  /// здесь, а не дублируем по экранам.
+  String get label {
+    switch (this) {
+      case PaymentMethod.cash:
+        return 'Наличными исполнителю';
+      case PaymentMethod.cashlessTransfer:
+        return 'Безналичным переводом на месте';
+    }
+  }
+
+  /// Парсит значение из БД. Неизвестное — `cash` с пометкой в логе,
+  /// чтобы не падать при расширении словаря на бэке без согласования.
+  static PaymentMethod fromDbValue(String? raw) {
+    switch (raw) {
+      case 'cash':
+        return PaymentMethod.cash;
+      case 'cashless_transfer':
+        return PaymentMethod.cashlessTransfer;
+      default:
+        if (raw != null && raw.isNotEmpty) {
+          debugPrint('[PaymentMethod] unknown db value "$raw" — fallback to cash');
+        }
+        return PaymentMethod.cash;
+    }
+  }
+
+  /// Парсит обратно из UI-подписи (например, после выбора в bottom sheet,
+  /// который хранит выбранное значение строкой). Тот же fallback.
+  static PaymentMethod fromLabel(String? label) {
+    for (final m in PaymentMethod.values) {
+      if (m.label == label) return m;
+    }
+    return PaymentMethod.cash;
+  }
+}
 
 @immutable
 class City {
@@ -219,17 +277,21 @@ class Order {
   /// `selectedCityId`, но старые заказы остаются в своём городе.
   final String? cityId;
 
+  /// Sentinel-паттерн для nullable-полей (см. [AppUser.copyWith]):
+  /// явный `null` действительно очищает поле, а не игнорируется
+  /// (как было бы при `?? this.field`). Нужно, например, чтобы при
+  /// отказе исполнителя сбросить `executorId: null`.
   Order copyWith({
     OrderStatus? status,
-    String? executorId,
+    Object? executorId = _sentinel,
     List<String>? responses,
-    DateTime? scheduledAt,
+    Object? scheduledAt = _sentinel,
     int? priceRub,
-    DateTime? completedAt,
-    DateTime? workDoneAt,
-    DateTime? workConfirmedAt,
-    DateTime? paymentReceivedAt,
-    String? cityId,
+    Object? completedAt = _sentinel,
+    Object? workDoneAt = _sentinel,
+    Object? workConfirmedAt = _sentinel,
+    Object? paymentReceivedAt = _sentinel,
+    Object? cityId = _sentinel,
   }) =>
       Order(
         id: id,
@@ -242,9 +304,13 @@ class Order {
         priceRub: priceRub ?? this.priceRub,
         status: status ?? this.status,
         createdAt: createdAt,
-        scheduledAt: scheduledAt ?? this.scheduledAt,
+        scheduledAt: identical(scheduledAt, _sentinel)
+            ? this.scheduledAt
+            : scheduledAt as DateTime?,
         asap: asap,
-        executorId: executorId ?? this.executorId,
+        executorId: identical(executorId, _sentinel)
+            ? this.executorId
+            : executorId as String?,
         photoPaths: photoPaths,
         responses: responses ?? this.responses,
         paymentMethod: paymentMethod,
@@ -254,11 +320,21 @@ class Order {
         executorName: executorName,
         executorPhotoUrl: executorPhotoUrl,
         categoryName: categoryName,
-        completedAt: completedAt ?? this.completedAt,
-        workDoneAt: workDoneAt ?? this.workDoneAt,
-        workConfirmedAt: workConfirmedAt ?? this.workConfirmedAt,
-        paymentReceivedAt: paymentReceivedAt ?? this.paymentReceivedAt,
-        cityId: cityId ?? this.cityId,
+        completedAt: identical(completedAt, _sentinel)
+            ? this.completedAt
+            : completedAt as DateTime?,
+        workDoneAt: identical(workDoneAt, _sentinel)
+            ? this.workDoneAt
+            : workDoneAt as DateTime?,
+        workConfirmedAt: identical(workConfirmedAt, _sentinel)
+            ? this.workConfirmedAt
+            : workConfirmedAt as DateTime?,
+        paymentReceivedAt: identical(paymentReceivedAt, _sentinel)
+            ? this.paymentReceivedAt
+            : paymentReceivedAt as DateTime?,
+        cityId: identical(cityId, _sentinel)
+            ? this.cityId
+            : cityId as String?,
       );
 }
 

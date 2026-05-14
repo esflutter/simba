@@ -6,6 +6,7 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/pocketbase_client.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_text_styles.dart';
 import '../widgets/primary_button.dart';
@@ -35,10 +36,21 @@ final routerProvider = Provider<GoRouter>((ref) => _buildRouter(ref));
 
 /// Returns the next route to send a user to, depending on how complete their
 /// onboarding is. Used both by Splash and by go_router's redirect.
+///
+/// Логика:
+///   - Если онбординг ещё не показывали — `/onboarding`.
+///   - Если онбординг был, но город не выбран — `/city`.
+///   - Если город есть, но юзера нет — `/auth/phone` (логин).
+///   - Если юзер есть, но имя пустое — `/auth/profile` (досборка профиля).
+///   - Иначе `null` (= идём на главный).
+///
+/// Флаги `onboardingSeen` и `selectedCityId` хранятся в prefs и переживают
+/// logout — повторный логин на этом устройстве сразу идёт на `/auth/phone`.
 String? nextOnboardingRoute(AppState state) {
-  final user = state.user;
-  if (user == null) return '/onboarding';
+  if (!state.onboardingSeen) return '/onboarding';
   if (state.selectedCityId == null) return '/city';
+  final user = state.user;
+  if (user == null) return '/auth/phone';
   if (user.name.trim().isEmpty) return '/auth/profile';
   return null;
 }
@@ -132,6 +144,32 @@ GoRouter _buildRouter(Ref ref) {
       const guarded = ['/home', '/create', '/order', '/profile/'];
       final isGuarded = guarded.any(loc.startsWith);
       if (isGuarded && next != null) return next;
+
+      // Защита deep-link маршрутов авторизации. Иначе через intent/URL
+      // можно открыть /auth/role или /auth/profile без авторизации и
+      // перетереть role/имя в prefs до того, как юзер ввёл OTP.
+      if (loc == '/auth/sms') {
+        final phone = st.uri.queryParameters['phone'];
+        if (phone == null || phone.isEmpty) return '/auth/phone';
+      } else if (loc == '/auth/sms-waiting') {
+        final sid = st.uri.queryParameters['session_id'];
+        final phone = st.uri.queryParameters['phone'];
+        if (sid == null || sid.isEmpty || phone == null || phone.isEmpty) {
+          return '/auth/phone';
+        }
+      } else if (loc == '/auth/profile') {
+        final pb = ref.read(pocketbaseProvider);
+        final pbValid = pb != null && pb.authStore.isValid;
+        if (!pbValid || state.user == null) return '/auth/phone';
+        // Дополнительная защита от deep-link на /auth/profile минуя /city:
+        // без выбранного города заполнение профиля бессмысленно (отклики и
+        // создание заказов на бэке валидируют city, и заказчик упрётся в 403).
+        if (state.selectedCityId == null || state.selectedCityId!.isEmpty) {
+          return '/city';
+        }
+      } else if (loc == '/auth/role') {
+        if (state.user == null) return '/auth/phone';
+      }
       return null;
     },
     // Fallback для нераспознанных маршрутов (например, deeplink на /order/INVALID_ID

@@ -37,7 +37,8 @@ class SmsCodeScreen extends ConsumerStatefulWidget {
   ConsumerState<SmsCodeScreen> createState() => _SmsCodeScreenState();
 }
 
-class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen> {
+class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
+    with WidgetsBindingObserver {
   // Длина кода фиксированно 4. См. документацию SMS Aero Mobile Authorization:
   // `code must be 4 numbers` — серверная сторона не принимает другую длину.
   static const int _codeLength = 4;
@@ -57,16 +58,25 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen> {
   Timer? _errorTimer;
   int _seconds = _timerSeconds;
 
+  /// Абсолютный момент, когда можно резендить. Храним именно дату — Timer
+  /// в background-режиме на iOS приостанавливается, а на Android может
+  /// тикать неравномерно; пересчёт от now-времени единственный надёжный
+  /// способ показать остаток без скачков после возврата из бэкграунда.
+  DateTime? _resendAvailableAt;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _sessionId = widget.sessionId;
     _startTimer(resetPin: false);
   }
 
   void _startTimer({bool resetPin = true}) {
     _timer?.cancel();
+    final target = DateTime.now().add(const Duration(seconds: _timerSeconds));
     setState(() {
+      _resendAvailableAt = target;
       _seconds = _timerSeconds;
       _code = '';
       _hasError = false;
@@ -76,17 +86,54 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen> {
         _showResent = true;
       }
     });
-    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
-      if (_seconds <= 0) {
-        t.cancel();
-      } else {
-        setState(() => _seconds--);
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) => _tick());
+  }
+
+  /// Один шаг таймера. Источник правды — `_resendAvailableAt`; здесь только
+  /// перевычисляем остаток. Это позволяет правильно вести себя после
+  /// возврата из бэкграунда (см. didChangeAppLifecycleState).
+  void _tick() {
+    final target = _resendAvailableAt;
+    if (target == null) {
+      _timer?.cancel();
+      return;
+    }
+    final remaining = target.difference(DateTime.now()).inSeconds;
+    if (remaining <= 0) {
+      _timer?.cancel();
+      if (mounted) setState(() => _seconds = 0);
+    } else {
+      if (mounted && _seconds != remaining) {
+        setState(() => _seconds = remaining);
       }
-    });
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // На resume пересчитываем остаток от абсолютной точки. Если время
+      // уже истекло — отменяем таймер и обновляем UI на «можно резендить».
+      final target = _resendAvailableAt;
+      if (target == null) return;
+      final remaining = target.difference(DateTime.now()).inSeconds;
+      if (remaining <= 0) {
+        _timer?.cancel();
+        if (mounted) setState(() => _seconds = 0);
+      } else {
+        if (mounted) setState(() => _seconds = remaining);
+        // Если периодический таймер был приостановлен системой (iOS), сам
+        // перезапустится с тика выше — но на всякий случай гарантируем,
+        // что он жив.
+        _timer ??=
+            Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+      }
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
     _errorTimer?.cancel();
     super.dispose();
@@ -185,7 +232,18 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen> {
         phone: widget.phone,
         code: _code,
       );
-      if (!mounted) return;
+      // ВАЖНО: verifyOtpDetailed уже залогинил юзера через _consumeAuthEnvelope
+      // (PB authStore + AppController.state.user). Если экран unmounted между
+      // запросом и ответом — мы не можем просто return, иначе юзер залогинен,
+      // но застрял на phone-экране. Используем routerProvider напрямую.
+      if (!mounted) {
+        if (result.ok) {
+          ref
+              .read(routerProvider)
+              .go(postAuthRoute(ref, isNewUser: result.isNewUser));
+        }
+        return;
+      }
       if (!result.ok) {
         final msg = _verifyErrorMessage(result.errorCode, result.lockedUntil);
         _errorTimer?.cancel();
@@ -333,10 +391,9 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen> {
                                 ),
                                 onChanged: (v) {
                                   setState(() => _code = v);
-                                  // Автосабмит при наборе всех 4 цифр.
-                                  if (v.length == _codeLength && !_isVerifying) {
-                                    _onNext();
-                                  }
+                                  // Автосабмита нет: пользователь сам жмёт
+                                  // «Далее». Кнопка активируется, когда
+                                  // _code.length == _codeLength.
                                 },
                               ),
                             ),

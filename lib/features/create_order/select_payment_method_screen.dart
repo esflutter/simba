@@ -6,17 +6,14 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
+import '../../data/models/models.dart';
 import 'order_draft.dart';
 
-// В SimbA на момент релиза только наличный расчёт между заказчиком и
-// исполнителем. Безналичные переводы — фрод-риск и налоговая поверхность,
-// которые проектом сознательно отложены. Список оставлен как массив на
-// случай возврата опций позже (например, СБП p2p).
-// TODO: удалить экран после design-sync, если выбор так и не вернётся —
-// заказ можно сразу создавать с paymentMethod='cash'.
-const paymentMethods = <String>[
-  'Наличными исполнителю',
-];
+// SimbA эквайринг не делает: оплата всегда идёт напрямую между заказчиком
+// и исполнителем на месте. Источник подписей — extension `PaymentMethod.label`,
+// чтобы не плодить дубликаты строк по экранам.
+final List<String> paymentMethods =
+    PaymentMethod.values.map((m) => m.label).toList(growable: false);
 
 class SelectPaymentMethodScreen extends ConsumerWidget {
   const SelectPaymentMethodScreen({super.key});

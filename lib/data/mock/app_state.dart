@@ -19,6 +19,7 @@ class AppState {
     required this.selectedCityId,
     required this.executorActive,
     required this.searchRadiusKm,
+    required this.onboardingSeen,
   });
 
   final AppUser? user;
@@ -29,6 +30,10 @@ class AppState {
   final String? selectedCityId;
   final bool executorActive;
   final double searchRadiusKm;
+  /// «Пользователь устройства уже видел онбординг». После первого
+  /// прохождения остаётся true до полного wipe приложения — повторно
+  /// онбординг не показывается даже после logout.
+  final bool onboardingSeen;
 
   City get selectedCity => MockData.cities.firstWhere(
         (c) => c.id == selectedCityId,
@@ -44,6 +49,7 @@ class AppState {
     String? selectedCityId,
     bool? executorActive,
     double? searchRadiusKm,
+    bool? onboardingSeen,
   }) =>
       AppState(
         user: user ?? this.user,
@@ -54,6 +60,7 @@ class AppState {
         selectedCityId: selectedCityId ?? this.selectedCityId,
         executorActive: executorActive ?? this.executorActive,
         searchRadiusKm: searchRadiusKm ?? this.searchRadiusKm,
+        onboardingSeen: onboardingSeen ?? this.onboardingSeen,
       );
 }
 
@@ -85,7 +92,29 @@ class AppController extends Notifier<AppState> {
       selectedCityId: cityId,
       executorActive: false,
       searchRadiusKm: 5,
+      onboardingSeen: p?.onboardingSeen ?? false,
     );
+  }
+
+  /// Помечаем онбординг как пройденный. Флаг сохраняется в prefs пожизненно
+  /// (на устройство), чтобы logout не возвращал юзера к экрану онбординга.
+  /// Возвращает Future, чтобы вызывающий мог дождаться записи в prefs
+  /// перед навигацией — иначе при быстром переходе на /city и cold restart
+  /// прямо после онбординга флаг может не успеть сохраниться.
+  Future<void> markOnboardingSeen() async {
+    if (state.onboardingSeen) return;
+    state = state.copyWith(onboardingSeen: true);
+    final fut = _prefs?.setOnboardingSeen(true);
+    if (fut != null) {
+      try {
+        await fut;
+      } catch (_) {
+        // Запись в prefs упала — state уже обновлён, на этом устройстве
+        // в текущей сессии онбординг показываться не будет. На следующий
+        // cold start, если ситуация повторится, юзер увидит онбординг
+        // снова — терпимо.
+      }
+    }
   }
 
   /// Отбрасывает «размещённые» заказы, у которых истекла назначенная дата
@@ -186,7 +215,13 @@ class AppController extends Notifier<AppState> {
   }
 
   void cancelOrder(String id) {
-    // Отменённый заказ удаляется навсегда — из истории не показывается.
+    // Удалить (= отменить «без следа») можно ТОЛЬКО размещённый заказ.
+    // После того как заказчик принял исполнителя, заказ остаётся в системе
+    // до завершения цикла FSM (markWorkDone → confirmPayment → completed)
+    // или до автоматического закрытия по no-show через cron.
+    final target = state.myOrders.where((o) => o.id == id).toList();
+    if (target.isEmpty) return;
+    if (target.first.status != OrderStatus.open) return;
     state = state.copyWith(
       myOrders: state.myOrders.where((o) => o.id != id).toList(),
     );
@@ -223,6 +258,13 @@ class AppController extends Notifier<AppState> {
   /// Исполнитель ('me') откликается на open-заказ. Заказ остаётся в статусе
   /// open, в responses добавляется 'me'. Заказчик потом выбирает кого принять.
   void takeOrderAsExecutor(String orderId) {
+    // Защита: нельзя откликаться на собственный заказ. На бэке это закрывает
+    // фильтр /api/orders/feed (customer != me) + правило order_responses
+    // createRule, но клиентскую защиту тоже держим — если бэк-фильтр сломается
+    // или заказ окажется в state.orders по ошибке, мы не позволим отправить
+    // запрос, который всё равно отвалится 403.
+    final mine = state.myOrders.any((o) => o.id == orderId);
+    if (mine) return;
     state = state.copyWith(
       orders: state.orders.map((o) {
         if (o.id != orderId) return o;
@@ -286,8 +328,13 @@ class AppController extends Notifier<AppState> {
   }
 
   void logout() {
-    // Заново пересеиваем фид по выбранному городу — иначе при перелогине
-    // под другим телефоном остался бы фид прошлого пользователя.
+    // При logout сохраняем cityId и onboardingSeen — это устройство-локальные
+    // флаги, не привязанные к юзеру. Логика «уже видел онбординг» и «выбрал
+    // город» переживает logout, чтобы юзер на этом устройстве при следующем
+    // входе сразу шёл на /auth/phone, без повторного онбординга и выбора.
+    // Если при новом логине бэк пришлёт users.city — он перепишет локальный
+    // (см. auth_repository._consumeAuthEnvelope).
+    final keepCityId = state.selectedCityId;
     final city = state.selectedCity;
     state = AppState(
       user: null,
@@ -296,9 +343,10 @@ class AppController extends Notifier<AppState> {
       myOrders:
           Env.hasPocketbase ? const [] : MockData.seedMyOrders(city.center),
       reviews: Env.hasPocketbase ? const [] : MockData.seedReviews(),
-      selectedCityId: state.selectedCityId,
+      selectedCityId: keepCityId,
       executorActive: false,
       searchRadiusKm: state.searchRadiusKm,
+      onboardingSeen: state.onboardingSeen,
     );
     _prefs?.clearUser();
     _prefs?.setRole(UserRole.customer);

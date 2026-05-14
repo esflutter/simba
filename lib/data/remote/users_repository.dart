@@ -27,19 +27,34 @@ class UsersRepository {
   }) async {
     final pb = _pb;
     if (pb == null) return null;
-    final http.Response resp;
+    Future<http.Response> doRequest() => http
+        .post(
+          Uri.parse('${pb.baseURL}/api/users/$userId/contact-phone'),
+          headers: {
+            if (pb.authStore.token.isNotEmpty)
+              'Authorization': 'Bearer ${pb.authStore.token}',
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({'order_id': orderId}),
+        )
+        .timeout(const Duration(seconds: 8));
+
+    http.Response resp;
     try {
-      resp = await http
-          .post(
-            Uri.parse('${pb.baseURL}/api/users/$userId/contact-phone'),
-            headers: {
-              if (pb.authStore.token.isNotEmpty)
-                'Authorization': 'Bearer ${pb.authStore.token}',
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode({'order_id': orderId}),
-          )
-          .timeout(const Duration(seconds: 8));
+      resp = await doRequest();
+      if (resp.statusCode == 401 || resp.statusCode == 403) {
+        // Один раз пробуем refresh + повторить запрос. Если refresh не
+        // сработал — отдаём null, верхний уровень покажет «телефон скрыт».
+        try {
+          await pb
+              .collection('users')
+              .authRefresh()
+              .timeout(const Duration(seconds: 10));
+          resp = await doRequest();
+        } catch (_) {
+          return null;
+        }
+      }
     } on TimeoutException {
       return null;
     } catch (_) {

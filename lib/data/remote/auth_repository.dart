@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:pocketbase/pocketbase.dart';
@@ -358,7 +359,11 @@ class AuthRepository {
     try {
       final v = jsonDecode(body);
       return v is Map ? v.cast<String, dynamic>() : null;
-    } catch (_) {
+    } catch (e) {
+      // Бывает на 502/Cloudflare-челлендж: возвращается HTML вместо JSON.
+      // Лог в release-сборку через debugPrint попадёт только при подключённом
+      // дебагере; для серверной отладки достаточно бэк-логов.
+      debugPrint('[auth_repository] _safeJson parse failed: $e');
       return null;
     }
   }
@@ -394,6 +399,9 @@ class AuthRepository {
   RecordModel? get currentUser => _pb?.authStore.record;
 
   /// Бутстрап-проверка валидности сохранённого токена при старте приложения.
+  /// При успехе зеркалит данные юзера из `pb.authStore.record` в AppController,
+  /// иначе splash на cold-start увидит `isValid==true` при пустом `state.user`
+  /// и погонит на онбординг при валидной сессии.
   Future<bool> tryRefreshAuth() async {
     final pb = _pb;
     if (pb == null || !pb.authStore.isValid) return false;
@@ -402,6 +410,15 @@ class AuthRepository {
           .collection('users')
           .authRefresh()
           .timeout(const Duration(seconds: 5));
+      final record = pb.authStore.record;
+      if (record != null) {
+        // Зеркалим record в AppController.state.user тем же путём, что и
+        // обычный verify-flow — чтобы поля photoUrl/cityId/rating сошлись.
+        _consumeAuthEnvelope({
+          'token': pb.authStore.token,
+          'record': record.toJson(),
+        });
+      }
       return true;
     } on ClientException catch (e) {
       if (e.statusCode == 401 || e.statusCode == 403) {

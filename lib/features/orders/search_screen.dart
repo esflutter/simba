@@ -63,10 +63,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           orElse: () => null,
         );
     final source = remoteFeed ?? state.orders;
-    // city-фильтр: SimbA-бизнес-правило — юзер видит заказы только в своём
-    // городе. remoteFeed уже отфильтрован бэком, мок-источник нет — пропускаем
-    // через .where(cityId match), чтобы single source of truth был у фильтра.
+    // Те же фильтры, что в feed_screen: open, не expired, мой город, не мой
+    // заказ. Плюс совпадение поискового запроса. Сортировка от новых к старым.
     final selectedCityId = state.selectedCityId;
+    final myId = state.user?.id;
     final results = source
         .where((o) =>
             o.status == OrderStatus.open &&
@@ -74,8 +74,10 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
             (selectedCityId == null ||
                 o.cityId == null ||
                 o.cityId == selectedCityId) &&
+            (myId == null || o.customerId != myId) &&
             _matches(o, _query))
-        .toList();
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final hasQuery = _query.isNotEmpty;
 
     return Scaffold(

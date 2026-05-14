@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
@@ -33,9 +34,10 @@ final citiesProvider = FutureProvider<List<City>>((ref) async {
         boundsRadiusKm: radius > 0 ? radius : 50.0,
       );
     }).toList();
-  } catch (_) {
+  } catch (e) {
     // На случай если бэкенд недоступен — мягкий fallback на моки,
     // чтобы UI не сломался.
+    debugPrint('[cities_repository] live fetch failed, using mock: $e');
     return MockData.cities;
   }
 });

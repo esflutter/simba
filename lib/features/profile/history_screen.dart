@@ -183,11 +183,16 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     final sorted = [...orders]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
     final groups = <String, List<Order>>{};
     for (final o in sorted) {
-      final key = DateFormat('yyyy-MM-dd').format(o.createdAt);
+      // toLocal(): createdAt в БД — UTC; без перевода в локаль ночные
+      // заказы попадали бы в группу «вчера/завтра».
+      final key = DateFormat('yyyy-MM-dd').format(o.createdAt.toLocal());
       groups.putIfAbsent(key, () => []).add(o);
     }
     return groups.entries
-        .map((e) => _DateGroup(label: _labelForDate(e.value.first.createdAt), orders: e.value))
+        .map((e) => _DateGroup(
+              label: _labelForDate(e.value.first.createdAt.toLocal()),
+              orders: e.value,
+            ))
         .toList();
   }
 

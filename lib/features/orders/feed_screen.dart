@@ -38,9 +38,27 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           orElse: () => null,
         );
     final source = remoteFeed ?? state.orders;
+    // Фильтры в ленте:
+    //   - status = open (не показываем уже принятые/завершённые)
+    //   - не expired (открытый заказ с прошедшей датой)
+    //   - cityId совпадает с выбранным городом (SimbA-правило)
+    //   - НЕ мои собственные заказы как заказчика (даже если я переключился
+    //     в режим исполнителя — свои заказы из ленты убираем). Бэк уже
+    //     отсекает, но клиентская защита на случай: моки + старый кэш.
+    //
+    // Сортировка — от новых к старым (бизнес-требование).
+    final selectedCityId = state.selectedCityId;
+    final myId = state.user?.id;
     final orders = source
-        .where((o) => o.status == OrderStatus.open && !o.isExpiredOpen)
-        .toList();
+        .where((o) =>
+            o.status == OrderStatus.open &&
+            !o.isExpiredOpen &&
+            (selectedCityId == null ||
+                o.cityId == null ||
+                o.cityId == selectedCityId) &&
+            (myId == null || o.customerId != myId))
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -202,47 +220,73 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _ListView extends StatelessWidget {
+class _ListView extends ConsumerWidget {
   const _ListView({required this.orders, required this.categoryNameOf});
   final List<Order> orders;
   final String Function(String) categoryNameOf;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // RefreshIndicator вокруг любого виджета требует scroll-семантики, поэтому
+    // даже на пустом состоянии оборачиваем в AlwaysScrollableScrollPhysics
+    // ListView — иначе свайп вниз не сработает.
+    Future<void> doRefresh() async {
+      ref.invalidate(feedOrdersProvider);
+      // Дожидаемся подгрузки нового списка, чтобы спиннер не схлопывался
+      // мгновенно — иначе UX-обман «обновили? точно?».
+      try {
+        await ref.read(feedOrdersProvider.future);
+      } catch (_) {}
+    }
+
     if (orders.isEmpty) {
-      return Center(
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: 24.w),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(IconsaxPlusLinear.archive, size: 64.r, color: AppColors.textTertiary),
-              SizedBox(height: 12.h),
-              Text('Пока нет открытых заказов',
-                  style: AppText.h4(), textAlign: TextAlign.center),
-              SizedBox(height: 6.h),
-              Text(
-                'Скоро появятся новые. Загляните позже.',
-                style: AppText.body(color: AppColors.textSecondary),
-                textAlign: TextAlign.center,
+      return RefreshIndicator(
+        color: AppColors.primary,
+        onRefresh: doRefresh,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(height: 120.h),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 24.w),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(IconsaxPlusLinear.archive,
+                      size: 64.r, color: AppColors.textTertiary),
+                  SizedBox(height: 12.h),
+                  Text('Пока нет открытых заказов',
+                      style: AppText.h4(), textAlign: TextAlign.center),
+                  SizedBox(height: 6.h),
+                  Text(
+                    'Скоро появятся новые. Загляните позже.',
+                    style: AppText.body(color: AppColors.textSecondary),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       );
     }
-    return ListView.separated(
-      padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 56.h),
-      itemCount: orders.length,
-      separatorBuilder: (_, _) => SizedBox(height: 12.h),
-      itemBuilder: (_, i) {
-        final o = orders[i];
-        return OrderCard(
-          order: o,
-          categoryName: categoryNameOf(o.categoryId),
-          onTap: () => context.push('/order/${o.id}?mode=feed'),
-        );
-      },
+    return RefreshIndicator(
+      color: AppColors.primary,
+      onRefresh: doRefresh,
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 56.h),
+        itemCount: orders.length,
+        separatorBuilder: (_, _) => SizedBox(height: 12.h),
+        itemBuilder: (_, i) {
+          final o = orders[i];
+          return OrderCard(
+            order: o,
+            categoryName: categoryNameOf(o.categoryId),
+            onTap: () => context.push('/order/${o.id}?mode=feed'),
+          );
+        },
+      ),
     );
   }
 }

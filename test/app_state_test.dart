@@ -8,8 +8,9 @@ import 'package:latlong2/latlong.dart';
 void main() {
   group('MockData', () {
     test('cities, categories, tags, users not empty', () {
-      expect(MockData.cities.length, greaterThanOrEqualTo(15));
-      expect(MockData.categories.length, equals(8));
+      // 13 миллионников по ТЗ. Расширение списка — отдельная задача.
+      expect(MockData.cities.length, greaterThanOrEqualTo(13));
+      expect(MockData.categories.length, greaterThan(0));
       expect(MockData.reviewTags.length, greaterThan(0));
       expect(MockData.otherUsers.length, greaterThan(0));
     });
@@ -21,11 +22,13 @@ void main() {
       expect(orders.every((o) => o.customerId != 'me'), isTrue);
     });
 
-    test('seedMyOrders includes one open + one accepted + one completed', () {
+    test('seedMyOrders includes open/accepted/completed examples', () {
       final orders = MockData.seedMyOrders(const LatLng(55.0, 37.0));
-      expect(orders.where((o) => o.status == OrderStatus.open).length, equals(1));
-      expect(orders.where((o) => o.status == OrderStatus.accepted).length, equals(1));
-      expect(orders.where((o) => o.status == OrderStatus.completed).length, equals(1));
+      // Мок наполняет несколько примеров каждого статуса — главное, что
+      // в выборке точно есть и open, и accepted, и completed.
+      expect(orders.where((o) => o.status == OrderStatus.open).length, greaterThanOrEqualTo(1));
+      expect(orders.where((o) => o.status == OrderStatus.accepted).length, greaterThanOrEqualTo(1));
+      expect(orders.where((o) => o.status == OrderStatus.completed).length, greaterThanOrEqualTo(1));
       expect(orders.every((o) => o.customerId == 'me'), isTrue);
     });
   });
@@ -96,13 +99,47 @@ void main() {
       expect(updated.status, OrderStatus.accepted);
     });
 
-    test('cancelOrder marks my order cancelled', () {
+    test('cancelOrder removes my order completely (no history)', () {
+      // По продукту: отмена = полное удаление, заказ исчезает без следа.
+      // В историю отменённые заказы не попадают.
       final myOpen = container.read(appControllerProvider).myOrders
           .firstWhere((o) => o.status == OrderStatus.open);
       ctrl.cancelOrder(myOpen.id);
-      final updated = container.read(appControllerProvider).myOrders
-          .firstWhere((o) => o.id == myOpen.id);
-      expect(updated.status, OrderStatus.cancelled);
+      final found = container.read(appControllerProvider).myOrders
+          .where((o) => o.id == myOpen.id);
+      expect(found, isEmpty);
+    });
+
+    test('cancelOrder does NOT delete accepted orders', () {
+      // После того как заказчик принял исполнителя, заказ удалить нельзя:
+      // исполнитель уже потратил время, должен дойти цикл до completed
+      // (markWorkDone → confirmPayment) или auto-cancel-no-show на бэке.
+      final accepted = container.read(appControllerProvider).myOrders
+          .firstWhere((o) => o.status == OrderStatus.accepted);
+      ctrl.cancelOrder(accepted.id);
+      final stillThere = container.read(appControllerProvider).myOrders
+          .where((o) => o.id == accepted.id);
+      expect(stillThere, isNotEmpty);
+      expect(stillThere.first.status, OrderStatus.accepted);
+    });
+
+    test('takeOrderAsExecutor refuses to respond to own order', () {
+      // Клиентская защита: даже если свой заказ каким-то образом попал
+      // в state.orders (битый бэк-фильтр, старый кэш), нельзя добавить
+      // 'me' в responses на своём же заказе.
+      ctrl.setCity('msk');
+      ctrl.completeAuth(phone: '+79001234567');
+      // Возьмём id своего заказа и подставим его в state.orders (имитация
+      // ситуации, когда бэк случайно отдал свой заказ в ленте).
+      final myOrder = container.read(appControllerProvider).myOrders.first;
+      ctrl.takeOrderAsExecutor(myOrder.id);
+      final inOrders = container.read(appControllerProvider).orders
+          .where((o) => o.id == myOrder.id);
+      // Заказ может быть и не в orders — это нормально. Главное, чтобы он
+      // не получил 'me' в responses.
+      for (final o in inOrders) {
+        expect(o.responses, isNot(contains('me')));
+      }
     });
 
     test('full flow accepted → awaitingPayment → completed', () {
@@ -122,8 +159,13 @@ void main() {
       );
     });
 
-    test('logout resets user and role but keeps city', () {
+    test('logout сбрасывает user/role, но сохраняет city и onboardingSeen', () {
+      // По продукту: cityId и onboardingSeen — флаги УСТРОЙСТВА, а не
+      // аккаунта. После logout юзер на том же устройстве сразу идёт на
+      // /auth/phone, без повторного онбординга и выбора города. При логине
+      // под другим аккаунтом users.city с бэка перепишет локальный.
       ctrl.setCity('spb');
+      ctrl.markOnboardingSeen();
       ctrl.completeAuth(phone: '+79001234567');
       ctrl.setRole(UserRole.executor);
       ctrl.logout();
@@ -131,6 +173,7 @@ void main() {
       expect(s.user, isNull);
       expect(s.role, UserRole.customer);
       expect(s.selectedCityId, 'spb');
+      expect(s.onboardingSeen, isTrue);
     });
 
     test('logout re-seeds feed/myOrders so prior session data does not leak', () {

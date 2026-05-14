@@ -1,10 +1,13 @@
+import 'package:flutter/foundation.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:pocketbase/pocketbase.dart';
 
+import '../../core/utils/pb_date.dart';
 import '../models/models.dart';
 
 /// Преобразование PocketBase-записи `orders` в доменную модель [Order].
-/// Цены в БД хранятся в копейках (price_kopecks), на клиенте — в рублях.
+/// Цены хранятся и в БД, и в модели одинаково — в рублях (price_rub, int).
+/// Эквайринга в приложении нет, копейки бессмысленны.
 ///
 /// Если передать [pb] — поле `photoPaths` будет содержать полные URL,
 /// собранные через `pb.files.getUrl(...)`. Иначе вернётся пустой список
@@ -14,16 +17,40 @@ import '../models/models.dart';
 /// имена и URL фото из expand'ов материализуются в соответствующие поля
 /// [Order]: это позволяет UI отрисовать карточку без дополнительных
 /// запросов в `users`/`categories`.
-Order orderFromRecord(RecordModel r, [PocketBase? pb]) {
+///
+/// Возвращает `null`, если в записи отсутствует обязательное поле
+/// `customer` (битый ответ от бэка). Вызывающий должен отфильтровать
+/// результат: `records.map(orderFromRecord).whereType<Order>()`.
+Order? orderFromRecord(RecordModel r, [PocketBase? pb]) {
+  final customerId = r.getStringValue('customer');
+  if (customerId.isEmpty) {
+    // Битая запись: без customer теряется логика «свой/чужой заказ»
+    // (всё сравнение с auth.id даст false). Лучше пропустить и
+    // залогировать, чем тащить мусор в UI.
+    debugPrint('orderFromRecord: skipping order ${r.id} — empty customer');
+    return null;
+  }
   final rawStatus = r.getStringValue('status');
-  final workDoneAt = _parseDate(r.getStringValue('work_done_by_executor_at'));
+  final workDoneAt = parsePbDate(r.getStringValue('work_done_by_executor_at'));
   final paymentReceivedAt =
-      _parseDate(r.getStringValue('payment_received_at'));
+      parsePbDate(r.getStringValue('payment_received_at'));
   OrderStatus status = _statusFromString(rawStatus);
   if (status == OrderStatus.accepted &&
       workDoneAt != null &&
       paymentReceivedAt == null) {
     status = OrderStatus.awaitingPayment;
+  }
+
+  // Битая `created` (теоретически невозможна — PB всегда автозаполняет
+  // поле, но защищаемся от рассинхронизации схемы). Используем эпоху как
+  // sentinel: для ленты сортировка «новые сверху» отправит такие записи
+  // в самый конец, для «Мои заказы» юзер всё равно увидит свой заказ
+  // (раньше мы пропускали → заказ исчезал из истории, что хуже фейковой
+  // даты). debugPrint поможет найти источник проблемы.
+  var createdAt = parsePbDate(r.getStringValue('created'));
+  if (createdAt == null) {
+    debugPrint('orderFromRecord: order ${r.id} has invalid `created` — using epoch fallback');
+    createdAt = DateTime.fromMillisecondsSinceEpoch(0);
   }
 
   final customer = _firstExpand(r, 'customer');
@@ -32,16 +59,16 @@ Order orderFromRecord(RecordModel r, [PocketBase? pb]) {
 
   return Order(
     id: r.id,
-    customerId: r.getStringValue('customer'),
+    customerId: customerId,
     categoryId: r.getStringValue('category'),
     title: r.getStringValue('title'),
     description: r.getStringValue('description'),
     address: r.getStringValue('address'),
     location: LatLng(r.getDoubleValue('lat'), r.getDoubleValue('lng')),
-    priceRub: (r.getDoubleValue('price_kopecks') / 100).round(),
+    priceRub: r.getIntValue('price_rub'),
     status: status,
-    createdAt: DateTime.tryParse(r.getStringValue('created')) ?? DateTime.now(),
-    scheduledAt: _parseDate(r.getStringValue('scheduled_at')),
+    createdAt: createdAt,
+    scheduledAt: parsePbDate(r.getStringValue('scheduled_at')),
     asap: r.getBoolValue('asap'),
     executorId: r.getStringValue('executor').isEmpty
         ? null
@@ -55,7 +82,8 @@ Order orderFromRecord(RecordModel r, [PocketBase? pb]) {
     //     одного запроса с filter по нужному orderId.
     // Поэтому здесь оставляем пустой список.
     responses: const [],
-    paymentMethod: _paymentMethodFromString(r.getStringValue('payment_method')),
+    paymentMethod:
+        PaymentMethodMapping.fromDbValue(r.getStringValue('payment_method')),
     forOtherPhone: r.getStringValue('for_other_phone').isEmpty
         ? null
         : r.getStringValue('for_other_phone'),
@@ -64,25 +92,13 @@ Order orderFromRecord(RecordModel r, [PocketBase? pb]) {
     executorName: _nonEmpty(executor?.getStringValue('name')),
     executorPhotoUrl: _firstFileUrl(executor, 'photo', pb),
     categoryName: _nonEmpty(category?.getStringValue('name')),
-    completedAt: _parseDate(r.getStringValue('completed_at')),
+    completedAt: parsePbDate(r.getStringValue('completed_at')),
     workDoneAt: workDoneAt,
     workConfirmedAt:
-        _parseDate(r.getStringValue('work_confirmed_by_customer_at')),
+        parsePbDate(r.getStringValue('work_confirmed_by_customer_at')),
     paymentReceivedAt: paymentReceivedAt,
     cityId: _nonEmpty(r.getStringValue('city')),
   );
-}
-
-/// Маппинг строки `payment_method` из БД в [PaymentMethod].
-///
-/// Сейчас в SimbA только `cash` (наличные). Если в будущем добавится
-/// `cashless`/`card` — расширь enum в `models.dart` и добавь сюда case.
-PaymentMethod _paymentMethodFromString(String s) {
-  switch (s) {
-    case 'cash':
-    default:
-      return PaymentMethod.cash;
-  }
 }
 
 /// Достаёт первый expand для отношения. PB SDK 0.22 нормализует expand в
@@ -134,13 +150,15 @@ OrderStatus _statusFromString(String s) {
     case 'cancelled':
       return OrderStatus.cancelled;
     default:
+      // Раньше молча возвращали `open` — заказ в новом статусе (refunded и т.п.)
+      // отображался как открытый, появлялся в фиде, на него можно было
+      // откликнуться. Сейчас логируем, fallback оставляем — но в логах видно,
+      // что клиент устарел.
+      if (s.isNotEmpty) {
+        debugPrint('[order_mapper] unknown order status "$s" — fallback to open');
+      }
       return OrderStatus.open;
   }
-}
-
-DateTime? _parseDate(String s) {
-  if (s.isEmpty) return null;
-  return DateTime.tryParse(s);
 }
 
 /// Собирает полные URL фото-вложений через `pb.files.getUrl`. Без [pb]

@@ -22,8 +22,9 @@ import '../../data/remote/pocketbase_client.dart';
 // cities (или отдельную view) — сейчас хардкод, потому что seed/миграция
 // такого поля не предоставляет.
 const _millionCityIds = [
-  'msk', 'spb', 'nsk', 'ekb', 'kzn', 'nn',
-  'krs', 'chl', 'sam', 'ufa', 'rnd', 'krd', 'omk',
+  'msk', 'spb', 'nsk', 'ekb', 'kzn', 'nn', 'krs',
+  'chl', 'sam', 'ufa', 'rnd', 'omk', 'krd', 'vrn',
+  'prm', 'vlg',
 ];
 
 class CityPickerScreen extends ConsumerStatefulWidget {
@@ -344,20 +345,19 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
     // Заявка на новый город уходит в коллекцию city_requests (public-create
     // правило в миграции). Если PB недоступен — fire-and-forget, юзеру всё
     // равно показываем «спасибо», т.к. он не должен страдать от наших
-    // backend-проблем.
+    // backend-проблем. Поля схемы: name (required), user (optional),
+    // status (required, заполняется хуком в 'new'), ip (заполняется хуком).
     final pb = ref.read(pocketbaseProvider);
     if (pb != null) {
-      // Не блокируем UI на сетевом запросе — заказчику нужно вернуться к
-      // поиску города. Сетевые/валидационные ошибки игнорим — заявка
-      // некритична для дальнейшего флоу.
       unawaited(() async {
         try {
           await pb.collection('city_requests').create(body: {
-            'city_name': submitted,
+            // schema-имя поля — name (раньше слали city_name → бэк отвергал).
+            'name': submitted.trim(),
             if (pb.authStore.record?.id.isNotEmpty == true)
               'user': pb.authStore.record!.id,
-          });
-        } catch (_) {/* swallow */}
+          }).timeout(const Duration(seconds: 10));
+        } catch (_) {/* swallow — заявка некритична для дальнейшего флоу */}
       }());
     }
     // Для пользователей, меняющих город из «Заказов», страница уже открыта в

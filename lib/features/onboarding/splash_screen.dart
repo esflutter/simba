@@ -34,10 +34,13 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   Future<void> _bootstrap() async {
     final minSplash = Future<void>.delayed(const Duration(milliseconds: 1200));
     try {
+      // 6 секунд: на медленной 3G/2G refresh не успевал за 3с, пользователь
+      // оставался без сессии и логинился заново при каждом старте. 6с —
+      // компромисс между «не зависнуть на splash» и «дать токену дойти».
       await ref
           .read(authRepositoryProvider)
           .tryRefreshAuth()
-          .timeout(const Duration(seconds: 3), onTimeout: () => false);
+          .timeout(const Duration(seconds: 6), onTimeout: () => false);
     } catch (_) {
       // Любая ошибка refresh не блокирует переход — пойдём по
       // обычному ветвлению onboarding (state.user может быть null).

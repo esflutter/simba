@@ -77,21 +77,43 @@ class MyOrdersScreen extends ConsumerWidget {
           ),
           SizedBox(height: 16.h),
           Expanded(
-            child: orders.isEmpty
-                ? _EmptyMyOrders(onCreate: () => context.go('/home/create'))
-                : ListView.separated(
-                    padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.h),
-                    itemCount: orders.length,
-                    separatorBuilder: (_, _) => SizedBox(height: 16.h),
-                    itemBuilder: (_, i) {
-                      final o = orders[i];
-                      return OrderCard(
-                        order: o,
-                        categoryName: _categoryName(o.categoryId),
-                        onTap: () => context.push('/order/${o.id}?mode=mine'),
-                      );
-                    },
-                  ),
+            child: RefreshIndicator(
+              color: AppColors.primary,
+              onRefresh: () async {
+                ref.invalidate(myOrdersStreamProvider);
+                ref.invalidate(myExecutorOrdersProvider);
+                try {
+                  await Future.wait([
+                    ref.read(myOrdersStreamProvider.future),
+                    ref.read(myExecutorOrdersProvider.future),
+                  ]);
+                } catch (_) {}
+              },
+              child: orders.isEmpty
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        SizedBox(height: 40.h),
+                        _EmptyMyOrders(
+                            onCreate: () => context.go('/home/create')),
+                      ],
+                    )
+                  : ListView.separated(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: EdgeInsets.fromLTRB(16.w, 0, 16.w, 16.h),
+                      itemCount: orders.length,
+                      separatorBuilder: (_, _) => SizedBox(height: 16.h),
+                      itemBuilder: (_, i) {
+                        final o = orders[i];
+                        return OrderCard(
+                          order: o,
+                          categoryName: _categoryName(o.categoryId),
+                          onTap: () =>
+                              context.push('/order/${o.id}?mode=mine'),
+                        );
+                      },
+                    ),
+            ),
           ),
         ],
       ),

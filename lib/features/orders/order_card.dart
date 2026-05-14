@@ -24,7 +24,9 @@ class OrderCard extends StatelessWidget {
 
   String get _whenLabel {
     if (order.scheduledAt != null) {
-      return DateFormat('dd.MM.yyyy').format(order.scheduledAt!);
+      // toLocal(): scheduledAt в БД хранится в UTC, без перевода в локальное
+      // время ночные заказы отображались на 1 день вперёд/назад.
+      return DateFormat('dd.MM.yyyy').format(order.scheduledAt!.toLocal());
     }
     return order.asap ? 'Как можно быстрее' : 'Не указано';
   }

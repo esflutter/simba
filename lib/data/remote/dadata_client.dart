@@ -136,6 +136,9 @@ class DaDataClient {
   /// [regionFiasId] / [cityFiasId] / [cityName] — задают ограничение поиска
   /// в порядке приоритета (FIAS точнее, чем строковое имя). Если ни один не
   /// указан — поиск без ограничения по локации.
+  ///
+  /// Если нужно отличать «нет совпадений» от «нет связи» — используй
+  /// [suggestWithStatus]; этот метод — тонкая обёртка над ним.
   Future<List<AddressSuggestion>> suggest(
     String query, {
     int count = 7,
@@ -144,31 +147,14 @@ class DaDataClient {
     String? cityName,
     bool restrictToCity = true,
   }) async {
-    if (!_isLive) return const [];
-    final pb = _pb!;
-    final trimmed = query.trim();
-    if (trimmed.isEmpty) return const [];
-
-    final body = <String, dynamic>{
-      'query': trimmed,
-      'count': count,
-      'from_bound': {'value': 'city'},
-      'to_bound': {'value': 'house'},
-    };
-    final locations = <Map<String, dynamic>>[];
-    if (regionFiasId != null && regionFiasId.isNotEmpty) {
-      locations.add({'region_fias_id': regionFiasId});
-    } else if (cityFiasId != null && cityFiasId.isNotEmpty) {
-      locations.add({'city_fias_id': cityFiasId});
-    } else if (cityName != null && cityName.isNotEmpty) {
-      locations.add({'city': cityName});
-    }
-    if (locations.isNotEmpty) {
-      body['locations'] = locations;
-      if (restrictToCity) body['restrict_value'] = true;
-    }
-
-    final res = await _suggestInternal(pb, body);
+    final res = await suggestWithStatus(
+      query,
+      count: count,
+      regionFiasId: regionFiasId,
+      cityFiasId: cityFiasId,
+      cityName: cityName,
+      restrictToCity: restrictToCity,
+    );
     return res.suggestions;
   }
 

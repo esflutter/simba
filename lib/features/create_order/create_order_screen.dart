@@ -12,6 +12,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/image_compressor.dart';
 import '../../core/utils/location_permission.dart';
 import '../../core/utils/ru_phone_formatter.dart';
 import '../../core/widgets/app_back_button.dart';
@@ -71,17 +72,36 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     super.dispose();
   }
 
+  /// Потолок размера загружаемого фото (МБ). ImagePicker с maxWidth/Height 1920
+  /// + imageQuality 80 обычно выдаёт 1-3 МБ; 8 МБ — запас для пограничных
+  /// случаев (RAW с зеркалки, 4K с iPhone Pro). Бэк-схема orders.photos
+  /// синхронизирована — maxSize=8 МБ.
+  static const double _kMaxPhotoMb = 8.0;
+
   Future<void> _addPhoto() async {
     final draft = ref.read(orderDraftProvider);
     if (draft.photoPaths.length >= 3) return;
     try {
       final picker = ImagePicker();
-      final f = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
-      if (f != null) {
-        ref.read(orderDraftProvider.notifier).update(
-              photoPaths: [...draft.photoPaths, f.path],
-            );
+      final f = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 80,
+        maxWidth: 1920,
+        maxHeight: 1920,
+      );
+      if (f == null) return;
+      // 1) image_picker нативно пересжал. 2) Если всё равно >8 МБ
+      // (большой PNG/HEIC/RAW из странной галереи) — дожимаем через
+      // flutter_image_compress циклом quality 70→50→30→15.
+      final ready = await ensurePhotoUnderLimit(f.path, _kMaxPhotoMb);
+      if (!mounted) return;
+      if (ready == null) {
+        AppToast.show(context, 'Не удалось обработать фото. Попробуйте другое.');
+        return;
       }
+      ref.read(orderDraftProvider.notifier).update(
+            photoPaths: [...draft.photoPaths, ready.path],
+          );
     } catch (_) {}
   }
 

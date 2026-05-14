@@ -33,6 +33,11 @@ dependencies:
   path_provider: ^2.1.4
 
   image_picker: ^1.2.2
+  # Принудительное JPEG-сжатие через native-код (Android: libjpeg-turbo,
+  # iOS: UIImage). Используется, когда image_picker не справился — например
+  # с большими PNG/HEIC, или когда галерея вернула RAW. Гарантирует, что
+  # фото >8 МБ из 14-МП снимка сжимается до 1-2 МБ перед загрузкой.
+  flutter_image_compress: ^2.4.0
   pin_code_fields: ^9.3.0
   iconsax_plus: ^1.0.0
   shared_preferences: ^2.5.5

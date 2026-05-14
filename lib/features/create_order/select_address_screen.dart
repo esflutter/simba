@@ -96,6 +96,14 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     super.dispose();
   }
 
+  /// Ключ LRU-кеша подсказок. Включает FIAS города, чтобы после смены
+  /// города не отдавать подсказки из предыдущего (старые записи в кеше
+  /// относились бы к другому DaData-locations-фильтру).
+  String _cacheKey(String query) {
+    final city = ref.read(appControllerProvider).selectedCity;
+    return '${city.dadataFiasId ?? city.name}:$query';
+  }
+
   void _onQueryChanged(String value) {
     _debounce?.cancel();
     final trimmed = value.trim();
@@ -110,11 +118,12 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
       return;
     }
     // Если query уже в LRU — показываем мгновенно, без сетевого запроса.
-    final cached = _suggestCache[trimmed];
+    final key = _cacheKey(trimmed);
+    final cached = _suggestCache[key];
     if (cached != null) {
       _suggestCacheOrder
-        ..remove(trimmed)
-        ..add(trimmed);
+        ..remove(key)
+        ..add(key);
       setState(() {
         _suggestions = cached;
         _showSuggestions = true;
@@ -132,12 +141,13 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
   Future<void> _runSuggest() async {
     final query = _ctrl.text.trim();
     if (query.length < 3) return;
+    final key = _cacheKey(query);
     // Двойная проверка кеша: пока тикал debounce, могло прилететь дубль-значение.
-    final cached = _suggestCache[query];
+    final cached = _suggestCache[key];
     if (cached != null) {
       _suggestCacheOrder
-        ..remove(query)
-        ..add(query);
+        ..remove(key)
+        ..add(key);
       if (!mounted) return;
       setState(() {
         _suggestions = cached;
@@ -161,7 +171,7 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     // Игнорируем устаревшие ответы: пока летел запрос, юзер мог продолжить
     // печатать, и пришёл уже более новый mySeq.
     if (mySeq != _suggestSeq || !mounted) return;
-    _cacheSuggest(query, results);
+    _cacheSuggest(key, results);
     setState(() {
       _suggestions = results;
       _loading = false;
@@ -197,6 +207,14 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
       return;
     }
 
+    // Сохраняем предыдущее состояние, чтобы откатиться при провале Phase 2
+    // (reverse-geocode не вернул FIAS — заказ без верифицированного города
+    // публиковать нельзя).
+    final prevPoint = _selectedPoint;
+    final prevAddress = _selectedAddress;
+    final prevSuggestion = _selectedSuggestion;
+    final prevText = _ctrl.text;
+
     setState(() {
       _selectedPoint = point;
       _selectedAddress = 'Точка на карте';
@@ -209,23 +227,37 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     // Параллельно даёт красивый текст адреса для UI.
     final result = await ref.read(dadataClientProvider).geolocate(point);
     if (!mounted) return;
-    if (result == null) {
-      // DaData не смогла распознать адрес (пустыри, лес). Не блокируем —
-      // юзер мог тапнуть на стройплощадку без распознанного адреса; пусть
-      // допишет вручную. Phase 1 уже подтвердил, что точка близко к городу.
+
+    // Fail-closed: НЕТ FIAS → нет адреса. DaData не вернула ничего (сеть/лес/
+    // пустырь) или вернула без cityFiasId — откатываем выбор маркера и просим
+    // юзера попробовать снова или выбрать из подсказок. Раньше тут был
+    // «мягкий» проход — заказ доходил до summary с cityFiasId == null и
+    // обходил FIAS-guard.
+    if (result == null ||
+        result.cityFiasId == null ||
+        result.cityFiasId!.isEmpty) {
+      setState(() {
+        _selectedPoint = prevPoint;
+        _selectedAddress = prevAddress;
+        _selectedSuggestion = prevSuggestion;
+        _ctrl.text = prevText;
+      });
+      AppToast.show(
+        context,
+        'Не удалось определить адрес. Попробуйте ещё раз или выберите из подсказок',
+      );
       return;
     }
-    final providerCityFias = result.cityFiasId;
+
     if (city.dadataFiasId != null &&
-        providerCityFias != null &&
-        providerCityFias != city.dadataFiasId) {
+        result.cityFiasId != city.dadataFiasId) {
       // Точка реально вне выбранного города (например, Подмосковье вместо
       // Москвы). Откатываем выбор и предупреждаем юзера.
       setState(() {
-        _selectedPoint = null;
-        _selectedAddress = '';
-        _selectedSuggestion = null;
-        _ctrl.text = '';
+        _selectedPoint = prevPoint;
+        _selectedAddress = prevAddress;
+        _selectedSuggestion = prevSuggestion;
+        _ctrl.text = prevText;
       });
       AppToast.show(context, 'В ${city.name} мы пока не работаем здесь');
       return;

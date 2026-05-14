@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -26,11 +27,28 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
 
   String _digits(String s) => s.replaceAll(RegExp(r'\D'), '');
 
-  /// Принимаем только мобильные RU-номера: 11 цифр, начинающиеся с `79`.
-  /// Городские/стационарные (8 4xx…) — отсеиваем сразу: SMS на них не уйдёт.
-  bool get _valid {
+  /// В release-сборке принимаем только мобильные RU-номера: 11 цифр,
+  /// начинающиеся с `79` (городские/стационарные `8 4xx…` отсекаем — SMS
+  /// на них не уйдёт).
+  /// В debug-сборке (Android Studio Run) — любые `+7xxxxxxxxxx`, чтобы
+  /// работали тестовые номера типа `+71111111111` / `+70000000000` для
+  /// dev-режима бэка с кодом `1234`.
+  bool get _phoneOk {
     final d = _digits(_ctrl.text);
-    return d.length == 11 && d.startsWith('79') && _agreed;
+    if (d.length != 11) return false;
+    if (kReleaseMode) return d.startsWith('79');
+    return d.startsWith('7');
+  }
+
+  bool get _valid => _phoneOk && _agreed;
+
+  /// Текст подсказки, который рассказывает юзеру, почему кнопка «Далее» не
+  /// активна. Раньше при невалидном номере или незажатой галочке кнопка
+  /// просто была серой — юзер не понимал, что не так.
+  String? get _blockerHint {
+    if (!_phoneOk) return null; // ничего не показываем пока ввод не закончен
+    if (!_agreed) return 'Подтвердите согласие, чтобы продолжить';
+    return null;
   }
 
   @override
@@ -96,20 +114,22 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
           AppToast.show(context, _errorMessage(result.errorCode, result.retryAfter));
           return;
         }
-        // Live: SMS Aero Mobile Authorization вернул session_id. Идём на
-        // экран ожидания SIM-PUSH; он сам переключится на форму ввода кода
-        // если оператор не отдаст ответ за ~30с.
+        // SMS Aero Mobile Authorization вернул session_id.
+        //
+        // ВРЕМЕННО (2026-05-14): SIM-PUSH экран ожидания (`/auth/sms-waiting`)
+        // выключен — переходим сразу на форму ввода 4-значного кода. Решение
+        // оставлять ли вообще SIM-PUSH в продукте пока не принято; пока
+        // оставляем простой flow «телефон → код». Если решим вернуть push —
+        // раскомментировать ветку `status == 'pending'` ниже.
         final sessionId = result.sessionId ?? '';
         final encPhone = Uri.encodeComponent(phone);
         final encSid = Uri.encodeComponent(sessionId);
-        // status==otp_required (SMS Aero сразу отказался от SIM-PUSH —
-        // редко, но возможно при rate-limit / no-Mobile-ID на тарифе) →
-        // сразу на форму ввода, без paussingo на waiting-экран.
-        if (result.status == 'otp_required') {
-          context.push('/auth/sms?session_id=$encSid&phone=$encPhone');
-        } else {
-          context.push('/auth/sms-waiting?session_id=$encSid&phone=$encPhone');
-        }
+        context.push('/auth/sms?session_id=$encSid&phone=$encPhone');
+        // if (result.status == 'otp_required') {
+        //   context.push('/auth/sms?session_id=$encSid&phone=$encPhone');
+        // } else {
+        //   context.push('/auth/sms-waiting?session_id=$encSid&phone=$encPhone');
+        // }
       } else {
         // Mock-режим: бэка нет, переходим сразу на форму ввода — там
         // принимается любой 4-значный код кроме `0000`.
@@ -220,6 +240,14 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                   ),
                 ],
               ),
+              if (_blockerHint != null) ...[
+                SizedBox(height: 8.h),
+                Text(
+                  _blockerHint!,
+                  textAlign: TextAlign.center,
+                  style: AppText.caption(color: AppColors.error),
+                ),
+              ],
               SizedBox(height: 18.h),
               _PhoneNextButton(
                 isSending: _isSending,

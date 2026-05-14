@@ -58,11 +58,14 @@ class _LeaveReviewGate extends ConsumerWidget {
         // в status=completed, см. `onRecordUpdate("orders")`). Если бэк не
         // вернул эту дату (старые записи, моки) — fallback на best-effort
         // лестницу: payment_received_at → scheduledAt → createdAt.
-        final completedAt = order.completedAt ??
-            order.paymentReceivedAt ??
-            order.workDoneAt ??
-            order.scheduledAt ??
-            order.createdAt;
+        // toLocal(): для согласованности с UI-форматированием — даты в
+        // БД хранятся в UTC, сравниваем по локальному времени.
+        final completedAt = (order.completedAt ??
+                order.paymentReceivedAt ??
+                order.workDoneAt ??
+                order.scheduledAt ??
+                order.createdAt)
+            .toLocal();
         final daysPassed = DateTime.now().difference(completedAt).inDays;
         if (daysPassed > kReviewDeadlineDays) {
           return const _DeadlineExpiredView();
@@ -291,6 +294,7 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
       // появиться на профиле получателя, а у себя в «деталях заказа»
       // спрятать кнопку «Оставить отзыв».
       ref.invalidate(reviewsForUserProvider(recipientId));
+      ref.invalidate(reviewsByOrderProvider(order.id));
       ref.invalidate(orderByIdProvider(order.id));
     } catch (_) {
       if (!mounted) return;

@@ -6,8 +6,10 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/image_compressor.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/app_toast.dart';
@@ -44,11 +46,39 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     super.dispose();
   }
 
+  /// Максимальный размер аватара (МБ). 1024×1024 источника + JPEG-85 обычно
+  /// дают <1 МБ; 4 МБ — потолок для пограничных PNG/HEIC случаев.
+  static const double _kMaxPhotoMb = 4.0;
+
   Future<void> _pickFromGallery() async {
     try {
       final picker = ImagePicker();
-      final f = await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
-      if (f != null) setState(() => _photoPath = f.path);
+      final f = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+        maxWidth: 1024,
+        maxHeight: 1024,
+      );
+      if (f == null) return;
+      // image_picker уже жал; для пограничных PNG/HEIC дожимаем нативно.
+      final source = await ensurePhotoUnderLimit(f.path, _kMaxPhotoMb);
+      if (!mounted) return;
+      if (source == null) {
+        AppToast.show(context, 'Не удалось обработать фото. Попробуйте другое.');
+        return;
+      }
+      // Копируем в documents directory — image_picker возвращает путь во
+      // временную папку, которая может быть очищена OS, и Image.file
+      // потом крэшится на cold-start. См. profile_setup_screen для
+      // подробностей.
+      final docs = await getApplicationDocumentsDirectory();
+      final ext = source.path.contains('.') ? source.path.split('.').last : 'jpg';
+      final dst = File(
+        '${docs.path}${Platform.pathSeparator}profile_${DateTime.now().millisecondsSinceEpoch}.$ext',
+      );
+      await source.copy(dst.path);
+      if (!mounted) return;
+      setState(() => _photoPath = dst.path);
     } catch (_) {}
   }
 
@@ -106,11 +136,16 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
             filename: 'avatar.jpg',
           ));
         }
-        await pb.collection('users').update(
+        // upload фото может занимать дольше обычного update — даём 30с,
+        // как в orders.create. Без таймаута PB SDK мог зависать.
+        await pb
+            .collection('users')
+            .update(
               pb.authStore.record!.id,
               body: body,
               files: files,
-            );
+            )
+            .timeout(const Duration(seconds: 30));
         // has_tools / has_transport — в коллекции users_private (отдельная
         // приватная таблица). Обновление через REST требует доп. правил —
         // оставляем как локальный UI-flag, чтобы не плодить запросы;

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
+import 'package:pocketbase/pocketbase.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
@@ -26,6 +27,11 @@ final pendingExecutorIdsProvider =
     FutureProvider.autoDispose.family<List<String>, String>((ref, orderId) async {
   return ref.read(orderResponsesRepositoryProvider).pendingExecutorIds(orderId);
 });
+
+/// Сообщение, когда отклик уже не существует (исполнитель отозвал в момент
+/// accept/decline). Одна константа, чтобы accept- и decline-ветки точно
+/// показывали один и тот же текст.
+const _kResponseGoneMessage = 'Этот отклик уже недоступен';
 
 /// Возвращает AppUser для отображения карточки отклика.
 /// Для seed-id из MockData используем готового мок-юзера (с фото/рейтингом).
@@ -67,11 +73,30 @@ class ResponsesScreen extends ConsumerWidget {
             Expanded(
               child: asyncIds.when(
                 data: (executorIds) {
+                  Future<void> doRefresh() async {
+                    ref.invalidate(pendingExecutorIdsProvider(orderId));
+                    try {
+                      await ref.read(
+                          pendingExecutorIdsProvider(orderId).future);
+                    } catch (_) {}
+                  }
+
                   if (executorIds.isEmpty) {
-                    return Center(
-                      child: Text(
-                        'Откликов пока нет',
-                        style: AppText.body(color: AppColors.textSecondary),
+                    return RefreshIndicator(
+                      color: AppColors.primary,
+                      onRefresh: doRefresh,
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: [
+                          SizedBox(height: 120.h),
+                          Center(
+                            child: Text(
+                              'Откликов пока нет',
+                              style: AppText.body(
+                                  color: AppColors.textSecondary),
+                            ),
+                          ),
+                        ],
                       ),
                     );
                   }
@@ -84,7 +109,11 @@ class ResponsesScreen extends ConsumerWidget {
                   final users = executorIds.map(_userForResponder).toList(
                         growable: false,
                       );
-                  return ListView.separated(
+                  return RefreshIndicator(
+                    color: AppColors.primary,
+                    onRefresh: doRefresh,
+                    child: ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
                     padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
                     itemCount: users.length,
                     separatorBuilder: (_, _) => SizedBox(height: 16.h),
@@ -108,6 +137,13 @@ class ResponsesScreen extends ConsumerWidget {
                             ref.invalidate(orderByIdProvider(orderId));
                             AppToast.show(context, 'Исполнитель отклонён');
                             if (isLast) context.pop();
+                          } on OrderResponseGoneException {
+                            // Исполнитель отозвал отклик параллельно — это не
+                            // ошибка, просто перерисуем экран.
+                            if (!context.mounted) return;
+                            ref.invalidate(
+                                pendingExecutorIdsProvider(orderId));
+                            AppToast.show(context, _kResponseGoneMessage);
                           } catch (_) {
                             if (!context.mounted) return;
                             AppToast.show(
@@ -137,6 +173,36 @@ class ResponsesScreen extends ConsumerWidget {
                             context.pushReplacement(
                               '/order/$orderId/user/${u.id}',
                             );
+                          } on OrderResponseGoneException {
+                            // Исполнитель отозвал отклик прямо в момент
+                            // принятия. Раньше клиент молча уходил «успешно»,
+                            // а на сервере ничего не менялось. Теперь честно
+                            // сообщаем и перезагружаем список откликов.
+                            if (!context.mounted) return;
+                            ref.invalidate(
+                                pendingExecutorIdsProvider(orderId));
+                            ref.invalidate(orderByIdProvider(orderId));
+                            AppToast.show(context, _kResponseGoneMessage);
+                          } on ClientException catch (e) {
+                            if (!context.mounted) return;
+                            // 409 = unique index `idx_resp_single_accepted`:
+                            // на этом заказе уже есть один accepted-отклик
+                            // (открыты две вкладки, кто-то успел раньше).
+                            // Перезагружаем экран — заказ уже не open.
+                            if (e.statusCode == 409) {
+                              ref.invalidate(
+                                  pendingExecutorIdsProvider(orderId));
+                              ref.invalidate(orderByIdProvider(orderId));
+                              AppToast.show(
+                                context,
+                                'Заказ уже принят другим исполнителем',
+                              );
+                            } else {
+                              AppToast.show(
+                                context,
+                                'Ошибка. Попробуйте позже',
+                              );
+                            }
                           } catch (_) {
                             if (!context.mounted) return;
                             AppToast.show(
@@ -147,6 +213,7 @@ class ResponsesScreen extends ConsumerWidget {
                         },
                       );
                     },
+                    ),
                   );
                 },
                 loading: () => const Center(

@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../mock/mock_data.dart';
@@ -20,7 +21,10 @@ final categoriesProvider = FutureProvider<List<Category>>((ref) async {
               icon: r.getStringValue('icon'),
             ))
         .toList();
-  } catch (_) {
+  } catch (e) {
+    // Fallback на встроенный список — лучше показать стандартные категории,
+    // чем пустой экран. В логах увидим причину для отладки.
+    debugPrint('[categories_repository] live fetch failed, using mock: $e');
     return MockData.categories;
   }
 });

@@ -22,6 +22,7 @@ import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
 import '../../data/remote/pocketbase_client.dart';
 import '../reviews/leave_review_screen.dart';
+import '../reviews/reviews_providers.dart';
 
 /// Future-провайдер одного заказа по id. На моках `OrdersRepository.get`
 /// сам ищет заказ в локальном AppState, на live — делает запрос к PB.
@@ -216,21 +217,36 @@ class _OrderDetailsBody extends ConsumerWidget {
       orElse: () => hasMyResponseFromOrder,
     );
 
+    // City-guard: deep-link мог открыть заказ из чужого города
+    // (push-уведомление, history, шаринг). Исполнителю запрещаем
+    // откликаться — бизнес-правило SimbA: только в своём городе.
+    // Заказчику свой заказ показываем как обычно, даже если он сменил город
+    // после создания (order.cityId зафиксирован в момент создания).
+    final selectedCityId =
+        ref.watch(appControllerProvider.select((s) => s.selectedCityId));
+    final isForeignCity = !isMine &&
+        order.cityId != null &&
+        selectedCityId != null &&
+        order.cityId != selectedCityId;
+
     final isCompleted = order.status == OrderStatus.completed;
     final isCancelled = order.status == OrderStatus.cancelled;
     final isPast = isCompleted || isCancelled;
     // Для выполненных/отменённых «Как можно скорее» неуместно — показываем
     // дату завершения/создания (как в списке истории).
+    // toLocal(): даты в БД хранятся в UTC; без перевода ночные заказы
+    // отображались бы со сдвигом на 1 день.
     final whenLabel = isPast
         ? DateFormat('dd.MM.yyyy', 'ru_RU').format(
-            order.scheduledAt ?? order.createdAt,
+            (order.scheduledAt ?? order.createdAt).toLocal(),
           )
         : order.scheduledAt != null
-            ? DateFormat('dd.MM.yyyy HH:mm').format(order.scheduledAt!)
+            ? DateFormat('dd.MM.yyyy HH:mm')
+                .format(order.scheduledAt!.toLocal())
             : 'Как можно скорее';
     final whenFieldLabel =
         isCompleted ? 'Дата выполнения' : isCancelled ? 'Дата' : 'Время начала работ';
-    final paymentLabel = _paymentLabel(order.paymentMethod);
+    final paymentLabel = order.paymentMethod.label;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -255,6 +271,14 @@ class _OrderDetailsBody extends ConsumerWidget {
             child: ListView(
               padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 8.h),
               children: [
+                if (isForeignCity) ...[
+                  _StatusBanner(
+                    color: AppColors.surfaceVariant,
+                    textColor: AppColors.textSecondary,
+                    label: 'Заказ из другого города. Откликаться нельзя.',
+                  ),
+                  SizedBox(height: 16.h),
+                ],
                 Text(order.title, style: AppText.h2().copyWith(height: 1.20)),
                 SizedBox(height: 16.h),
                 Text(
@@ -348,6 +372,7 @@ class _OrderDetailsBody extends ConsumerWidget {
               isMine,
               hasMyResponse,
               myId,
+              isForeignCity,
             ),
           ),
         ],
@@ -355,12 +380,6 @@ class _OrderDetailsBody extends ConsumerWidget {
     );
   }
 
-  String _paymentLabel(PaymentMethod m) {
-    switch (m) {
-      case PaymentMethod.cash:
-        return 'Наличными исполнителю';
-    }
-  }
 
   List<Widget> _buildActions(
     BuildContext context,
@@ -369,10 +388,20 @@ class _OrderDetailsBody extends ConsumerWidget {
     bool isMine,
     bool hasMyResponse,
     String myId,
+    bool isForeignCity,
   ) {
-    final reviews = ref.watch(appControllerProvider).reviews;
-    final hasMyReview =
-        reviews.any((r) => r.orderId == order.id && r.fromUserId == myId);
+    // Источник правды по отзывам — `reviewsByOrderProvider`. В live-режиме
+    // `state.reviews` маппером не наполняется, и hasMyReview через локальный
+    // стейт остался бы false даже после успешной отправки — кнопка «Оставить
+    // отзыв» дублировалась бы, повторный клик ловил бы 4xx от бэка.
+    // Pessimistic-fallback на локальный стейт сохранён внутри провайдера.
+    final reviewsAsync = ref.watch(reviewsByOrderProvider(order.id));
+    final reviewsLocal = ref.watch(appControllerProvider).reviews;
+    final hasMyReview = reviewsAsync.maybeWhen(
+      data: (list) => list.any((r) => r.fromUserId == myId),
+      orElse: () => reviewsLocal
+          .any((r) => r.orderId == order.id && r.fromUserId == myId),
+    );
     final widgets = <Widget>[];
 
     Future<void> markWorkDone() async {
@@ -453,6 +482,11 @@ class _OrderDetailsBody extends ConsumerWidget {
           ));
           break;
         case OrderStatus.awaitingPayment:
+          // Исполнитель ещё не подтвердил получение оплаты — пока заказ
+          // не перейдёт в `completed`, отзывы оставлять нельзя (бэк всё равно
+          // отклонит). Для заказчика на этом шаге UI — пустой action-bar:
+          // он уже нажал «Подтверждаю работу», ждёт исполнителя.
+          break;
         case OrderStatus.completed:
           if (!hasMyReview) {
             widgets.add(PrimaryButton(
@@ -467,11 +501,25 @@ class _OrderDetailsBody extends ConsumerWidget {
     } else {
       switch (order.status) {
         case OrderStatus.open:
+          if (isForeignCity) {
+            // Баннер сверху карточки уже информирует пользователя — кнопку
+            // «Откликнуться» в этом случае не показываем вообще.
+            break;
+          }
           if (hasMyResponse) {
             widgets.add(_StatusBanner(
               color: AppColors.primarySoft,
               textColor: AppColors.primary,
               label: 'Отклик отправлен',
+            ));
+          } else if (order.isExpiredOpen) {
+            // Cron `expire-open-orders` срабатывает раз в 15 минут — между
+            // тиками заказ с истёкшей `scheduled_at` всё ещё в open. Прячем
+            // кнопку, чтобы исполнитель не упирался в 400 от FSM-валидатора.
+            widgets.add(_StatusBanner(
+              color: AppColors.surfaceVariant,
+              textColor: AppColors.textSecondary,
+              label: 'Срок выполнения уже истёк',
             ));
           } else {
             widgets.add(_AsyncPrimaryButton(

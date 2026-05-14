@@ -18,11 +18,14 @@ class MockData {
     return 'm${ts}_$rnd';
   }
 
-  /// 13 городов-миллионников РФ (по убыванию населения 2024). Список
-  /// должен совпадать с seed-данными в `backend/pb_migrations/1700000007_*`.
+  /// 16 городов-миллионников РФ (на 2026 год). Список должен совпадать
+  /// с seed-данными в `backend/pb_migrations/1700000007_*` + миграциями
+  /// 010 (Волгоград), 013 (Красноярск/Воронеж/Пермь).
   /// При расширении на агломерации/области: добавляй города сюда + seed,
   /// `boundsRadiusKm` подбирай по реальной географии (Москва 60, Воронеж 40),
   /// `dadataFiasId` — `city_fias_id` из DaData /suggest по названию.
+  /// Для городов без проверенного FIAS оставляй `dadataFiasId: null` —
+  /// DaData отработает по cityName fallback.
   static const List<City> cities = [
     City(id: 'msk', name: 'Москва',          center: LatLng(55.7558, 37.6173), dadataFiasId: '0c5b2444-70a0-4932-980c-b4dc0d3f02b5', boundsRadiusKm: 60),
     City(id: 'spb', name: 'Санкт-Петербург', center: LatLng(59.9343, 30.3351), dadataFiasId: 'c2deb16a-0330-4f05-821f-1d09c93331e6', boundsRadiusKm: 55),
@@ -30,13 +33,21 @@ class MockData {
     City(id: 'ekb', name: 'Екатеринбург',    center: LatLng(56.8389, 60.6057), dadataFiasId: '2763c110-cb8b-416a-9dac-ad28a55b4402', boundsRadiusKm: 50),
     City(id: 'kzn', name: 'Казань',          center: LatLng(55.8304, 49.0661), dadataFiasId: '93b3df57-4c89-44df-ac42-96f05e9cd3b9', boundsRadiusKm: 45),
     City(id: 'nn',  name: 'Нижний Новгород', center: LatLng(56.2965, 43.9361), dadataFiasId: '555e7d61-d9a7-4ba6-9770-6caa8198c483', boundsRadiusKm: 40),
-    City(id: 'krs', name: 'Красноярск',      center: LatLng(56.0153, 92.8932), dadataFiasId: '9b968c73-f4d4-41c2-8e0c-2e3f4e3f4b6c', boundsRadiusKm: 45),
-    City(id: 'chl', name: 'Челябинск',       center: LatLng(55.1644, 61.4368), dadataFiasId: 'a376e68d-724a-4472-be7c-7bb38e2cf6bd', boundsRadiusKm: 40),
-    City(id: 'sam', name: 'Самара',          center: LatLng(53.1959, 50.1002), dadataFiasId: 'bb035cc3-1dc2-4627-9d25-a1bf2d4b936b', boundsRadiusKm: 40),
-    City(id: 'ufa', name: 'Уфа',             center: LatLng(54.7388, 55.9721), dadataFiasId: '7339e834-2cb4-4734-a4c7-1fca2c66e562', boundsRadiusKm: 40),
-    City(id: 'rnd', name: 'Ростов-на-Дону',  center: LatLng(47.2357, 39.7015), dadataFiasId: 'c1cfe4b6-c01d-4ac0-a06b-1a41e159f6f9', boundsRadiusKm: 40),
-    City(id: 'krd', name: 'Краснодар',       center: LatLng(45.0355, 38.9753), dadataFiasId: '7dfa745e-aa19-4688-b121-b73ecb14b610', boundsRadiusKm: 40),
+    City(id: 'krs', name: 'Красноярск',      center: LatLng(56.0153, 92.8932), dadataFiasId: '9b968c73-f4d4-4012-8da8-3dacd4d4c1bd', boundsRadiusKm: 45),
+    City(id: 'chl', name: 'Челябинск',       center: LatLng(55.1644, 61.4368), dadataFiasId: 'a376e68d-724a-4472-be7c-891bdb09ae32', boundsRadiusKm: 40),
+    // Самара вытянута вдоль Волги ~50 км — поднимаем с 40 до 45.
+    City(id: 'sam', name: 'Самара',          center: LatLng(53.1959, 50.1002), dadataFiasId: 'bb035cc3-1dc2-4627-9d25-a1bf2d4b936b', boundsRadiusKm: 45),
+    // Уфа вытянута вдоль Белой ~50 км — поднимаем с 40 до 50.
+    City(id: 'ufa', name: 'Уфа',             center: LatLng(54.7388, 55.9721), dadataFiasId: '7339e834-2cb4-4734-a4c7-1fca2c66e562', boundsRadiusKm: 50),
+    City(id: 'rnd', name: 'Ростов-на-Дону',  center: LatLng(47.2357, 39.7015), dadataFiasId: 'c1cfe4b9-f7c2-423c-abfa-6ed1c05a15c5', boundsRadiusKm: 40),
     City(id: 'omk', name: 'Омск',            center: LatLng(54.9885, 73.3242), dadataFiasId: '140e31da-27bf-4519-9ea0-6185d681d44e', boundsRadiusKm: 40),
+    City(id: 'krd', name: 'Краснодар',       center: LatLng(45.0355, 38.9753), dadataFiasId: '7dfa745e-aa19-4688-b121-b655c11e482f', boundsRadiusKm: 40),
+    City(id: 'vrn', name: 'Воронеж',         center: LatLng(51.6720, 39.1843), dadataFiasId: '5bf5ddff-6353-4a3d-80c4-6fb27f00c6c1', boundsRadiusKm: 40),
+    // Пермь — один из самых длинных городов России (~70 км вдоль Камы),
+    // поэтому радиус 60 (большинство = 40-45).
+    City(id: 'prm', name: 'Пермь',           center: LatLng(58.0105, 56.2502), dadataFiasId: 'a309e4ce-2f36-4106-b1ca-53e0f48a6d95', boundsRadiusKm: 60),
+    // Волгоград растянут вдоль Волги ~90 км — radius 70 щедрее обычных 40-50.
+    City(id: 'vlg', name: 'Волгоград',       center: LatLng(48.7080, 44.5133), dadataFiasId: 'a52b7389-0cfe-46fb-ae15-298652a64cf8', boundsRadiusKm: 70),
   ];
 
   static const List<Category> categories = [

@@ -22,8 +22,10 @@ import '../../data/remote/orders_repository.dart';
 import 'order_draft.dart';
 import 'select_payment_method_screen.dart';
 
+// Минимум совпадает с проверкой в `_canPublish`; максимум берётся из
+// общей константы `kPriceMax` (`core/utils/date_time_formatters.dart`),
+// чтобы RubFormatter и UI-валидация ходили от одного значения.
 const _minPrice = 100;
-const _maxPrice = 100000;
 
 class OrderSummaryScreen extends ConsumerStatefulWidget {
   const OrderSummaryScreen({super.key});
@@ -79,7 +81,9 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
 
   /// Полная валидация перед публикацией. Кнопка дизейблится, если хоть одно
   /// условие не выполнено: категория, адрес + координаты, цена в диапазоне
-  /// [_minPrice .. _maxPrice], выбран способ оплаты.
+  /// [_minPrice .. kPriceMax], выбран способ оплаты. Потолок 99 999 999 ₽ —
+  /// формальный (чтобы не лезли 10-значные суммы по ошибке), реалистично
+  /// не достижим.
   bool get _canPublish {
     final draft = ref.read(orderDraftProvider);
     final p = _priceRub;
@@ -88,7 +92,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
         draft.address.trim().isNotEmpty &&
         draft.location != null &&
         p >= _minPrice &&
-        p <= _maxPrice &&
+        p <= kPriceMax &&
         (draft.paymentMethod?.isNotEmpty ?? false);
   }
 
@@ -240,8 +244,8 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       AppToast.show(context, 'Минимальная цена $_minPrice ₽');
       return;
     }
-    if (price > _maxPrice) {
-      AppToast.show(context, 'Максимальная цена 100 000 ₽');
+    if (price > kPriceMax) {
+      AppToast.show(context, 'Максимальная цена 99 999 999 ₽');
       return;
     }
     // Финальный city-guard: даже если в _onMapTap прошли Phase 1+2, тут
@@ -261,17 +265,21 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       );
       return;
     }
-    // Дополнительная FIAS-сверка: cityFiasId должен совпадать с городом
-    // юзера. Если в draft.cityFiasId пусто — пропускаем (старые черновики).
-    if (city.dadataFiasId != null &&
-        draft.cityFiasId != null &&
-        draft.cityFiasId!.isNotEmpty &&
-        draft.cityFiasId != city.dadataFiasId) {
-      AppToast.show(
-        context,
-        'Адрес вне города ${city.name}. Уточните адрес или смените город.',
-      );
-      return;
+    // Если у города есть FIAS, draft обязан иметь совпадающий FIAS.
+    // Иначе — отказ публикации (заказ без верифицированного города не годится:
+    // выбор маркера без reverse-geocode или ручной редит сейчас не разрешён).
+    if (city.dadataFiasId != null && city.dadataFiasId!.isNotEmpty) {
+      if (draft.cityFiasId == null || draft.cityFiasId!.isEmpty) {
+        AppToast.show(
+          context,
+          'Адрес не подтверждён. Выберите из подсказок или коснитесь карты ещё раз.',
+        );
+        return;
+      }
+      if (draft.cityFiasId != city.dadataFiasId) {
+        AppToast.show(context, 'Адрес не в вашем городе');
+        return;
+      }
     }
     setState(() => _isPublishing = true);
     try {
@@ -303,12 +311,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
         asap: draft.asap,
         photoPaths: draft.photoPaths,
         forOtherPhone: draft.forOtherPhone,
-        // PaymentMethod enum сейчас содержит только cash, поэтому
-        // draft.paymentMethod (String, человекочитаемая подпись) играет роль
-        // флага «способ выбран» в _canPublish, а в Order передаём
-        // единственно валидный enum-вариант. При расширении enum здесь
-        // понадобится явный маппинг draft.paymentMethod → PaymentMethod.
-        paymentMethod: PaymentMethod.cash,
+        paymentMethod: PaymentMethodMapping.fromLabel(draft.paymentMethod),
       );
       final photoFiles = draft.photoPaths
           .map((p) => File(p))
@@ -341,6 +344,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       if (mounted) setState(() => _isPublishing = false);
     }
   }
+
 }
 
 class _PublishButton extends StatelessWidget {
