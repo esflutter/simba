@@ -274,6 +274,24 @@ class AppController extends Notifier<AppState> {
     );
   }
 
+  /// Исполнитель отказывается от принятого заказа — заказ возвращается в
+  /// ленту со статусом open и сброшенным executor. На моках сценарий почти
+  /// гипотетический (моковая лента не показывает accepted чужих заказов),
+  /// но логика симметрична `takeOrderAsExecutor` ради консистентности
+  /// FSM в офлайн-демо.
+  void releaseOrderAsExecutor(String orderId) {
+    state = state.copyWith(
+      orders: state.orders.map((o) {
+        if (o.id != orderId) return o;
+        return o.copyWith(
+          status: OrderStatus.open,
+          executorId: null,
+          responses: o.responses.where((id) => id != 'me').toList(),
+        );
+      }).toList(),
+    );
+  }
+
   void markWorkDone(String orderId, {required bool inMyOrders}) {
     if (inMyOrders) {
       state = state.copyWith(

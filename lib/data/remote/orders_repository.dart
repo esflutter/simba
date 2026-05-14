@@ -318,6 +318,26 @@ class OrdersRepository {
         _pb!.collection('orders').delete(orderId).timeout(_pbTimeout));
   }
 
+  /// Исполнитель отказывается от принятого заказа — заказ возвращается
+  /// в ленту (`status = open`, `executor = null`, остальные pending-отклики
+  /// восстанавливаются хуком на сервере). Доступно только пока:
+  ///   - есть `scheduled_at` И он ещё не наступил;
+  ///   - исполнитель ещё не отметил «работа выполнена».
+  /// Бэк-валидация FSM (см. main.pb.js) повторно проверяет эти условия — UI
+  /// просто прячет кнопку для других случаев. Любая ошибка пробрасывается
+  /// наверх, чтобы UI показал тост.
+  Future<void> cancelAsExecutor(String orderId) async {
+    if (!_isLive) {
+      _ref
+          .read(appControllerProvider.notifier)
+          .releaseOrderAsExecutor(orderId);
+      return;
+    }
+    await _withAuthRetry(() => _pb!.collection('orders').update(orderId, body: {
+      'status': 'open',
+    }).timeout(_pbTimeout));
+  }
+
   /// Исполнитель отмечает «работа выполнена».
   Future<void> markWorkDone(String orderId) async {
     if (!_isLive) {

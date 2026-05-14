@@ -445,6 +445,22 @@ class _OrderDetailsBody extends ConsumerWidget {
       }
     }
 
+    Future<void> cancelAsExecutor() async {
+      try {
+        await ref
+            .read(ordersRepositoryProvider)
+            .cancelAsExecutor(order.id);
+        if (!context.mounted) return;
+        ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(feedOrdersProvider);
+        ref.invalidate(orderByIdProvider(order.id));
+        AppToast.show(context, 'Заказ возвращён в ленту');
+      } catch (_) {
+        if (!context.mounted) return;
+        AppToast.show(context, 'Ошибка. Попробуйте позже');
+      }
+    }
+
     Future<void> respond() async {
       try {
         await ref.read(orderResponsesRepositoryProvider).respond(order.id);
@@ -535,6 +551,22 @@ class _OrderDetailsBody extends ConsumerWidget {
               label: 'Работа выполнена',
               onPressed: markWorkDone,
             ));
+            // Кнопка отмены принятого заказа — только до наступления
+            // запланированного времени. ASAP-заказы (scheduledAt == null)
+            // отменять нельзя: «время = сейчас», уже наступило. Бэк-FSM
+            // повторно проверяет это же условие.
+            final sched = order.scheduledAt;
+            if (sched != null && sched.isAfter(DateTime.now())) {
+              widgets.add(SizedBox(height: 12.h));
+              widgets.add(_CancelOrderButton(
+                onTap: () => _confirmCancelExecutor(
+                  context,
+                  ref,
+                  order.id,
+                  cancelAsExecutor,
+                ),
+              ));
+            }
           } else {
             widgets.add(_StatusBanner(
               color: AppColors.surfaceVariant,
@@ -646,6 +678,92 @@ class _OrderDetailsBody extends ConsumerWidget {
               SizedBox(height: 8.h),
               _DialogActionButton(
                 label: 'Отмена',
+                background: AppColors.surfaceVariant,
+                textColor: Colors.black,
+                onTap: () => Navigator.of(dialogCtx).pop(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Диалог подтверждения отмены принятого заказа исполнителем.
+  /// Текст подбирается под сценарий «заказ вернётся в ленту»: исполнитель
+  /// видит, что не «удаляет» заказ, а возвращает его заказчику, и тот
+  /// получит уведомление + автоматом-отклонённые отклики снова станут pending.
+  void _confirmCancelExecutor(
+    BuildContext context,
+    WidgetRef ref,
+    String orderId,
+    Future<void> Function() doCancel,
+  ) {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.40),
+      builder: (dialogCtx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.symmetric(horizontal: 24.w),
+        child: Container(
+          width: 313.w,
+          padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 16.h),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24.r),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 56.r,
+                height: 56.r,
+                decoration: BoxDecoration(
+                  color: AppColors.error,
+                  borderRadius: BorderRadius.circular(14.r),
+                ),
+                child: Center(
+                  child: CustomPaint(
+                    size: Size(18.r, 18.r),
+                    painter: _XPainter(color: Colors.white, strokeWidth: 3.r),
+                  ),
+                ),
+              ),
+              SizedBox(height: 16.h),
+              Text(
+                'Отменить выполнение?',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.black,
+                  fontSize: 20.sp,
+                  fontWeight: FontWeight.w600,
+                  height: 1.40,
+                ),
+              ),
+              SizedBox(height: 8.h),
+              Text(
+                'Заказ вернётся в ленту, заказчик получит уведомление',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.black.withValues(alpha: 0.60),
+                  fontSize: 15.sp,
+                  fontWeight: FontWeight.w400,
+                  height: 1.33,
+                ),
+              ),
+              SizedBox(height: 16.h),
+              _DialogActionButton(
+                label: 'Отменить выполнение',
+                background: AppColors.primary,
+                textColor: Colors.white,
+                onTap: () {
+                  Navigator.of(dialogCtx).pop();
+                  doCancel();
+                },
+              ),
+              SizedBox(height: 8.h),
+              _DialogActionButton(
+                label: 'Не отменять',
                 background: AppColors.surfaceVariant,
                 textColor: Colors.black,
                 onTap: () => Navigator.of(dialogCtx).pop(),
