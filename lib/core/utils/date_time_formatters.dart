@@ -134,7 +134,9 @@ DateTime? parseRuDate(String s) {
   return dt;
 }
 
-/// Максимальная сумма заказа.
+/// Минимальная и максимальная сумма заказа (₽). На бэке зеркалятся в схеме
+/// `orders.price_rub` (min/max) — если меняешь здесь, проверь миграцию 019.
+const kPriceMin = 100;
 const kPriceMax = 99999999;
 
 String _withThousands(String digits) {

@@ -47,3 +47,4 @@ app.*.map.json
 # Локальные скрипты запуска с ключами
 run_dev.bat
 run_prod.bat
+run_remote.bat

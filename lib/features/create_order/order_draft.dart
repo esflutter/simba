@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:latlong2/latlong.dart';
 
-import '../../core/utils/date_time_formatters.dart' show kPriceMax;
+import '../../core/utils/date_time_formatters.dart' show kPriceMax, kPriceMin;
 import '../../data/local/preferences_store.dart';
 
 @immutable
@@ -132,7 +132,7 @@ class OrderDraft {
       title.trim().isNotEmpty &&
       address.trim().isNotEmpty &&
       location != null &&
-      priceRub >= 100 &&
+      priceRub >= kPriceMin &&
       priceRub <= kPriceMax;
 
   OrderDraft copyWith({

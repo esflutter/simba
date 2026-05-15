@@ -11,14 +11,30 @@ import '../../data/models/models.dart';
 class RolePickerScreen extends ConsumerWidget {
   const RolePickerScreen({super.key});
 
+  Future<void> _finishRegistration(
+    BuildContext context,
+    WidgetRef ref,
+    UserRole role,
+    String homePath,
+  ) async {
+    final notifier = ref.read(appControllerProvider.notifier);
+    notifier.setRole(role);
+    // Регистрация полностью завершена — теперь онбординг считается
+    // «просмотренным» (флаг хранится в prefs пожизненно). Раньше
+    // он ставился в конце страниц онбординга, и если юзер не доходил
+    // до конца регистрации, на следующий запуск приложение могло
+    // привести его в неконсистентное состояние.
+    await notifier.markOnboardingSeen();
+    if (!context.mounted) return;
+    context.go(homePath);
+  }
+
   void _pickCustomer(BuildContext context, WidgetRef ref) {
-    ref.read(appControllerProvider.notifier).setRole(UserRole.customer);
-    context.go('/home/create');
+    _finishRegistration(context, ref, UserRole.customer, '/home/create');
   }
 
   void _pickExecutor(BuildContext context, WidgetRef ref) {
-    ref.read(appControllerProvider.notifier).setRole(UserRole.executor);
-    context.go('/home/orders');
+    _finishRegistration(context, ref, UserRole.executor, '/home/orders');
   }
 
   @override
@@ -122,9 +138,16 @@ class _RoleCard extends StatelessWidget {
                   style: AppText.body(color: Colors.black.withValues(alpha: 0.60))
                       .copyWith(height: 1.39),
                 ),
-                TextSpan(
-                  text: '→',
-                  style: AppText.body(color: AppColors.primary).copyWith(height: 1.39),
+                // Webp-стрелка из Figma вместо текстового символа '→' —
+                // тот же ассет, что в карточке заказа.
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: Image.asset(
+                    'assets/images/icon_arrow_forward.webp',
+                    width: 18.r,
+                    height: 18.r,
+                    color: AppColors.primary,
+                  ),
                 ),
               ],
             ),

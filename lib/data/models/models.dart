@@ -193,6 +193,8 @@ class AppUser {
       reviewsCountAsExecutor:
           reviewsCountAsExecutor ?? this.reviewsCountAsExecutor,
       cityId: cityId ?? this.cityId,
+      hasTools: hasTools ?? this.hasTools,
+      hasTransport: hasTransport ?? this.hasTransport,
     );
   }
 }
@@ -347,6 +349,8 @@ class Review {
     required this.comment,
     required this.tags,
     required this.createdAt,
+    this.fromUserName = '',
+    this.fromUserPhotoUrl,
   });
 
   final String id;
@@ -357,7 +361,34 @@ class Review {
   final String comment;
   final List<String> tags;
   final DateTime createdAt;
+
+  /// Имя автора отзыва, если PB вернул `expand.from_user.name`.
+  /// Пусто, если expand не подгружен (например, мок-режим) — UI
+  /// сваливается на `userById` или «Пользователь».
+  final String fromUserName;
+
+  /// URL аватарки автора. Заполняется из `expand.from_user.photo`
+  /// через `pb.files.getUrl()`. Null, если фото не загружено или
+  /// expand не пришёл.
+  final String? fromUserPhotoUrl;
 }
+
+/// Slug → русская подпись для review-тегов. Сторятся на бэке в коллекции
+/// `review_tags` (миграция 1700000007). Если в БД оказался слаг, которого
+/// здесь нет (например, старый seed заливал `quality`/`professional`/
+/// `thorough` — не из списка), UI покажет слаг как есть.
+const Map<String, String> kReviewTagRu = {
+  'polite': 'Вежливый',
+  'accurate': 'Аккуратный',
+  'reliable': 'Надёжный',
+  'punctual': 'Пунктуальный',
+  'attentive': 'Внимательный',
+  'experienced': 'Опытный',
+  'fast': 'Быстрый',
+  'friendly': 'Дружелюбный',
+};
+
+String reviewTagLabel(String slug) => kReviewTagRu[slug] ?? slug;
 
 extension OrderLifecycle on Order {
   /// Заказ относится к истории: завершён, отменён, либо запланированная

@@ -12,6 +12,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
+import '../../core/widgets/app_network_image.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
@@ -129,6 +130,7 @@ class ResponsesScreen extends ConsumerWidget {
                                 .decline(orderId, u.id);
                             if (!context.mounted) return;
                             ref.invalidate(myOrdersStreamProvider);
+                            ref.invalidate(myExecutorOrdersProvider);
                             ref.invalidate(feedOrdersProvider);
                             ref.invalidate(
                                 pendingExecutorIdsProvider(orderId));
@@ -157,6 +159,7 @@ class ResponsesScreen extends ConsumerWidget {
                                 .accept(orderId, u.id);
                             if (!context.mounted) return;
                             ref.invalidate(myOrdersStreamProvider);
+                            ref.invalidate(myExecutorOrdersProvider);
                             // После accept заказ становится "не open"
                             // → должен исчезнуть из фида у других исполнителей.
                             ref.invalidate(feedOrdersProvider);
@@ -298,31 +301,23 @@ class _ResponseCardState extends State<_ResponseCard> {
                       shape: BoxShape.circle,
                     ),
                     clipBehavior: Clip.antiAlias,
-                    child: user.photoPath != null
-                        ? (user.photoPath!.startsWith('http')
-                            ? Image.network(
-                                user.photoPath!,
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => Icon(
-                                  IconsaxPlusLinear.user,
-                                  color: AppColors.primary,
-                                  size: 32.r,
-                                ),
-                              )
-                            : Image.file(
-                                File(user.photoPath!),
-                                fit: BoxFit.cover,
-                                errorBuilder: (_, _, _) => Icon(
-                                  IconsaxPlusLinear.user,
-                                  color: AppColors.primary,
-                                  size: 32.r,
-                                ),
-                              ))
-                        : Icon(
-                            IconsaxPlusLinear.user,
-                            color: AppColors.primary,
-                            size: 32.r,
-                          ),
+                    child: Builder(builder: (_) {
+                      final fallback = Icon(
+                        IconsaxPlusLinear.user,
+                        color: AppColors.primary,
+                        size: 32.r,
+                      );
+                      final p = user.photoPath;
+                      if (p == null) return fallback;
+                      if (p.startsWith('http')) {
+                        return AppNetworkImage(url: p, fallback: fallback);
+                      }
+                      return Image.file(
+                        File(p),
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => fallback,
+                      );
+                    }),
                   ),
                   SizedBox(width: 16.w),
                   Expanded(

@@ -8,7 +8,6 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
-import '../../data/mock/app_state.dart';
 
 class _OnboardPage {
   const _OnboardPage({required this.image, required this.title, required this.body});
@@ -88,15 +87,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
     if (_index < _pages.length - 1) {
       _ctrl.nextPage(duration: const Duration(milliseconds: 308), curve: Curves.easeOut);
     } else {
-      // Помечаем онбординг как пройденный — повторно не покажется даже
-      // после logout (флаг хранится в prefs как «свойство устройства»).
-      // Дожидаемся записи в prefs перед навигацией — иначе при cold restart
-      // прямо после онбординга юзер увидит его повторно.
-      () async {
-        await ref.read(appControllerProvider.notifier).markOnboardingSeen();
-        if (!mounted) return;
-        context.go('/city');
-      }();
+      // Раньше тут вызывался markOnboardingSeen — после первого
+      // долистывания страниц онбординг считался «просмотренным».
+      // Но если пользователь не доходил до конца регистрации
+      // (закрывал на экране города/телефона), на следующий запуск
+      // онбординг не показывался, а флоу обрывался посередине.
+      // Теперь флаг «просмотрен» ставится в конце регистрации
+      // (см. role_picker_screen), а здесь просто переходим к городу.
+      context.go('/city');
     }
   }
 
@@ -224,8 +222,12 @@ class _NextRoundButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final arcSize = 72.r;
-    final btnSize = 56.r;
+    // Внешняя дуга-прогресс 64×64. Внутренняя картинка чуть меньше 56,
+    // потому что в webp у самого белого круга есть лёгкий outer-padding —
+    // если рендерить 56×56, визуально круг почти упирается в дугу.
+    // 52.r даёт честные ~4 пикселя зазора по фигме.
+    final arcSize = 64.r;
+    final btnSize = 52.r;
     return AnimatedBuilder(
       animation: Listenable.merge([ctrl, initCtrl]),
       builder: (context, child) {
@@ -247,8 +249,14 @@ class _NextRoundButton extends StatelessWidget {
           ),
         );
       },
+      // Webp `icon_arrow_forward_button.webp` — целый кнопочный круг из
+      // Figma (белая заливка + синяя стрелка). Material остаётся прозрачным,
+      // InkWell даёт ripple поверх. Отдельный ассет от `icon_arrow_forward`
+      // (там только стрелка без круга — она используется в карточках,
+      // и применяется `color: primary`, который иначе перекрасил бы и
+      // белый фон, превратив кнопку в сплошной синий кружок).
       child: Material(
-        color: AppColors.surface,
+        color: Colors.transparent,
         shape: const CircleBorder(),
         child: InkWell(
           customBorder: const CircleBorder(),
@@ -256,10 +264,9 @@ class _NextRoundButton extends StatelessWidget {
           child: SizedBox(
             width: btnSize,
             height: btnSize,
-            child: Icon(
-              Icons.arrow_forward_rounded,
-              color: AppColors.primary,
-              size: 26.r,
+            child: Image.asset(
+              'assets/images/icon_arrow_forward_button.webp',
+              fit: BoxFit.contain,
             ),
           ),
         ),

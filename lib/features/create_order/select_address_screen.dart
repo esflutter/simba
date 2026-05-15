@@ -18,6 +18,8 @@ import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/openfreemap_view.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
+import '../../data/mock/mock_data.dart';
+import '../../data/remote/cities_repository.dart';
 import '../../data/remote/dadata_client.dart';
 import 'order_draft.dart';
 
@@ -36,11 +38,16 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
   List<AddressSuggestion> _suggestions = const [];
   bool _loading = false;
   bool _showSuggestions = false;
-  bool _isLocating = false;
 
   LatLng? _selectedPoint;
   String _selectedAddress = '';
   AddressSuggestion? _selectedSuggestion;
+
+  /// Последнее известное местоположение пользователя — пытаемся подставить
+  /// его в качестве стартового центра карты при открытии экрана. Если
+  /// разрешение не выдано или координата за пределами поддерживаемых
+  /// городов — остаётся `null`, и центр берётся от выбранного города.
+  LatLng? _initialFix;
 
   // ── Race-protection + LRU-кеш для suggest ──────────────────────────
   // Растущий счётчик: каждый новый запрос увеличивает _suggestSeq, и колбэк
@@ -80,12 +87,46 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
         });
       }
     });
+    // В приоритете — фактическое местоположение пользователя. Берём только
+    // уже закэшированный fix, без запроса разрешения: если permission
+    // выдан — последняя известная координата приходит мгновенно; если нет
+    // — оставляем дефолт «центр выбранного города».
+    _bootstrapInitialFix();
   }
 
-  void _zoomIn() {
-    final center = _mapController.camera.center;
-    final zoom = _mapController.camera.zoom;
-    _mapController.move(center, zoom + 1);
+  Future<void> _bootstrapInitialFix() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) return;
+      final perm = await Geolocator.checkPermission();
+      if (perm != LocationPermission.always &&
+          perm != LocationPermission.whileInUse) {
+        return;
+      }
+      final pos = await Geolocator.getLastKnownPosition();
+      if (pos == null || !mounted) return;
+      final userPoint = LatLng(pos.latitude, pos.longitude);
+      // Подставляем местоположение, только если оно попадает в радиус
+      // одного из поддерживаемых городов. Иначе пользователь может
+      // оказаться где-нибудь в командировке — там карта бессмысленна
+      // (в этом городе не работаем), привычнее показать центр того
+      // города, который выбран в чипе сверху.
+      final citiesAsync = ref.read(citiesProvider);
+      final cities = citiesAsync.maybeWhen(
+        data: (v) => v,
+        orElse: () => MockData.cities,
+      );
+      final inAnyCity = cities.any((c) {
+        final meters = Geolocator.distanceBetween(
+          c.center.latitude,
+          c.center.longitude,
+          userPoint.latitude,
+          userPoint.longitude,
+        );
+        return meters / 1000.0 <= c.boundsRadiusKm;
+      });
+      if (!inAnyCity) return;
+      setState(() => _initialFix = userPoint);
+    } catch (_) {/* нет GPS / сервис выключен — молча игнорим */}
   }
 
   @override
@@ -269,45 +310,18 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     });
   }
 
-  Future<void> _useMyLocation() async {
-    if (_isLocating) return;
-    setState(() => _isLocating = true);
-    try {
-      // Системный сервис локации (GPS) — обязательная предпосылка. Если
-      // выключен, нет смысла запрашивать permission: пользователю всё
-      // равно сначала придётся открыть настройки.
-      if (!await Geolocator.isLocationServiceEnabled()) {
-        if (mounted) AppToast.show(context, 'Включите геолокацию в настройках');
-        return;
-      }
-      final perm = await Geolocator.checkPermission();
-      var status = perm;
-      if (status == LocationPermission.denied) {
-        status = await Geolocator.requestPermission();
-      }
-      if (status == LocationPermission.deniedForever ||
-          status == LocationPermission.denied) {
-        if (mounted) AppToast.show(context, 'Разрешите доступ к геолокации');
-        return;
-      }
-      final pos = await Geolocator.getCurrentPosition(
-        locationSettings:
-            const LocationSettings(accuracy: LocationAccuracy.high, timeLimit: Duration(seconds: 8)),
-      );
-      final point = LatLng(pos.latitude, pos.longitude);
-      _mapController.move(point, 16);
-      await _onMapTap(point);
-    } catch (_) {
-      if (mounted) AppToast.show(context, 'Не удалось определить местоположение');
-    } finally {
-      if (mounted) setState(() => _isLocating = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final city = ref.watch(appControllerProvider).selectedCity;
-    final initialCenter = _selectedPoint ?? city.center;
+    // Приоритет центра карты: ранее выбранная точка → известное
+    // местоположение пользователя (если попадает в один из городов из
+    // списка) → центр выбранного в чипе города.
+    final initialCenter = _selectedPoint ?? _initialFix ?? city.center;
+    // Если стартуем от пользовательской точки или ранее выбранного адреса
+    // — зум более «уличный» (15), чтобы было видно дома. Для центра
+    // целого города оставляем 13 — обзор района вокруг центра.
+    final initialZoom =
+        (_selectedPoint != null || _initialFix != null) ? 15.0 : 13.0;
     final canSubmit = _selectedPoint != null && _selectedAddress.trim().isNotEmpty;
 
     return Scaffold(
@@ -380,35 +394,22 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
             child: Stack(
               children: [
                 // ── Карта OpenFreeMap ──
+                // Зум-кнопки и «моё местоположение» теперь рисует сам
+                // OpenFreeMapView — единый стиль с лентой заказов.
+                // При тапе на «моё местоположение» виджет сам определяет
+                // координату и плавно туда едет; адрес мы подхватываем в
+                // onMyLocationTap через reverse-geocode (см. `_onMapTap`).
                 Positioned.fill(
                   child: Padding(
                     padding: EdgeInsets.only(top: 16.h),
                     child: _MapWithCenterPin(
                       controller: _mapController,
                       initialCenter: initialCenter,
+                      initialZoom: initialZoom,
                       marker: _selectedPoint,
                       onTap: _onMapTap,
+                      onMyLocation: _onMapTap,
                     ),
-                  ),
-                ),
-                // ── Кнопки управления картой: зум + моё местоположение ──
-                Positioned(
-                  right: 12.w,
-                  bottom: 96.h,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _CircleAction(
-                        icon: IconsaxPlusLinear.add,
-                        onTap: _zoomIn,
-                      ),
-                      SizedBox(height: 12.h),
-                      _CircleAction(
-                        icon: IconsaxPlusLinear.gps,
-                        onTap: _useMyLocation,
-                        busy: _isLocating,
-                      ),
-                    ],
                   ),
                 ),
                 // ── Подсказки ──
@@ -487,78 +488,43 @@ class _MapWithCenterPin extends StatelessWidget {
   const _MapWithCenterPin({
     required this.controller,
     required this.initialCenter,
+    required this.initialZoom,
     required this.marker,
     required this.onTap,
+    required this.onMyLocation,
   });
 
   final MapController controller;
   final LatLng initialCenter;
+  final double initialZoom;
   final LatLng? marker;
   final void Function(LatLng) onTap;
+  final void Function(LatLng) onMyLocation;
 
   @override
   Widget build(BuildContext context) {
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: OpenFreeMapView(
-            initialCenter: initialCenter,
-            initialZoom: 13,
-            mapController: controller,
-            onMapTap: onTap,
-            markers: marker == null
-                ? const []
-                : [
-                    OpenFreeMapMarker(
-                      id: 'selected',
-                      point: marker!,
-                      color: AppColors.primary,
-                    ),
-                  ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _CircleAction extends StatelessWidget {
-  const _CircleAction({
-    required this.icon,
-    required this.onTap,
-    this.busy = false,
-  });
-
-  final IconData icon;
-  final VoidCallback onTap;
-  final bool busy;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.surface,
-      elevation: 2,
-      shape: const CircleBorder(),
-      child: InkWell(
-        onTap: busy ? null : onTap,
-        customBorder: const CircleBorder(),
-        child: SizedBox(
-          width: 48.r,
-          height: 48.r,
-          child: Center(
-            child: busy
-                ? SizedBox(
-                    width: 20.r,
-                    height: 20.r,
-                    child: const CircularProgressIndicator(
-                      strokeWidth: 2.5,
-                      color: AppColors.primary,
-                    ),
-                  )
-                : Icon(icon, size: 24.r, color: AppColors.primary),
-          ),
-        ),
-      ),
+    return OpenFreeMapView(
+      initialCenter: initialCenter,
+      initialZoom: initialZoom,
+      mapController: controller,
+      onMapTap: onTap,
+      showZoomControls: true,
+      showMyLocation: true,
+      onMyLocationTap: onMyLocation,
+      // «Выбрать» (50h) + вертикальные паддинги (16+16) ≈ 82h. С учётом
+      // safe-area внизу выходит примерно столько и нужно, чтобы кнопки
+      // зума и геолокации центрировались между поисковой строкой
+      // и верхней границей кнопки «Выбрать», а не уезжали под неё.
+      controlsBottomInset: 82.h + MediaQuery.of(context).padding.bottom,
+      markers: marker == null
+          ? const []
+          : [
+              OpenFreeMapMarker(
+                id: 'selected',
+                point: marker!,
+                color: AppColors.primary,
+              ),
+            ],
     );
   }
 }

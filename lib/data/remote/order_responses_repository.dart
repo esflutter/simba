@@ -79,26 +79,46 @@ class OrderResponsesRepository {
       return;
     }
     final pb = _pb!;
-    final list = await withPbAuthRetry(_ref,() => pb
-        .collection('order_responses')
-        .getFullList(
-          filter: pb.filter(
-            'order_ref = {:oid} && executor = {:eid} && status = "pending"',
-            {'oid': orderId, 'eid': executorId},
-          ),
-        )
-        .timeout(_pbTimeout));
-    if (list.isEmpty) {
-      // Раньше тут было `return;` — заказчик видел тост-успех, а на сервере
-      // ничего не менялось (отклик уже отозван исполнителем или принят
-      // ранее). Кидаем исключение, UI отлавливает по коду и показывает
-      // «Этот отклик уже недоступен», после чего перезагружает экран.
-      throw OrderResponseGoneException(_responseGoneCode);
+    // getFirstListItem вместо getFullList — нам нужна одна запись, лишний
+    // round-trip избыточный. Не найдена → ClientException 404, оборачиваем
+    // в OrderResponseGoneException (UI знает этот тип).
+    RecordModel rec;
+    try {
+      rec = await withPbAuthRetry(_ref, () => pb
+          .collection('order_responses')
+          .getFirstListItem(
+            pb.filter(
+              'order_ref = {:oid} && executor = {:eid} && status = "pending"',
+              {'oid': orderId, 'eid': executorId},
+            ),
+          )
+          .timeout(_pbTimeout));
+    } on ClientException catch (e) {
+      if (e.statusCode == 404) {
+        // Раньше тут было `return;` — заказчик видел тост-успех, а на сервере
+        // ничего не менялось (отклик уже отозван исполнителем или принят
+        // ранее). Кидаем исключение, UI отлавливает по коду и показывает
+        // «Этот отклик уже недоступен», после чего перезагружает экран.
+        throw OrderResponseGoneException(_responseGoneCode);
+      }
+      rethrow;
     }
-    await withPbAuthRetry(_ref,() => pb
-        .collection('order_responses')
-        .update(list.first.id, body: {'status': 'accepted'})
-        .timeout(_pbTimeout));
+    try {
+      await withPbAuthRetry(_ref,() => pb
+          .collection('order_responses')
+          .update(rec.id, body: {'status': 'accepted'})
+          .timeout(_pbTimeout));
+    } on ClientException catch (e) {
+      // 400 от FSM-хука: заказ уже не open (другой заказчик принял
+      // параллельно) или unique-index idx_resp_single_accepted сработал.
+      // В обоих случаях для UX это «отклик уже недоступен», тот же тост,
+      // что и для 404 при поиске. Раньше падало в общий catch и юзер
+      // видел «Ошибка. Попробуйте позже».
+      if (e.statusCode == 400 || e.statusCode == 409) {
+        throw OrderResponseGoneException(_responseGoneCode);
+      }
+      rethrow;
+    }
   }
 
   /// Заказчик отклоняет один отклик.
@@ -110,23 +130,35 @@ class OrderResponsesRepository {
       return;
     }
     final pb = _pb!;
-    final list = await withPbAuthRetry(_ref,() => pb
-        .collection('order_responses')
-        .getFullList(
-          filter: pb.filter(
-            'order_ref = {:oid} && executor = {:eid} && status = "pending"',
-            {'oid': orderId, 'eid': executorId},
-          ),
-        )
-        .timeout(_pbTimeout));
-    if (list.isEmpty) {
-      throw OrderResponseGoneException(_responseGoneCode);
+    RecordModel rec;
+    try {
+      rec = await withPbAuthRetry(_ref, () => pb
+          .collection('order_responses')
+          .getFirstListItem(
+            pb.filter(
+              'order_ref = {:oid} && executor = {:eid} && status = "pending"',
+              {'oid': orderId, 'eid': executorId},
+            ),
+          )
+          .timeout(_pbTimeout));
+    } on ClientException catch (e) {
+      if (e.statusCode == 404) {
+        throw OrderResponseGoneException(_responseGoneCode);
+      }
+      rethrow;
     }
-    await withPbAuthRetry(_ref,() =>
-        pb.collection('order_responses').update(list.first.id, body: {
-      'status': 'declined',
-      'decline_reason': 'by_customer',
-    }).timeout(_pbTimeout));
+    try {
+      await withPbAuthRetry(_ref,() =>
+          pb.collection('order_responses').update(rec.id, body: {
+        'status': 'declined',
+        'decline_reason': 'by_customer',
+      }).timeout(_pbTimeout));
+    } on ClientException catch (e) {
+      if (e.statusCode == 400 || e.statusCode == 409) {
+        throw OrderResponseGoneException(_responseGoneCode);
+      }
+      rethrow;
+    }
   }
 }
 

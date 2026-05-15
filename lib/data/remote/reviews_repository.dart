@@ -29,10 +29,11 @@ class ReviewsRepository {
         .collection('reviews')
         .getFullList(
           filter: pb.filter(
-            'to_user = {:uid} && is_hidden = false && visible_after != "" && visible_after <= @now',
+            'to_user = {:uid} && visible_after != "" && visible_after <= @now',
             {'uid': userId},
           ),
           sort: '-created',
+          expand: 'from_user',
         )
         .timeout(const Duration(seconds: 15)));
     return records.map(_fromRecord).toList();
@@ -57,6 +58,7 @@ class ReviewsRepository {
         .getFullList(
           filter: pb.filter('order_ref = {:oid}', {'oid': orderId}),
           sort: '-created',
+          expand: 'from_user',
         )
         .timeout(const Duration(seconds: 15)));
     return records.map(_fromRecord).toList();
@@ -117,6 +119,23 @@ class ReviewsRepository {
     final createdAt =
         parsePbDate(r.getStringValue('created')) ?? DateTime.fromMillisecondsSinceEpoch(0);
 
+    // expand.from_user — single-rel. PB SDK 0.22 рекомендует доступ через
+     // get<RecordModel>("expand.from_user") вместо устаревшего .expand.
+    final expandedFrom = r.get<RecordModel?>('expand.from_user');
+    final fromUserName = expandedFrom?.getStringValue('name') ?? '';
+    String? fromUserPhotoUrl;
+    if (expandedFrom != null && _pb != null) {
+      final fname = expandedFrom.getStringValue('photo');
+      if (fname.isNotEmpty) {
+        fromUserPhotoUrl = pbFileUrl(
+          _pb,
+          collection: expandedFrom.collectionId,
+          recordId: expandedFrom.id,
+          filename: fname,
+        );
+      }
+    }
+
     return Review(
       id: r.id,
       fromUserId: r.getStringValue('from_user'),
@@ -126,6 +145,8 @@ class ReviewsRepository {
       comment: r.getStringValue('comment'),
       tags: tags,
       createdAt: createdAt,
+      fromUserName: fromUserName,
+      fromUserPhotoUrl: fromUserPhotoUrl,
     );
   }
 }

@@ -24,16 +24,34 @@ final pocketbaseProvider = Provider<PocketBase?>(
 /// Ключ, под которым AsyncAuthStore сохраняет JSON {token, model} в prefs.
 const String kPbAuthPrefsKey = 'pb_auth';
 
-/// Один общий `http.Client` на всё приложение — переиспользует TCP-соединение
-/// и TLS-сессию между запросами. SDK 0.22 не имеет параметра `reuseHTTPClient`,
-/// но принимает кастомный `httpClientFactory`: возвращаем одну и ту же
-/// инстанцию — эффект тот же.
-final http.Client _sharedHttpClient = http.Client();
+/// Общий `http.Client` для прямых HTTP-вызовов из приложения
+/// (DaData, кастомные ручки бэка) — переиспользует TCP/TLS между запросами.
+///
+/// ВАЖНО: getter, а не `final` глобал. После hot restart Dart VM
+/// перезапускает Dart-код, но нативные сокеты предыдущего `http.Client`
+/// могут остаться полузакрытыми — следующий запрос валится с
+/// `ClientException: Client is already closed`. Создаём новый клиент
+/// при первом обращении после рестарта.
+///
+/// ВАЖНО: НЕ передавать этот клиент в PocketBase SDK через
+/// `httpClientFactory` — SDK 0.22 закрывает клиент после запроса,
+/// если фабрика задана. Для SDK используется отдельная фабрика, которая
+/// создаёт свежий `http.Client` на каждый вызов (см. [buildPocketBase]).
+http.Client? _sharedHttpClientOrNull;
+http.Client get sharedHttpClient {
+  final c = _sharedHttpClientOrNull;
+  if (c != null) return c;
+  return _sharedHttpClientOrNull = http.Client();
+}
 
-/// Тот же общий клиент, экспортированный для других репозиториев (DaData,
-/// auth, users) — чтобы избежать создания собственного `http.Client` на
-/// каждый репозиторий и тоже переиспользовать keep-alive соединение.
-http.Client get sharedHttpClient => _sharedHttpClient;
+/// Сбросить кэшированный клиент. Вызывается при ClientException
+/// «already closed» — новый запрос получит свежий клиент.
+void resetSharedHttpClient() {
+  try {
+    _sharedHttpClientOrNull?.close();
+  } catch (_) {}
+  _sharedHttpClientOrNull = null;
+}
 
 /// Фабрика клиента: создаётся один раз в `main()` после `SharedPreferences.getInstance()`.
 /// Возвращает null, если URL не задан (моки).
@@ -47,7 +65,16 @@ PocketBase? buildPocketBase(SharedPreferences prefs) {
   return PocketBase(
     Env.pocketbaseUrl,
     authStore: store,
-    httpClientFactory: () => _sharedHttpClient,
+    // SDK 0.22 при заданной фабрике сам владеет клиентом и закрывает его
+    // после каждого запроса. Поэтому возвращаем НОВЫЙ http.Client на каждый
+    // вызов — иначе после первого запроса все следующие падают с
+    // `ClientException: Client is already closed`.
+    //
+    // Без фабрики (если не передать httpClientFactory) SDK создаёт один
+    // статический клиент в конструкторе — после hot reload его нативные
+    // сокеты замораживаются, и getOne/getList висят до таймаута. Фабрика
+    // решает обе проблемы: каждый запрос получает свежий, живой клиент.
+    httpClientFactory: () => http.Client(),
   );
 }
 

@@ -70,6 +70,7 @@ class SecondaryButton extends StatelessWidget {
     this.icon,
     this.color,
     this.height,
+    this.textStyle,
   });
 
   final String label;
@@ -77,6 +78,11 @@ class SecondaryButton extends StatelessWidget {
   final Widget? icon;
   final Color? color;
   final double? height;
+
+  /// Опциональный override стандартного `AppText.button` стиля. Нужен,
+  /// когда конкретная кнопка в Figma имеет другую типографику (например
+  /// «Отправить код повторно» — 16/w500/1.38 вместо стандартных 17/w400/1.2).
+  final TextStyle? textStyle;
 
   @override
   Widget build(BuildContext context) {
@@ -101,7 +107,7 @@ class SecondaryButton extends StatelessWidget {
                 ),
                 SizedBox(width: 8.w),
               ],
-              Text(label, style: AppText.button(color: c)),
+              Text(label, style: textStyle ?? AppText.button(color: c)),
             ],
           ),
         ),

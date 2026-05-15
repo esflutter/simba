@@ -52,10 +52,15 @@ class OrderCard extends StatelessWidget {
                 ),
               ),
               SizedBox(width: 8.w),
-              Text(
-                '→',
-                style: AppText.body(color: AppColors.primary)
-                    .copyWith(height: 1.0, fontSize: 18.sp),
+              // Стрелка-стрела из Figma (длинная линия + крупный уголок,
+              // stroke-width около 2.5). Material `arrow_forward_rounded`
+              // визуально тоньше и короче — пробовали, не совпадало.
+              // Используем экспортированный webp напрямую.
+              Image.asset(
+                'assets/images/icon_arrow_forward.webp',
+                width: 20.r,
+                height: 20.r,
+                color: AppColors.primary,
               ),
             ],
           ),

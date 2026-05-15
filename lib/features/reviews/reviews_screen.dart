@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_back_button.dart';
+import '../../core/widgets/app_network_image.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import 'reviews_providers.dart';
@@ -18,18 +19,21 @@ class ReviewsScreen extends ConsumerWidget {
     // Берём отзывы из репозитория (live или mock-fallback) для текущего юзера.
     // Пустой массив (data:[]) — валидный ответ для нового юзера: НЕ подменяем
     // его моком, иначе пользователь увидит чужие demo-отзывы.
-    // На loading/error — fallback на локальный стейт.
+    // На loading возвращаем null → ниже рендерим спиннер, чтобы не мигать
+    // empty-state'ом «Нет отзывов» до прихода реальных данных.
     final me = ref.watch(appControllerProvider.select((s) => s.user));
     final myId = me?.id ?? 'me';
     final asyncReviews = ref.watch(reviewsForUserProvider(myId));
-    final reviews = asyncReviews.maybeWhen(
+    final List<Review>? reviewsOrNull = asyncReviews.when(
       data: (list) => list,
-      orElse: () => ref
+      loading: () => null,
+      error: (_, _) => ref
           .watch(appControllerProvider)
           .reviews
           .where((r) => r.toUserId == myId || r.toUserId == 'me')
           .toList(),
     );
+    final reviews = reviewsOrNull ?? const <Review>[];
     final ratingDistribution = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
     for (final r in reviews) {
       ratingDistribution[r.rating] = (ratingDistribution[r.rating] ?? 0) + 1;
@@ -77,51 +81,94 @@ class ReviewsScreen extends ConsumerWidget {
           ),
           // ── Body ──
           Expanded(
-            child: ListView(
-              padding: EdgeInsets.fromLTRB(
-                16.w,
-                16.h,
-                16.w,
-                MediaQuery.of(context).viewPadding.bottom,
-              ),
-              children: [
-                _RatingSummaryCard(
-                  average: avgRating,
-                  total: reviews.length,
-                  distribution: ratingDistribution,
-                ),
-                SizedBox(height: 8.h),
-                if (reviews.isEmpty)
-                  Padding(
-                    padding: EdgeInsets.symmetric(vertical: 64.h),
+            child: reviewsOrNull == null
+                ? const Center(
+                    child: CircularProgressIndicator(color: AppColors.primary),
+                  )
+                : reviews.isEmpty
+                ? Padding(
+                    padding: EdgeInsets.fromLTRB(
+                      16.w,
+                      16.h,
+                      16.w,
+                      MediaQuery.of(context).viewPadding.bottom,
+                    ),
                     child: Column(
                       children: [
-                        Icon(
-                          IconsaxPlusBold.star_1,
-                          size: 80.r,
-                          color: AppColors.star,
+                        _RatingSummaryCard(
+                          average: avgRating,
+                          total: reviews.length,
+                          distribution: ratingDistribution,
                         ),
-                        SizedBox(height: 24.h),
-                        Text(
-                          'Нет отзывов',
-                          style: TextStyle(
-                            color: Colors.black,
-                            fontSize: 20.sp,
-                            fontWeight: FontWeight.w600,
-                            height: 1.25,
-                            letterSpacing: -0.45,
+                        Expanded(
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Image.asset(
+                                  'assets/images/empty_reviews.webp',
+                                  width: 80.r,
+                                  height: 80.r,
+                                ),
+                                SizedBox(height: 24.h),
+                                Text(
+                                  'Нет отзывов',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.black,
+                                    fontSize: 20.sp,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.25,
+                                    letterSpacing: -0.45,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ],
                     ),
                   )
-                else
-                  ...reviews.map((r) => Padding(
+                : RefreshIndicator(
+                    color: AppColors.primary,
+                    onRefresh: () async {
+                      ref.invalidate(reviewsForUserProvider(myId));
+                      try {
+                        await ref.read(reviewsForUserProvider(myId).future);
+                      } catch (_) {}
+                    },
+                    child: ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(
+                      16.w,
+                      16.h,
+                      16.w,
+                      MediaQuery.of(context).viewPadding.bottom,
+                    ),
+                    // +1 — это карточка-сводка рейтинга в самом верху,
+                    // дальше идут сами отзывы. ListView.builder ленив,
+                    // на 100+ отзывах синхронный ListView(children:) давал
+                    // jank при открытии экрана.
+                    itemCount: reviews.length + 1,
+                    itemBuilder: (_, i) {
+                      if (i == 0) {
+                        return Padding(
+                          padding: EdgeInsets.only(bottom: 8.h),
+                          child: _RatingSummaryCard(
+                            average: avgRating,
+                            total: reviews.length,
+                            distribution: ratingDistribution,
+                          ),
+                        );
+                      }
+                      return Padding(
                         padding: EdgeInsets.only(bottom: 8.h),
-                        child: _ReviewCard(review: r),
-                      )),
-              ],
-            ),
+                        child: _ReviewCard(review: reviews[i - 1]),
+                      );
+                    },
+                  ),
+                  ),
           ),
         ],
       ),
@@ -158,7 +205,7 @@ class _RatingSummaryCard extends StatelessWidget {
             children: [
               Text(
                 hasReviews
-                    ? average.toStringAsFixed(1).replaceAll('.', ',')
+                    ? average.toStringAsFixed(1)
                     : '0',
                 style: TextStyle(
                   color: Colors.black,
@@ -285,10 +332,12 @@ class _ReviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // userById может вернуть null для PB-id, отсутствующего в локальном моке.
-    // В UI отзыва нам важно только имя автора — фолбэк на «Пользователь»
-    // лучше, чем падение или подмена «Иваном Ивановым» (что было раньше).
-    final authorName = userById(review.fromUserId)?.name ?? 'Пользователь';
+    // Приоритет: имя из expand.from_user (live PB) → локальный мок-юзер →
+    // «Пользователь». Раньше использовали только userById, который для
+    // PB-id ничего не находит, и все отзывы становились «Пользователь».
+    final authorName = review.fromUserName.isNotEmpty
+        ? review.fromUserName
+        : (userById(review.fromUserId)?.name ?? 'Пользователь');
     return Container(
       padding: EdgeInsets.all(12.w),
       decoration: BoxDecoration(
@@ -300,19 +349,7 @@ class _ReviewCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Container(
-                width: 32.r,
-                height: 32.r,
-                decoration: const BoxDecoration(
-                  color: AppColors.surfaceVariant,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  IconsaxPlusLinear.user,
-                  color: AppColors.primary,
-                  size: 20.r,
-                ),
-              ),
+              _ReviewAvatar(photoUrl: review.fromUserPhotoUrl),
               SizedBox(width: 4.w),
               Expanded(
                 child: Padding(
@@ -349,7 +386,7 @@ class _ReviewCard extends StatelessWidget {
               ),
               SizedBox(width: 4.w),
               Text(
-                DateFormat('dd.MM.yyyy').format(review.createdAt),
+                DateFormat('dd.MM.yyyy').format(review.createdAt.toLocal()),
                 style: TextStyle(
                   color: Colors.black.withValues(alpha: 0.60),
                   fontSize: 12.sp,
@@ -384,7 +421,7 @@ class _ReviewCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(8.r),
                       ),
                       child: Text(
-                        t,
+                        reviewTagLabel(t),
                         style: TextStyle(
                           fontSize: 13.sp,
                           fontWeight: FontWeight.w500,
@@ -398,6 +435,32 @@ class _ReviewCard extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _ReviewAvatar extends StatelessWidget {
+  const _ReviewAvatar({this.photoUrl});
+  final String? photoUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final fallback = Icon(
+      IconsaxPlusLinear.user,
+      color: AppColors.primary,
+      size: 20.r,
+    );
+    return Container(
+      width: 32.r,
+      height: 32.r,
+      decoration: const BoxDecoration(
+        color: AppColors.surfaceVariant,
+        shape: BoxShape.circle,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: (photoUrl == null || photoUrl!.isEmpty)
+          ? fallback
+          : AppNetworkImage(url: photoUrl!, fallback: fallback),
     );
   }
 }

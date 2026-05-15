@@ -6,9 +6,9 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/order_display.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../data/mock/app_state.dart';
-import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/orders_repository.dart';
 import '../orders/order_card.dart';
@@ -25,61 +25,63 @@ class HistoryScreen extends ConsumerStatefulWidget {
 class _HistoryScreenState extends ConsumerState<HistoryScreen> {
   _Tab _tab = _Tab.posted;
 
-  String _categoryName(Order o) {
-    if (o.categoryName != null && o.categoryName!.isNotEmpty) {
-      return o.categoryName!;
-    }
-    return MockData.categories
-        .firstWhere((c) => c.id == o.categoryId,
-            orElse: () => MockData.categories.last)
-        .name;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(appControllerProvider);
+    // .select — иначе любая мутация AppState ребилдит весь экран истории.
+    final myUserId = ref.watch(
+      appControllerProvider.select((s) => s.user?.id),
+    );
+    final mockMyOrders = ref.watch(
+      appControllerProvider.select((s) => s.myOrders),
+    );
+    final mockOrders = ref.watch(
+      appControllerProvider.select((s) => s.orders),
+    );
     // Берём «мои заказы» из репозитория (live) с fallback на мок-стейт
-    // только когда репозиторий ещё не ответил или вернул ошибку.
-    // Пустой массив data:[] — это валидный ответ (новый юзер без заказов),
-    // и подменять его моком нельзя — иначе получит чужие demo-заказы.
+    // только при ОШИБКЕ. На loading возвращаем null → ниже рендерим спиннер
+    // вместо empty-state, чтобы экран не мигал «Здесь будет отображаться…»
+    // до прихода реальных данных (раньше maybeWhen с orElse возвращал
+    // пустой мок-стейт сразу же, и empty-state мигал на доли секунды).
     final asyncMine = ref.watch(myOrdersStreamProvider);
-    final myId = state.user?.id ?? 'me';
+    final myId = myUserId ?? 'me';
 
     // Размещённые: заказы, которые я создал как заказчик и завершил со
     // своей стороны (статус awaitingPayment, либо completed).
-    List<Order> mockPosted() => state.myOrders
+    List<Order> mockPosted() => mockMyOrders
         .where((o) =>
             o.status == OrderStatus.awaitingPayment ||
             o.status == OrderStatus.completed)
         .toList();
-    final posted = asyncMine.maybeWhen(
+    final List<Order>? posted = asyncMine.when(
       data: (xs) => xs
           .where((o) =>
               (o.customerId == myId || o.customerId == 'me') &&
               (o.status == OrderStatus.awaitingPayment ||
                   o.status == OrderStatus.completed))
           .toList(),
-      orElse: mockPosted,
+      loading: () => null,
+      error: (_, _) => mockPosted(),
     );
 
     // Выполненные: заказы, в которых я был исполнителем и они завершены.
     // Отдельного `myExecutorOrders()` нет — берём из общего `myOrders()`.
-    List<Order> mockExecuted() => state.orders
+    List<Order> mockExecuted() => mockOrders
         .where((o) =>
             (o.executorId == myId || o.executorId == 'me') &&
             o.status == OrderStatus.completed)
         .toList();
-    final executed = asyncMine.maybeWhen(
+    final List<Order>? executed = asyncMine.when(
       data: (xs) => xs
           .where((o) =>
               (o.executorId == myId || o.executorId == 'me') &&
               o.status == OrderStatus.completed)
           .toList(),
-      orElse: mockExecuted,
+      loading: () => null,
+      error: (_, _) => mockExecuted(),
     );
 
     final list = _tab == _Tab.posted ? posted : executed;
-    final groups = _groupByDate(list);
+    final groups = _groupByDate(list ?? const <Order>[]);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -128,7 +130,11 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
           ),
           // ── Body ──
           Expanded(
-            child: list.isEmpty
+            child: list == null
+                ? const Center(
+                    child: CircularProgressIndicator(color: AppColors.primary),
+                  )
+                : list.isEmpty
                 ? _EmptyHistory(
                     subtitle: _tab == _Tab.posted
                         ? 'Здесь будет отображаться история заказов, размещённых Вами в качестве заказчика'
@@ -167,7 +173,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                                 ),
                                 child: OrderCard(
                                   order: o,
-                                  categoryName: _categoryName(o),
+                                  categoryName: categoryNameOf(o),
                                   showTime: false,
                                   onTap: () => context
                                       .push('/order/${o.id}?mode=mine'),
@@ -243,14 +249,14 @@ class _SegmentedTabs extends StatelessWidget {
         children: [
           Expanded(
             child: _Segment(
-              label: 'Размещённые',
+              label: 'Я заказчик',
               active: value == _Tab.posted,
               onTap: () => onChanged(_Tab.posted),
             ),
           ),
           Expanded(
             child: _Segment(
-              label: 'Выполненные',
+              label: 'Я исполнитель',
               active: value == _Tab.executed,
               onTap: () => onChanged(_Tab.executed),
             ),

@@ -27,16 +27,25 @@ class AppCard extends StatelessWidget {
       padding: padding ?? EdgeInsets.all(16.w),
       child: child,
     );
+    // width: double.infinity, чтобы карточка не схлопывалась по ширине
+    // ребёнка, когда условный контент (рейтинг, теги и т.п.) исчезает.
+    // Все вызовы AppCard стоят в Column/ListView/Padding — там нужна
+    // полная ширина; если когда-то понадобится «по содержимому» —
+    // ввести явный параметр `fitContent`.
     if (onTap == null) {
       return Container(
+        width: double.infinity,
         decoration: BoxDecoration(color: bg, borderRadius: radius),
         child: body,
       );
     }
-    return Material(
-      color: bg,
-      borderRadius: radius,
-      child: InkWell(borderRadius: radius, onTap: onTap, child: body),
+    return SizedBox(
+      width: double.infinity,
+      child: Material(
+        color: bg,
+        borderRadius: radius,
+        child: InkWell(borderRadius: radius, onTap: onTap, child: body),
+      ),
     );
   }
 }

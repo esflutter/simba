@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:geolocator/geolocator.dart';
@@ -107,6 +110,13 @@ extension AnimatedMapMove on MapController {
         AnimationController(duration: duration, vsync: vsync);
     final CurvedAnimation anim =
         CurvedAnimation(parent: ctrl, curve: Curves.easeInOut);
+    bool disposed = false;
+    void disposeOnce() {
+      if (disposed) return;
+      disposed = true;
+      anim.dispose();
+      ctrl.dispose();
+    }
     ctrl.addListener(() {
       final double t = anim.value;
       move(
@@ -120,9 +130,13 @@ extension AnimatedMapMove on MapController {
       );
     });
     anim.addStatusListener((AnimationStatus s) {
+      // completed/dismissed — нормальное завершение; обработка обоих важна
+      // потому что при быстрых повторных тапах кнопок зума предыдущая
+      // анимация прерывается «dismissed» и без этого хука контроллер
+      // оставался бы в памяти до GC.
       if (s == AnimationStatus.completed ||
           s == AnimationStatus.dismissed) {
-        ctrl.dispose();
+        disposeOnce();
       }
     });
     ctrl.forward();
@@ -153,6 +167,7 @@ class OpenFreeMapView extends StatefulWidget {
     this.showZoomControls = false,
     this.showMyLocation = false,
     this.onMyLocationTap,
+    this.controlsBottomInset = 0,
   });
 
   final List<OpenFreeMapMarker> markers;
@@ -190,9 +205,17 @@ class OpenFreeMapView extends StatefulWidget {
   /// запрос разрешения.
   final bool showMyLocation;
 
-  /// Колбэк после успешного тапа кнопки «моё местоположение» — нужен
-  /// родителю, например чтобы скрыть нижнюю карточку выбранного заказа.
-  final VoidCallback? onMyLocationTap;
+  /// Колбэк после успешного тапа кнопки «моё местоположение». Срабатывает
+  /// уже после того, как координата определена, — родитель может, например,
+  /// запустить реверс-геокод и подставить адрес (как на экране выбора
+  /// адреса заказа) или просто скрыть нижнюю карточку (как в ленте).
+  final ValueChanged<LatLng>? onMyLocationTap;
+
+  /// Нижний инсет для кнопок управления картой. Используется, когда снизу
+  /// поверх карты лежит другой UI (например, плавающая кнопка «Выбрать»
+  /// на экране адреса) — тогда вертикальный центр для +/− и геолокации
+  /// считаем не от низа карты, а от верхней границы этого блока.
+  final double controlsBottomInset;
 
   @override
   State<OpenFreeMapView> createState() => _OpenFreeMapViewState();
@@ -212,11 +235,41 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
   MapController get _controller =>
       widget.mapController ?? _internalController;
 
+  /// Загружаем стиль OpenFreeMap, но темы (text-field) подменяем
+  /// нашей версией с метками только на русском. Оригинал нужен ради
+  /// провайдеров тайлов и спрайтов — там абсолютные URL OpenFreeMap,
+  /// и их безопаснее взять из готовой `StyleReader`. Тему собираем из
+  /// локального ассета `assets/maps/positron.json`, где у каждого
+  /// `text-field` оставлен только `name:ru` с откатом на `name`
+  /// (для мест без русского имени — например, мелких сёл за рубежом).
+  Future<Style> _loadLocalizedStyle() async {
+    final Style original = await StyleReader(uri: widget.styleUri).read();
+    try {
+      final String text =
+          await rootBundle.loadString('assets/maps/positron.json');
+      final dynamic parsed = await compute(jsonDecode, text);
+      if (parsed is! Map<String, dynamic>) return original;
+      final vtr.Theme ruTheme = vtr.ThemeReader().read(parsed);
+      return Style(
+        name: original.name,
+        theme: ruTheme,
+        providers: original.providers,
+        sprites: original.sprites,
+        center: original.center,
+        zoom: original.zoom,
+      );
+    } catch (_) {
+      // Если локальный JSON битый/отсутствует — карта рендерится
+      // с оригинальным стилем (двуязычные метки), но не падает.
+      return original;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _internalController = MapController();
-    _styleFuture = StyleReader(uri: widget.styleUri).read();
+    _styleFuture = _loadLocalizedStyle();
     if (widget.showMyLocation) {
       _bootstrapMyLocation();
     }
@@ -226,7 +279,7 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
   void didUpdateWidget(covariant OpenFreeMapView old) {
     super.didUpdateWidget(old);
     if (old.styleUri != widget.styleUri) {
-      _styleFuture = StyleReader(uri: widget.styleUri).read();
+      _styleFuture = _loadLocalizedStyle();
     }
     // Включили showMyLocation после первоначального построения —
     // подписываемся на стрим, если permission уже выдан.
@@ -237,6 +290,30 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
       _positionSub?.cancel();
       _positionSub = null;
       _myLocation = null;
+    }
+    // Если родитель сменил центр (типичный сценарий — пользователь
+    // переключил город в чипе сверху, оставаясь на вкладке «карта») —
+    // плавно перецентрируем камеру. Без этого карта оставалась бы на
+    // прежнем городе, пока её вручную не подвинут.
+    final LatLng? newCenter = widget.initialCenter;
+    final LatLng? oldCenter = old.initialCenter;
+    final bool centerChanged = newCenter != null &&
+        (oldCenter == null ||
+            oldCenter.latitude != newCenter.latitude ||
+            oldCenter.longitude != newCenter.longitude);
+    if (centerChanged) {
+      // PostFrame — чтобы дождаться, пока камера прорисуется и
+      // `animatedMove` не упал в NoCameraException.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        try {
+          _controller.animatedMove(
+            newCenter,
+            widget.initialZoom,
+            vsync: this,
+          );
+        } catch (_) {/* карта ещё не готова */}
+      });
     }
   }
 
@@ -282,13 +359,15 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
     final bool granted = await ensureLocationPermission();
     if (!granted || !mounted) return;
     if (_positionSub == null) _startPositionStream();
-    widget.onMyLocationTap?.call();
     LatLng? target = _myLocation;
     target ??= await _waitForFix();
     if (target == null || !mounted) return;
     try {
       _controller.animatedMove(target, 15, vsync: this);
     } catch (_) {/* карта не готова */}
+    // Колбэк — после того, как фактическая координата определена, чтобы
+    // родителю можно было передать её (например, для реверс-геокода).
+    widget.onMyLocationTap?.call(target);
   }
 
   /// Ждём первый fix до 4 секунд. Используется при первом тапе кнопки,
@@ -307,7 +386,15 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
     try {
       final double current = _controller.camera.zoom;
       final double next = (current + delta).clamp(4.0, 18.0);
-      _controller.move(_controller.camera.center, next);
+      // Анимация вместо мгновенного `move` — без неё зум выглядит как
+      // прыжок, теряется ощущение масштаба. 250 мс — компромисс между
+      // плавностью и отзывчивостью.
+      _controller.animatedMove(
+        _controller.camera.center,
+        next,
+        vsync: this,
+        duration: const Duration(milliseconds: 250),
+      );
     } catch (_) {/* карта ещё не готова */}
   }
 
@@ -394,34 +481,28 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
                     .map((OpenFreeMapMarker m) {
                           final bool selected =
                               widget.selectedMarkerId == m.id;
+                          // Базовый размер pin'а — 24×32 (по фигме). Для
+                          // выбранного маркера слегка увеличиваем (× 1.4),
+                          // чтобы было видно, какой именно выбран в списке.
+                          final double iconW = selected ? 34.r : 24.r;
+                          final double iconH = selected ? 46.r : 32.r;
                           return Marker(
                             point: m.point,
-                            width: selected ? 56.r : 40.r,
-                            height: selected ? 60.r : 44.r,
+                            // Box чуть больше иконки — место под удобный тап.
+                            width: iconW + 8.r,
+                            height: iconH + 8.r,
                             alignment: Alignment.topCenter,
                             child: GestureDetector(
                               behavior: HitTestBehavior.opaque,
                               onTap: () =>
                                   widget.onMarkerTap?.call(m.id),
-                              child: Icon(
-                                Icons.location_on,
-                                color: m.color,
-                                size: selected ? 50.r : 36.r,
-                                shadows: selected
-                                    ? const <Shadow>[
-                                        Shadow(
-                                          color: Color(0x66000000),
-                                          blurRadius: 8,
-                                          offset: Offset(0, 3),
-                                        ),
-                                      ]
-                                    : const <Shadow>[
-                                        Shadow(
-                                          color: Color(0x66000000),
-                                          blurRadius: 4,
-                                          offset: Offset(0, 1),
-                                        ),
-                                      ],
+                              child: Center(
+                                child: Image.asset(
+                                  'assets/images/icon_map_pin.webp',
+                                  width: iconW,
+                                  height: iconH,
+                                  fit: BoxFit.contain,
+                                ),
                               ),
                             ),
                           );
@@ -453,37 +534,25 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
               Positioned(
                 right: 12.w,
                 top: 0,
-                bottom: 0,
+                bottom: widget.controlsBottomInset,
                 child: Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: <Widget>[
-                      if (widget.showZoomControls) ...<Widget>[
-                        _ZoomButton(
-                          icon: Icons.add_rounded,
-                          onTap: () => _zoomBy(1),
-                          topRounded: true,
+                      if (widget.showZoomControls)
+                        _MapZoomColumn(
+                          onZoomIn: () => _zoomBy(1),
+                          onZoomOut: () => _zoomBy(-1),
                         ),
-                        Container(
-                          width: 44.r,
-                          height: 1,
-                          color: AppColors.divider,
-                        ),
-                        _ZoomButton(
-                          icon: Icons.remove_rounded,
-                          onTap: () => _zoomBy(-1),
-                          bottomRounded: true,
-                        ),
-                      ],
-                      if (widget.showMyLocation) ...<Widget>[
-                        SizedBox(height: 8.h),
-                        _ZoomButton(
-                          icon: Icons.my_location_rounded,
+                      if (widget.showZoomControls && widget.showMyLocation)
+                        SizedBox(height: 12.h),
+                      if (widget.showMyLocation)
+                        _MapRoundButton(
+                          asset: 'assets/images/icon_map_my_location.webp',
+                          iconWidth: 24.w,
+                          iconHeight: 24.h,
                           onTap: _onMyLocationTap,
-                          topRounded: true,
-                          bottomRounded: true,
                         ),
-                      ],
                     ],
                   ),
                 ),
@@ -512,36 +581,122 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
   }
 }
 
-class _ZoomButton extends StatelessWidget {
-  const _ZoomButton({
-    required this.icon,
-    required this.onTap,
-    this.topRounded = false,
-    this.bottomRounded = false,
-  });
+/// Общая тень/обводка для кнопок управления картой.
+///   - Drop shadow по фигме: x=0, y=4, blur=24, color #0C0C0D 16%
+///   - Тонкая светло-серая обводка White 95 — даёт чёткий контур
+///     белой кнопки на фоне белесых участков карты (облака, дороги).
+BoxDecoration _mapBtnDecoration(BorderRadius radius) => BoxDecoration(
+      color: Colors.white,
+      borderRadius: radius,
+      border: Border.all(color: const Color(0xFFF2F2F2), width: 1),
+      boxShadow: const <BoxShadow>[
+        BoxShadow(
+          color: Color(0x290C0C0D),
+          blurRadius: 24,
+          offset: Offset(0, 4),
+        ),
+      ],
+    );
 
-  final IconData icon;
-  final VoidCallback onTap;
-  final bool topRounded;
-  final bool bottomRounded;
+/// Вертикальный блок «+ / −» зума. Ширина 40, высота 68 — по фигме.
+/// Между кнопками тонкий разделитель в цвет обводки.
+class _MapZoomColumn extends StatelessWidget {
+  const _MapZoomColumn({required this.onZoomIn, required this.onZoomOut});
+
+  final VoidCallback onZoomIn;
+  final VoidCallback onZoomOut;
 
   @override
   Widget build(BuildContext context) {
-    final BorderRadius radius = BorderRadius.vertical(
-      top: topRounded ? Radius.circular(10.r) : Radius.zero,
-      bottom: bottomRounded ? Radius.circular(10.r) : Radius.zero,
+    final BorderRadius radius = BorderRadius.circular(10.r);
+    return Container(
+      width: 40.w,
+      height: 68.h,
+      decoration: _mapBtnDecoration(radius),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: Column(
+          children: <Widget>[
+            Expanded(
+              child: _MapTapCell(
+                asset: 'assets/images/icon_map_zoom_in.webp',
+                onTap: onZoomIn,
+              ),
+            ),
+            Container(height: 1, color: const Color(0xFFF2F2F2)),
+            Expanded(
+              child: _MapTapCell(
+                asset: 'assets/images/icon_map_zoom_out.webp',
+                onTap: onZoomOut,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
-    return Material(
-      color: Colors.white.withValues(alpha: 0.95),
-      borderRadius: radius,
-      elevation: 2,
-      child: InkWell(
-        borderRadius: radius,
-        onTap: onTap,
-        child: SizedBox(
-          width: 44.r,
-          height: 44.r,
-          child: Icon(icon, size: 24.r, color: AppColors.textPrimary),
+  }
+}
+
+/// Одиночная квадратная кнопка 40×40 (используется под «моё
+/// местоположение»). Иконка центрируется внутри.
+class _MapRoundButton extends StatelessWidget {
+  const _MapRoundButton({
+    required this.asset,
+    required this.iconWidth,
+    required this.iconHeight,
+    required this.onTap,
+  });
+
+  final String asset;
+  final double iconWidth;
+  final double iconHeight;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final BorderRadius radius = BorderRadius.circular(10.r);
+    return Container(
+      width: 40.w,
+      height: 40.h,
+      decoration: _mapBtnDecoration(radius),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: Center(
+            child: Image.asset(
+              asset,
+              width: iconWidth,
+              height: iconHeight,
+              fit: BoxFit.contain,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Внутренняя ячейка-«пол-кнопка» с центрированной иконкой 24×24.
+/// Используется внутри [_MapZoomColumn] для «+» и «−».
+class _MapTapCell extends StatelessWidget {
+  const _MapTapCell({required this.asset, required this.onTap});
+
+  final String asset;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Center(
+        child: Image.asset(
+          asset,
+          width: 24.w,
+          height: 24.h,
+          fit: BoxFit.contain,
         ),
       ),
     );

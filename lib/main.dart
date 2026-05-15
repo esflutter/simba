@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -36,11 +35,6 @@ Future<void> main() async {
   ]);
   SystemChrome.setSystemUIOverlayStyle(_kSystemBarStyle);
   final prefs = await SharedPreferences.getInstance();
-  // В debug-режиме очищаем сохранённое состояние при каждом hot restart /
-  // cold start, чтобы поток splash → онбординг прогонялся целиком.
-  if (kDebugMode) {
-    await prefs.clear();
-  }
   // PocketBase создаётся ОДИН раз здесь, чтобы привязать AsyncAuthStore к
   // тем же SharedPreferences и persist'ить токен между запусками.
   //

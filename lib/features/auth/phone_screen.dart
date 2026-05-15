@@ -25,34 +25,58 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
   bool _agreed = false;
   bool _isSending = false;
 
+  @override
+  void initState() {
+    super.initState();
+    // Не даём поставить курсор/выделение перед «+7» — префикс читается
+    // как часть подложки, попытка туда тапнуть и начать печатать ломает
+    // форматирование (формат предполагает, что цифры идут СТРОГО после +7).
+    _ctrl.addListener(_clampCursorAfterPrefix);
+  }
+
+  void _clampCursorAfterPrefix() {
+    final sel = _ctrl.selection;
+    if (!sel.isValid) return;
+    const prefixLen = 2; // длина «+7»
+    if (sel.start >= prefixLen && sel.end >= prefixLen) return;
+    final text = _ctrl.text;
+    final clamped = TextSelection(
+      baseOffset: sel.baseOffset < prefixLen ? text.length : sel.baseOffset,
+      extentOffset: sel.extentOffset < prefixLen ? text.length : sel.extentOffset,
+    );
+    if (clamped != sel) {
+      _ctrl.selection = clamped;
+    }
+  }
+
   String _digits(String s) => s.replaceAll(RegExp(r'\D'), '');
 
-  /// В release-сборке принимаем только мобильные RU-номера: 11 цифр,
-  /// начинающиеся с `79` (городские/стационарные `8 4xx…` отсекаем — SMS
-  /// на них не уйдёт).
-  /// В debug-сборке (Android Studio Run) — любые `+7xxxxxxxxxx`, чтобы
-  /// работали тестовые номера типа `+71111111111` / `+70000000000` для
-  /// dev-режима бэка с кодом `1234`.
+  /// Принимаем 11 цифр, начинающихся с `7`. В release ограничиваем
+  /// мобильными `79xxxxxxxxx` (городские/стационарные `8 4xx…` отсекаем
+  /// — SMS на них не уйдёт), НО оставляем дырку для тестовых номеров
+  /// `+7Xddddddddd`, где X∈{1,2,3} и все 9 цифр одинаковые — те же,
+  /// которые бэк пропускает в mock-режим с пином `1234`. Так prod-APK
+  /// можно тестировать без реальных SMS.
   bool get _phoneOk {
     final d = _digits(_ctrl.text);
     if (d.length != 11) return false;
-    if (kReleaseMode) return d.startsWith('79');
-    return d.startsWith('7');
+    if (!d.startsWith('7')) return false;
+    if (!kReleaseMode) return true;
+    if (d.startsWith('79')) return true;
+    final x = d[1];
+    if (x != '1' && x != '2' && x != '3') return false;
+    final first = d[2];
+    for (int i = 3; i < d.length; i++) {
+      if (d[i] != first) return false;
+    }
+    return true;
   }
 
   bool get _valid => _phoneOk && _agreed;
 
-  /// Текст подсказки, который рассказывает юзеру, почему кнопка «Далее» не
-  /// активна. Раньше при невалидном номере или незажатой галочке кнопка
-  /// просто была серой — юзер не понимал, что не так.
-  String? get _blockerHint {
-    if (!_phoneOk) return null; // ничего не показываем пока ввод не закончен
-    if (!_agreed) return 'Подтвердите согласие, чтобы продолжить';
-    return null;
-  }
-
   @override
   void dispose() {
+    _ctrl.removeListener(_clampCursorAfterPrefix);
     _ctrl.dispose();
     super.dispose();
   }
@@ -240,14 +264,6 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                   ),
                 ],
               ),
-              if (_blockerHint != null) ...[
-                SizedBox(height: 8.h),
-                Text(
-                  _blockerHint!,
-                  textAlign: TextAlign.center,
-                  style: AppText.caption(color: AppColors.error),
-                ),
-              ],
               SizedBox(height: 18.h),
               _PhoneNextButton(
                 isSending: _isSending,

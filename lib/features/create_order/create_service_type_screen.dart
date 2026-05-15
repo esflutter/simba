@@ -93,9 +93,15 @@ class _TypeCard extends StatelessWidget {
                   text: '$subtitle ',
                   style: AppText.bodySmall(color: Colors.black.withValues(alpha: 0.60)),
                 ),
-                TextSpan(
-                  text: '→',
-                  style: AppText.bodySmall(color: AppColors.primary),
+                // Webp-стрелка из Figma вместо текстового символа '→'.
+                WidgetSpan(
+                  alignment: PlaceholderAlignment.middle,
+                  child: Image.asset(
+                    'assets/images/icon_arrow_forward.webp',
+                    width: 16.r,
+                    height: 16.r,
+                    color: AppColors.primary,
+                  ),
                 ),
               ],
             ),

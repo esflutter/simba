@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
+import '../../core/widgets/app_network_image.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
@@ -28,19 +29,33 @@ class UserProfileScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(appControllerProvider);
+    // .select — иначе любой setRole/createOrder ребилдит профиль контрагента.
+    final mockReviews = ref.watch(
+      appControllerProvider.select((s) => s.reviews),
+    );
+    final mockMyOrders = ref.watch(
+      appControllerProvider.select((s) => s.myOrders),
+    );
+    final mockOrders = ref.watch(
+      appControllerProvider.select((s) => s.orders),
+    );
     // Отзывы берём из репозитория (live → PB, иначе мок-fallback внутри
     // провайдера). Раньше код читал `state.reviews` напрямую — в live этот
     // список всегда пуст, поэтому отзывы на профиле не отображались.
+    //
+    // На loading возвращаем null → ниже рендерим спиннер вместо «Нет отзывов»,
+    // иначе блок мигает empty-state'ом до прихода реальных данных.
     final asyncReviews = ref.watch(reviewsForUserProvider(userId));
-    final reviews = asyncReviews.maybeWhen(
+    final List<Review>? reviewsOrNull = asyncReviews.when(
       data: (xs) => xs,
-      orElse: () =>
-          state.reviews.where((r) => r.toUserId == userId).toList(),
+      loading: () => null,
+      error: (_, _) =>
+          mockReviews.where((r) => r.toUserId == userId).toList(),
     );
+    final reviews = reviewsOrNull ?? const <Review>[];
     final order = orderId == null
         ? null
-        : [...state.myOrders, ...state.orders]
+        : [...mockMyOrders, ...mockOrders]
             .cast<Order?>()
             .firstWhere((o) => o?.id == orderId, orElse: () => null);
     // Имя/фото берём в первую очередь из expand'а Order (PB live-mode), и
@@ -136,31 +151,25 @@ class UserProfileScreen extends ConsumerWidget {
                             shape: BoxShape.circle,
                           ),
                           clipBehavior: Clip.antiAlias,
-                          child: displayPhoto != null
-                              ? (displayPhoto.startsWith('http')
-                                  ? Image.network(
-                                      displayPhoto,
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (_, _, _) => Icon(
-                                        IconsaxPlusLinear.user,
-                                        color: AppColors.primary,
-                                        size: 32.r,
-                                      ),
-                                    )
-                                  : Image.file(
-                                      File(displayPhoto),
-                                      fit: BoxFit.cover,
-                                      errorBuilder: (_, _, _) => Icon(
-                                        IconsaxPlusLinear.user,
-                                        color: AppColors.primary,
-                                        size: 32.r,
-                                      ),
-                                    ))
-                              : Icon(
-                                  IconsaxPlusLinear.user,
-                                  color: AppColors.primary,
-                                  size: 32.r,
-                                ),
+                          child: Builder(builder: (_) {
+                            final fallback = Icon(
+                              IconsaxPlusLinear.user,
+                              color: AppColors.primary,
+                              size: 32.r,
+                            );
+                            if (displayPhoto == null) return fallback;
+                            if (displayPhoto.startsWith('http')) {
+                              return AppNetworkImage(
+                                url: displayPhoto,
+                                fallback: fallback,
+                              );
+                            }
+                            return Image.file(
+                              File(displayPhoto),
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => fallback,
+                            );
+                          }),
                         ),
                         SizedBox(width: 16.w),
                         Expanded(
@@ -193,10 +202,16 @@ class UserProfileScreen extends ConsumerWidget {
                                   ],
                                   if (user.hasTransport) ...[
                                     SizedBox(width: 8.w),
+                                    // По фигме грузовик тёмный, не синий
+                                    // как ключ. Перекрашиваем синий ассет
+                                    // в textPrimary через srcIn-блендинг,
+                                    // чтобы не плодить отдельный файл.
                                     Image.asset(
                                       'assets/images/icon_transport.png',
                                       width: 20.r,
                                       height: 16.r,
+                                      color: AppColors.textPrimary,
+                                      colorBlendMode: BlendMode.srcIn,
                                     ),
                                   ],
                                 ],
@@ -281,7 +296,14 @@ class UserProfileScreen extends ConsumerWidget {
                     ),
                   ),
                   SizedBox(height: 4.h),
-                  if (reviews.isEmpty)
+                  if (reviewsOrNull == null)
+                    Padding(
+                      padding: EdgeInsets.symmetric(vertical: 64.h),
+                      child: const Center(
+                        child: CircularProgressIndicator(color: AppColors.primary),
+                      ),
+                    )
+                  else if (reviews.isEmpty)
                     Padding(
                       padding: EdgeInsets.symmetric(vertical: 64.h),
                       child: Column(
@@ -340,6 +362,7 @@ class UserProfileScreen extends ConsumerWidget {
                       .accept(orderId!, userId);
                   if (!context.mounted) return;
                   ref.invalidate(myOrdersStreamProvider);
+                  ref.invalidate(myExecutorOrdersProvider);
                   ref.invalidate(feedOrdersProvider);
                   ref.invalidate(pendingExecutorIdsProvider(orderId!));
                   ref.invalidate(orderByIdProvider(orderId!));
@@ -354,6 +377,13 @@ class UserProfileScreen extends ConsumerWidget {
                   context.pushReplacement(
                     '/order/$orderId/user/$userId',
                   );
+                } on OrderResponseGoneException {
+                  // Исполнитель отозвал отклик параллельно — не показывать
+                  // ложный «принят». Перерисуем экран, чтобы скрыть кнопку.
+                  if (!context.mounted) return;
+                  ref.invalidate(pendingExecutorIdsProvider(orderId!));
+                  ref.invalidate(orderByIdProvider(orderId!));
+                  AppToast.show(context, 'Этот отклик уже недоступен');
                 } catch (_) {
                   if (!context.mounted) return;
                   AppToast.show(context, 'Ошибка. Попробуйте позже');
@@ -367,12 +397,18 @@ class UserProfileScreen extends ConsumerWidget {
                       .decline(orderId!, userId);
                   if (!context.mounted) return;
                   ref.invalidate(myOrdersStreamProvider);
+                  ref.invalidate(myExecutorOrdersProvider);
                   ref.invalidate(feedOrdersProvider);
                   ref.invalidate(pendingExecutorIdsProvider(orderId!));
                   ref.invalidate(orderByIdProvider(orderId!));
                   AppToast.show(context, 'Исполнитель отклонён');
                   context.pop();
                   if (wasLast) context.pop();
+                } on OrderResponseGoneException {
+                  if (!context.mounted) return;
+                  ref.invalidate(pendingExecutorIdsProvider(orderId!));
+                  ref.invalidate(orderByIdProvider(orderId!));
+                  AppToast.show(context, 'Этот отклик уже недоступен');
                 } catch (_) {
                   if (!context.mounted) return;
                   AppToast.show(context, 'Ошибка. Попробуйте позже');
@@ -693,7 +729,7 @@ class _RatingSummary extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Text(
-              average.toStringAsFixed(1).replaceAll('.', ','),
+              average.toStringAsFixed(1),
               style: TextStyle(
                 color: Colors.black,
                 fontSize: 20.sp,
@@ -796,12 +832,17 @@ class _ReviewItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // PB-id, отсутствующий в локальном моке, → null. Раньше fallback был
-    // на demoCurrentUser («Иван Иванов»), и в live-режиме все авторы
-    // отзывов отображались как один и тот же мок-юзер.
+    // Приоритет: имя/фото из expand.from_user (live PB) → локальный мок-юзер
+    // → «Пользователь». Раньше использовали только userById, который для
+    // PB-id ничего не находит, и все отзывы становились «Пользователь».
     final author = userById(review.fromUserId);
-    final authorName = author?.name ?? 'Пользователь';
-    final authorPhoto = author?.photoPath;
+    final authorName = review.fromUserName.isNotEmpty
+        ? review.fromUserName
+        : (author?.name ?? 'Пользователь');
+    final authorPhoto = (review.fromUserPhotoUrl != null &&
+            review.fromUserPhotoUrl!.isNotEmpty)
+        ? review.fromUserPhotoUrl
+        : author?.photoPath;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -815,31 +856,25 @@ class _ReviewItem extends StatelessWidget {
                 shape: BoxShape.circle,
               ),
               clipBehavior: Clip.antiAlias,
-              child: authorPhoto != null
-                  ? (authorPhoto.startsWith('http')
-                      ? Image.network(
-                          authorPhoto,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => Icon(
-                            IconsaxPlusLinear.user,
-                            color: AppColors.primary,
-                            size: 20.r,
-                          ),
-                        )
-                      : Image.file(
-                          File(authorPhoto),
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => Icon(
-                            IconsaxPlusLinear.user,
-                            color: AppColors.primary,
-                            size: 20.r,
-                          ),
-                        ))
-                  : Icon(
-                      IconsaxPlusLinear.user,
-                      color: AppColors.primary,
-                      size: 20.r,
-                    ),
+              child: Builder(builder: (_) {
+                final fallback = Icon(
+                  IconsaxPlusLinear.user,
+                  color: AppColors.primary,
+                  size: 20.r,
+                );
+                if (authorPhoto == null) return fallback;
+                if (authorPhoto.startsWith('http')) {
+                  return AppNetworkImage(
+                    url: authorPhoto,
+                    fallback: fallback,
+                  );
+                }
+                return Image.file(
+                  File(authorPhoto),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => fallback,
+                );
+              }),
             ),
             SizedBox(width: 12.w),
             Expanded(
@@ -874,7 +909,7 @@ class _ReviewItem extends StatelessWidget {
             ),
             SizedBox(width: 4.w),
             Text(
-              DateFormat('dd.MM.yyyy').format(review.createdAt),
+              DateFormat('dd.MM.yyyy').format(review.createdAt.toLocal()),
               style: TextStyle(
                 color: Colors.black.withValues(alpha: 0.60),
                 fontSize: 12.sp,
@@ -908,7 +943,7 @@ class _ReviewItem extends StatelessWidget {
                       borderRadius: BorderRadius.circular(8.r),
                     ),
                     child: Text(
-                      t,
+                      reviewTagLabel(t),
                       style: TextStyle(
                         fontSize: 13.sp,
                         fontWeight: FontWeight.w500,

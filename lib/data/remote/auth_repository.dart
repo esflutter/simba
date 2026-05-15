@@ -274,20 +274,33 @@ class AuthRepository {
         ? null
         : pb.files.getUrl(record, photoFilename).toString();
     final cityId = record.getStringValue('city');
-    // phone в users.email = `<digits>@simba.local` (см. _ensureUserAndAuth
-    // на бэке). Берём напрямую из record.email и нормализуем — userMap не
-    // содержит phone отдельным полем.
-    final email = record.getStringValue('email');
-    final phoneDigits = email.split('@').first;
-    final phone = phoneDigits.isEmpty ? '' : '+$phoneDigits';
+    // Phone приходит в meta auth-ответа: бэк добавляет его в meta при
+    // recordAuthResponse (см. helpers.js ensureUserAndAuth). В email phone
+    // не светим — там анонимизированный uid (`<uid>@simba.local`).
+    //
+    // ВАЖНО: authRefresh() (см. tryRefreshAuth) НЕ возвращает meta — он
+    // просто рефрешит token. В этом случае meta?['phone'] == null, и без
+    // fallback'а на сохранённое значение телефон сбрасывался бы в пустую
+    // строку на каждый рестарт приложения. Берём из текущего AppController.
+    String phone = (meta?['phone'] as String?) ?? '';
+    if (phone.isEmpty) {
+      final existing = _ref.read(appControllerProvider).user?.phone;
+      if (existing != null && existing.isNotEmpty) phone = existing;
+    }
 
     // Город — источник правды на бэке (users.city). При логине переносим
     // в локальный selectedCityId, чтобы лента/feed сразу подтянулась под
     // правильный город без редиректа на /city (если поле непустое).
     // Если в record `city` пусто — оставляем AppController как есть; роутер
     // отправит на /city как часть onboarding.
-    if (cityId.isNotEmpty) {
-      _ref.read(appControllerProvider.notifier).setCity(cityId);
+    //
+    // НО: если у клиента в полёте PATCH `users.city` (юзер только что
+    // выбрал новый город локально), не перезатираем его старым значением
+    // с сервера. Без этой проверки authRefresh, прилетевший до PATCH,
+    // откатывал выбор юзера.
+    final ctrl = _ref.read(appControllerProvider.notifier);
+    if (cityId.isNotEmpty && ctrl.pendingCitySync == null) {
+      ctrl.setCity(cityId);
     }
 
     final user = AppUser(
@@ -375,6 +388,24 @@ class AuthRepository {
   Future<void> logout() async {
     final pb = _pb;
     if (pb != null) {
+      // Перед очисткой токена снимаем флаг is_active_executor на бэке,
+      // иначе сегмент push-рассылки «new_order_nearby» продолжит включать
+      // этого юзера до естественного истечения TTL координат (см. cron
+      // cleanup-stale-locations, 6 часов). Если запрос упал — не блокируем
+      // logout, в худшем случае юзер ещё несколько часов получит push'и
+      // (но без открытого приложения они всё равно не дойдут до UI).
+      if (pb.authStore.isValid) {
+        try {
+          await sharedHttpClient.post(
+            Uri.parse('${pb.baseURL}/api/me/executor-status'),
+            headers: {
+              'Authorization': pb.authStore.token,
+              'Content-Type': 'application/json',
+            },
+            body: '{"is_active": false}',
+          ).timeout(const Duration(seconds: 3));
+        } catch (_) {/* не блокируем logout */}
+      }
       pb.authStore.clear();
       await Future<void>.delayed(Duration.zero);
     }
@@ -406,7 +437,21 @@ class AuthRepository {
   /// и погонит на онбординг при валидной сессии.
   Future<bool> tryRefreshAuth() async {
     final pb = _pb;
-    if (pb == null || !pb.authStore.isValid) return false;
+    if (pb == null || !pb.authStore.isValid) {
+      // PB-токена нет, а state.user может остаться в prefs от прошлой
+      // сессии (например, при переустановке APK поверх — токен хранится
+      // отдельно от prefs и иногда пропадает, а user-запись в prefs
+      // остаётся). Это ломает редирект: splash видит state.user != null
+      // и ведёт сразу в /home, где первый же запрос ловит 401. Чистим
+      // state.user, чтобы редирект корректно отправил на /auth/phone.
+      try {
+        final state = _ref.read(appControllerProvider);
+        if (state.user != null) {
+          _ref.read(appControllerProvider.notifier).logout();
+        }
+      } catch (_) {}
+      return false;
+    }
     try {
       // 6с синхронизировано с обёрткой в splash_screen — иначе внутренний
       // таймаут срабатывал раньше, и splash думал что refresh не дошёл,

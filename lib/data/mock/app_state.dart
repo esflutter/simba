@@ -1,8 +1,12 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../core/config/env.dart';
+import '../../features/create_order/order_draft.dart';
 import '../local/preferences_store.dart';
 import '../models/models.dart';
 import '../remote/pocketbase_client.dart';
@@ -122,7 +126,15 @@ class AppController extends Notifier<AppState> {
   List<Order> _withoutExpiredOpen(List<Order> orders) =>
       orders.where((o) => !o.isExpiredOpen).toList();
 
+  /// Идентификатор города, который ждёт синка с бэком. Пока он не null,
+  /// `_consumeAuthEnvelope` НЕ перезатирает selectedCityId из record —
+  /// иначе fire-and-forget PATCH мог быть перезаписан ответом authRefresh,
+  /// прилетевшим раньше, чем дойдёт сам PATCH.
+  String? _pendingCitySync;
+  String? get pendingCitySync => _pendingCitySync;
+
   void setCity(String id) {
+    final prevCity = state.selectedCityId;
     final c = MockData.cities.firstWhere((c) => c.id == id);
     state = state.copyWith(
       selectedCityId: id,
@@ -133,23 +145,38 @@ class AppController extends Notifier<AppState> {
     );
     _prefs?.setCityId(id);
 
-    // Live-режим: PATCH users.city → источник правды на бэке. Fire-and-forget:
-    // если PATCH не дойдёт (сеть/таймаут), при следующей авторизации
-    // _consumeAuthEnvelope подтянет актуальный city с сервера, а до тех пор
-    // юзер видит UX-соответствующий локальный selectedCityId. Не блокируем
-    // переключатель города ожиданием HTTP — переключение должно быть instant.
+    // Сбрасываем адрес в драфте создания заказа при смене города. Раньше
+    // юзер вводил адрес в Москве, переключал город на Питер и упирался
+    // на summary в city-guard «адрес не в вашем городе» — после того,
+    // как уже прошёл весь wizard. Тут сбрасываем рано.
+    if (prevCity != null && prevCity.isNotEmpty && prevCity != id) {
+      try {
+        ref.read(orderDraftProvider.notifier).clearAddress();
+      } catch (_) {
+        // ok если provider не зарегистрирован (тесты).
+      }
+    }
+
+    // Live-режим: PATCH users.city → источник правды на бэке. Помечаем
+    // city как «в полёте», чтобы _consumeAuthEnvelope не сбросил локальный
+    // выбор, если до завершения PATCH прилетит authRefresh со старым city.
+    // По завершении (успех или ошибка) — снимаем флаг.
     if (Env.hasPocketbase) {
       try {
         final pb = ref.read(pocketbaseProvider);
         if (pb != null &&
             pb.authStore.isValid &&
             pb.authStore.record != null) {
+          _pendingCitySync = id;
           pb
               .collection('users')
               .update(pb.authStore.record!.id, body: {'city': id})
+              .then((_) {
+            if (_pendingCitySync == id) _pendingCitySync = null;
+          })
               // ignore: body_might_complete_normally_catch_error
               .catchError((_) {
-            // Молча — это background sync. Логирование оставим на бэке.
+            if (_pendingCitySync == id) _pendingCitySync = null;
           });
         }
       } catch (_) {
@@ -200,10 +227,62 @@ class AppController extends Notifier<AppState> {
   void setRole(UserRole role) {
     state = state.copyWith(role: role);
     _prefs?.setRole(role);
+    // При переключении в роль исполнителя — регистрируем «онлайн» на бэке,
+    // чтобы push'и `new_order_nearby` начали приходить. При обратном
+    // переключении в заказчика — гасим флаг.
+    _syncExecutorStatus(role == UserRole.executor);
   }
 
   void setExecutorActive(bool active) {
     state = state.copyWith(executorActive: active);
+    _syncExecutorStatus(active);
+  }
+
+  /// Шлёт `/api/me/executor-status` на бэк. Fire-and-forget: ошибки лога —
+  /// сетевые ошибки не должны блокировать смену роли в UI. Если есть PB —
+  /// запрашивает текущие координаты через geolocator (без блокировки UI),
+  /// и шлёт их вместе с флагом.
+  void _syncExecutorStatus(bool isActive) {
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    () async {
+      double? lat;
+      double? lng;
+      if (isActive) {
+        try {
+          final perm = await Geolocator.checkPermission();
+          if (perm == LocationPermission.always ||
+              perm == LocationPermission.whileInUse) {
+            final pos = await Geolocator.getCurrentPosition(
+              locationSettings: const LocationSettings(
+                accuracy: LocationAccuracy.medium,
+                timeLimit: Duration(seconds: 8),
+              ),
+            );
+            lat = pos.latitude;
+            lng = pos.longitude;
+          }
+        } catch (_) {/* нет permission или таймаут — шлём без координат */}
+      }
+      try {
+        await sharedHttpClient.post(
+          Uri.parse('${pb.baseURL}/api/me/executor-status'),
+          headers: {
+            'Authorization': pb.authStore.token,
+            'Content-Type': 'application/json',
+          },
+          body: jsonEncode({
+            'is_active': isActive,
+            // ignore: use_null_aware_elements
+            if (lat != null) 'lat': lat,
+            // ignore: use_null_aware_elements
+            if (lng != null) 'lng': lng,
+          }),
+        );
+      } catch (e) {
+        debugPrint('[executor-status] sync failed: $e');
+      }
+    }();
   }
 
   void setSearchRadius(double km) {
@@ -354,6 +433,10 @@ class AppController extends Notifier<AppState> {
     // (см. auth_repository._consumeAuthEnvelope).
     final keepCityId = state.selectedCityId;
     final city = state.selectedCity;
+    // Сбрасываем «в полёте PATCH города» — даже если он не дошёл, после
+    // logout его уже некуда применять, и блокировать будущий
+    // _consumeAuthEnvelope от перезаписи неправильно.
+    _pendingCitySync = null;
     state = AppState(
       user: null,
       role: UserRole.customer,

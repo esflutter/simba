@@ -5,9 +5,9 @@ import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/order_display.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../data/mock/app_state.dart';
-import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/orders_repository.dart';
 import 'order_card.dart';
@@ -42,37 +42,35 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
     super.dispose();
   }
 
-  String _categoryName(Order o) {
-    if (o.categoryName != null && o.categoryName!.isNotEmpty) {
-      return o.categoryName!;
-    }
-    return MockData.categories
-        .firstWhere((c) => c.id == o.categoryId,
-            orElse: () => MockData.categories.last)
-        .name;
-  }
-
   bool _matches(Order o, String q) {
     if (q.isEmpty) return false;
     final lq = q.toLowerCase();
     return o.title.toLowerCase().contains(lq) ||
         o.address.toLowerCase().contains(lq) ||
-        _categoryName(o).toLowerCase().contains(lq);
+        categoryNameOf(o).toLowerCase().contains(lq);
   }
 
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(appControllerProvider);
+    // .select — иначе каждое нажатие клавиши в поиске + любая мутация
+    // AppState ребилдит экран целиком.
+    final mockOrders = ref.watch(
+      appControllerProvider.select((s) => s.orders),
+    );
+    final selectedCityId = ref.watch(
+      appControllerProvider.select((s) => s.selectedCityId),
+    );
+    final myId = ref.watch(
+      appControllerProvider.select((s) => s.user?.id),
+    );
     // Источник — фид из PB (если есть), иначе мок-стейт.
     final remoteFeed = ref.watch(feedOrdersProvider).maybeWhen(
           data: (xs) => xs,
           orElse: () => null,
         );
-    final source = remoteFeed ?? state.orders;
+    final source = remoteFeed ?? mockOrders;
     // Те же фильтры, что в feed_screen: open, не expired, мой город, не мой
     // заказ. Плюс совпадение поискового запроса. Сортировка от новых к старым.
-    final selectedCityId = state.selectedCityId;
-    final myId = state.user?.id;
     final results = source
         .where((o) =>
             o.status == OrderStatus.open &&
@@ -129,7 +127,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                           final o = results[i];
                           return OrderCard(
                             order: o,
-                            categoryName: _categoryName(o),
+                            categoryName: categoryNameOf(o),
                             onTap: () =>
                                 context.push('/order/${o.id}?mode=feed'),
                           );

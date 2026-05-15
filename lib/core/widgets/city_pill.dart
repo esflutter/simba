@@ -20,7 +20,7 @@ class CityPill extends StatelessWidget {
         borderRadius: BorderRadius.circular(8.r),
         onTap: () => context.push('/city'),
         child: Padding(
-          padding: EdgeInsets.fromLTRB(8.w, 4.h, 10.w, 4.h),
+          padding: EdgeInsets.fromLTRB(8.w, 6.h, 10.w, 6.h),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [

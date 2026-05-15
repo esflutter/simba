@@ -33,11 +33,14 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   @override
   void initState() {
     super.initState();
-    final u = ref.read(appControllerProvider).user!;
-    _name = TextEditingController(text: u.name);
-    _photoPath = u.photoPath;
-    _hasTools = u.hasTools;
-    _hasTransport = u.hasTransport;
+    final u = ref.read(appControllerProvider).user;
+    // u может быть null, если роутер пропустил без auth (теоретический
+    // edge case — guard в роутере отправляет на /auth/phone, но мы не
+    // полагаемся на это и инициализируем поля пустыми).
+    _name = TextEditingController(text: u?.name ?? '');
+    _photoPath = u?.photoPath;
+    _hasTools = u?.hasTools ?? false;
+    _hasTransport = u?.hasTransport ?? false;
   }
 
   @override
@@ -120,34 +123,48 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       // На моках просто обновляем appController (как было раньше).
       final pb = ref.read(pocketbaseProvider);
       if (pb != null && pb.authStore.isValid) {
-        final body = <String, dynamic>{
-          'name': _name.text.trim(),
-          'has_tools': _hasTools,
-          'has_transport': _hasTransport,
-        };
-        final files = <http.MultipartFile>[];
         final photo = _photoPath;
-        if (photo != null && !photo.startsWith('http')) {
-          // Локальный файл из image_picker — отправляем байты как
-          // multipart. PocketBase поле `users.photo` уже сконфигурено
-          // как file (см. миграция 1700000000_init_users).
+        final hasNewPhoto = photo != null && !photo.startsWith('http');
+        // PB Dart SDK при передаче files: [...] (даже пустого) собирает
+        // multipart/form-data и сериализует bool как "true"/"false" — PB
+        // потом отказывается записать строку в BOOLEAN-поле. Поэтому в
+        // отсутствии нового фото шлём чистый JSON, а multipart используем
+        // только когда реально аплоадим аватар (там bool кодируем как 1/0).
+        if (hasNewPhoto) {
           final bytes = await File(photo).readAsBytes();
-          files.add(http.MultipartFile.fromBytes(
-            'photo',
-            bytes,
-            filename: 'avatar.jpg',
-          ));
+          await pb
+              .collection('users')
+              .update(
+                pb.authStore.record!.id,
+                body: {
+                  'name': _name.text.trim(),
+                  // В multipart булевы поля пишем как "1"/"0" — иначе SDK
+                  // отправит "true"/"false" и PB бракует тип.
+                  'has_tools': _hasTools ? '1' : '0',
+                  'has_transport': _hasTransport ? '1' : '0',
+                },
+                files: [
+                  http.MultipartFile.fromBytes(
+                    'photo',
+                    bytes,
+                    filename: 'avatar.jpg',
+                  ),
+                ],
+              )
+              .timeout(const Duration(seconds: 30));
+        } else {
+          await pb
+              .collection('users')
+              .update(
+                pb.authStore.record!.id,
+                body: {
+                  'name': _name.text.trim(),
+                  'has_tools': _hasTools,
+                  'has_transport': _hasTransport,
+                },
+              )
+              .timeout(const Duration(seconds: 30));
         }
-        // upload фото может занимать дольше обычного update — даём 30с,
-        // как в orders.create. Без таймаута PB SDK мог зависать.
-        await pb
-            .collection('users')
-            .update(
-              pb.authStore.record!.id,
-              body: body,
-              files: files,
-            )
-            .timeout(const Duration(seconds: 30));
       }
       ref.read(appControllerProvider.notifier).completeProfile(
             name: _name.text,
@@ -157,7 +174,10 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
           );
       if (!mounted) return;
       context.pop();
-    } catch (_) {
+    } catch (e, st) {
+      // Логируем причину — без неё toast «Не удалось сохранить» не даёт
+      // понять, что именно сломалось (миссинг-поле в схеме PB, 401, 5xx).
+      debugPrint('[edit_profile] save failed: $e\n$st');
       if (!mounted) return;
       AppToast.show(context, 'Не удалось сохранить');
     } finally {

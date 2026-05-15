@@ -9,6 +9,8 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/widgets/app_card.dart';
+import '../../core/widgets/app_network_image.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/auth_repository.dart';
@@ -28,17 +30,23 @@ class ProfileScreen extends ConsumerWidget {
     }
     // Считаем рейтинг из реальных отзывов на текущего юзера, а не из
     // user.rating (он у новых пользователей 0). В live тянем отзывы через
-    // reviewsForUserProvider (PB), на моках/ошибке падаем в state.reviews.
+    // reviewsForUserProvider (PB), на ошибке падаем в state.reviews.
+    //
+    // Пока запрос грузится — возвращаем null, и _ProfileCard скрывает блок
+    // рейтинга. Иначе на доли секунды показался бы «0.0», который потом
+    // сменился бы на реальный рейтинг (или наоборот — пустота на реальный).
     final myId = user.id;
     final asyncReviews = ref.watch(reviewsForUserProvider(myId));
-    final myReviews = asyncReviews.maybeWhen(
+    final myReviews = asyncReviews.when(
       data: (xs) => xs,
-      orElse: () => ref
+      loading: () => null,
+      error: (_, _) => ref
           .watch(appControllerProvider.select((s) => s.reviews))
           .where((r) => r.toUserId == myId || r.toUserId == 'me')
           .toList(),
     );
-    final computedRating = myReviews.isEmpty
+    final reviewsCount = myReviews?.length ?? 0;
+    final computedRating = (myReviews == null || myReviews.isEmpty)
         ? 0.0
         : myReviews.map((r) => r.rating).reduce((a, b) => a + b) /
             myReviews.length;
@@ -73,7 +81,7 @@ class ProfileScreen extends ConsumerWidget {
                 _ProfileCard(
                   user: user,
                   rating: computedRating,
-                  reviewsCount: myReviews.length,
+                  reviewsCount: reviewsCount,
                   onEdit: () => context.push('/profile/edit'),
                 ),
                 SizedBox(height: 16.h),
@@ -158,7 +166,11 @@ class ProfileScreen extends ConsumerWidget {
                         if (!dialogCtx.mounted) return;
                         Navigator.of(dialogCtx).pop();
                         if (!context.mounted) return;
-                        context.go('/onboarding');
+                        // НЕ на /onboarding: онбординг юзер уже видел,
+                        // флаг сохраняется в AppState.logout(). На cold-start
+                        // приложение само ведёт сюда же — здесь явно
+                        // отправляем туда же, чтобы UX совпадал.
+                        context.go('/auth/phone');
                       },
                     ),
                     SizedBox(height: 8.h),
@@ -263,7 +275,13 @@ class ProfileScreen extends ConsumerWidget {
                         if (!dialogCtx.mounted) return;
                         Navigator.of(dialogCtx).pop();
                         if (!context.mounted) return;
-                        context.go('/onboarding');
+                        // То же что и при logout — на ввод номера. Онбординг
+                        // (как процесс знакомства с приложением) показывать
+                        // повторно тому же владельцу устройства нет смысла.
+                        // Если устройство сменит владельца — он наберёт свой
+                        // номер на /auth/phone, отдельный «онбординг для
+                        // нового юзера на этом девайсе» не предусмотрен.
+                        context.go('/auth/phone');
                       },
                     ),
                     SizedBox(height: 8.h),
@@ -300,11 +318,7 @@ class _ProfileCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final hasTools = user.hasTools;
     final hasTransport = user.hasTransport;
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16.r),
-      ),
+    return AppCard(
       padding: EdgeInsets.symmetric(vertical: 16.h),
       child: Stack(
         children: [
@@ -328,42 +342,65 @@ class _ProfileCard extends StatelessWidget {
                   ),
                 ),
               ],
-              SizedBox(height: 4.h),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  if (hasTools) ...[
-                    Image.asset(
-                      'assets/images/icon_tools.png',
-                      width: 16.r,
-                      height: 16.r,
-                    ),
-                    SizedBox(width: 24.w),
-                  ],
-                  if (hasTransport) ...[
-                    Image.asset(
-                      'assets/images/icon_transport.png',
-                      width: 20.r,
-                      height: 16.r,
-                    ),
-                    SizedBox(width: 24.w),
-                  ],
-                  Image.asset(
-                    'assets/images/icon_ranking.webp',
+              Builder(builder: (_) {
+                // Собираем только видимые блоки и вставляем 24.w spacer ТОЛЬКО
+                // между ними. Trailing-spacer после tools/transport смещал
+                // одиночную иконку влево от центра, когда нет рейтинга.
+                final blocks = <Widget>[];
+                if (hasTools) {
+                  blocks.add(Image.asset(
+                    'assets/images/icon_tools.png',
                     width: 16.r,
                     height: 16.r,
+                  ));
+                }
+                if (hasTransport) {
+                  blocks.add(Image.asset(
+                    'assets/images/icon_transport.png',
+                    width: 20.r,
+                    height: 16.r,
+                    // По фигме грузовик тёмный (в отличие от синего ключа).
+                    color: AppColors.textPrimary,
+                    colorBlendMode: BlendMode.srcIn,
+                  ));
+                }
+                if (reviewsCount > 0) {
+                  blocks.add(Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Image.asset(
+                        'assets/images/icon_ranking.webp',
+                        width: 16.r,
+                        height: 16.r,
+                      ),
+                      SizedBox(width: 8.w),
+                      Text(
+                        rating.toStringAsFixed(1),
+                        textAlign: TextAlign.center,
+                        style: AppText.bodySmall(weight: FontWeight.w500),
+                      ),
+                    ],
+                  ));
+                }
+                // Если ни инструмента/транспорта, ни рейтинга — вообще не
+                // добавляем ни spacer'а, ни Row. Иначе остаётся «висячий»
+                // 4.h перед пустой строкой, и нижний отступ карточки
+                // оказывается больше верхнего на эти 4.h.
+                if (blocks.isEmpty) return const SizedBox.shrink();
+                final children = <Widget>[];
+                for (var i = 0; i < blocks.length; i++) {
+                  if (i > 0) children.add(SizedBox(width: 24.w));
+                  children.add(blocks[i]);
+                }
+                return Padding(
+                  padding: EdgeInsets.only(top: 4.h),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: children,
                   ),
-                  SizedBox(width: 8.w),
-                  Text(
-                    reviewsCount == 0
-                        ? '—'
-                        : rating.toStringAsFixed(1).replaceAll('.', ','),
-                    textAlign: TextAlign.center,
-                    style: AppText.bodySmall(weight: FontWeight.w500),
-                  ),
-                ],
-              ),
+                );
+              }),
             ],
           ),
           Positioned(
@@ -418,11 +455,7 @@ class _Avatar extends StatelessWidget {
       child: path == null
           ? fallback
           : isUrl
-              ? Image.network(
-                  path,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => fallback,
-                )
+              ? AppNetworkImage(url: path, fallback: fallback)
               : Image.file(
                   File(path),
                   fit: BoxFit.cover,

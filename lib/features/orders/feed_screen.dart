@@ -1,16 +1,19 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/order_display.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/city_pill.dart';
 import '../../core/widgets/openfreemap_view.dart';
 import '../../data/mock/app_state.dart';
-import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/orders_repository.dart';
 import 'order_card.dart';
@@ -25,30 +28,32 @@ class FeedScreen extends ConsumerStatefulWidget {
 class _FeedScreenState extends ConsumerState<FeedScreen> {
   bool _mapMode = false;
 
-  // Сначала пробуем имя категории из expand'а Order (PB live-mode). Это
-  // нужно для категорий, которых нет в локальном MockData.categories
-  // (бэк может завести новые без обновления клиента) — раньше такие
-  // заказы все показывались как «Другое».
-  String _categoryName(Order o) {
-    if (o.categoryName != null && o.categoryName!.isNotEmpty) {
-      return o.categoryName!;
-    }
-    return MockData.categories
-        .firstWhere((c) => c.id == o.categoryId,
-            orElse: () => MockData.categories.last)
-        .name;
-  }
-
   @override
   Widget build(BuildContext context) {
-    final state = ref.watch(appControllerProvider);
-    final isExecutor = state.role == UserRole.executor;
+    // Подписываемся точечно через .select, иначе любой setRole/addReview
+    // /createOrder ребилдит весь FeedScreen, включая фильтрацию ленты и
+    // карту. Берём только те поля, что реально нужны экрану.
+    final isExecutor = ref.watch(
+      appControllerProvider.select((s) => s.role == UserRole.executor),
+    );
+    final selectedCity = ref.watch(
+      appControllerProvider.select((s) => s.selectedCity),
+    );
+    final selectedCityId = ref.watch(
+      appControllerProvider.select((s) => s.selectedCityId),
+    );
+    final myId = ref.watch(
+      appControllerProvider.select((s) => s.user?.id),
+    );
+    final mockOrders = ref.watch(
+      appControllerProvider.select((s) => s.orders),
+    );
     // Если бэкенд подключён — берём фид из PB, иначе из мок-стейта.
     final remoteFeed = ref.watch(feedOrdersProvider).maybeWhen(
           data: (xs) => xs,
           orElse: () => null,
         );
-    final source = remoteFeed ?? state.orders;
+    final source = remoteFeed ?? mockOrders;
     // Фильтры в ленте:
     //   - status = open (не показываем уже принятые/завершённые)
     //   - не expired (открытый заказ с прошедшей датой)
@@ -58,8 +63,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
     //     отсекает, но клиентская защита на случай: моки + старый кэш.
     //
     // Сортировка — от новых к старым (бизнес-требование).
-    final selectedCityId = state.selectedCityId;
-    final myId = state.user?.id;
     final orders = source
         .where((o) =>
             o.status == OrderStatus.open &&
@@ -77,14 +80,44 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
         children: [
           _Header(
             title: 'Заказы',
-            cityName: state.selectedCity.name,
-            onSwitchRole: () {
+            cityName: selectedCity.name,
+            onSwitchRole: () async {
+              final goingActive = !isExecutor;
               ref.read(appControllerProvider.notifier).setRole(
-                    isExecutor ? UserRole.customer : UserRole.executor,
+                    goingActive ? UserRole.executor : UserRole.customer,
                   );
+              // При переходе в исполнителя — проверяем доступ к геолокации.
+              // Без него `users_private.last_lat/lng` пустые → push-сегмент
+              // `new_order_nearby` юзера НЕ включит, и заказы рядом не будут
+              // приходить. Показываем тост, чтобы юзер понимал и сам открыл
+              // настройки приложения.
+              if (goingActive) {
+                final perm = await Geolocator.checkPermission();
+                if (perm == LocationPermission.denied) {
+                  final req = await Geolocator.requestPermission();
+                  if (!context.mounted) return;
+                  if (req != LocationPermission.always &&
+                      req != LocationPermission.whileInUse) {
+                    AppToast.show(
+                      context,
+                      'Без доступа к геолокации мы не сможем '
+                      'присылать заказы рядом',
+                    );
+                  }
+                } else if (perm == LocationPermission.deniedForever) {
+                  if (!context.mounted) return;
+                  AppToast.show(
+                    context,
+                    'Геолокация запрещена в настройках — '
+                    'заказы рядом приходить не будут',
+                  );
+                }
+              }
             },
             roleCta: isExecutor ? 'Готов помочь' : 'Не готов помочь',
             roleActive: isExecutor,
+            // Лупу поиска прячем когда фид пустой — искать всё равно нечего.
+            showSearch: isExecutor && orders.isNotEmpty,
           ),
           Expanded(
               child: !isExecutor
@@ -92,14 +125,19 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                   : Stack(
                       children: [
                         if (!_mapMode)
-                          _ListView(orders: orders, categoryNameOf: _categoryName)
+                          _ListView(orders: orders, categoryNameOf: categoryNameOf)
                         else
                           _MapView(
                             orders: orders,
-                            center: state.selectedCity.center,
+                            center: selectedCity.center,
                             onMarkerTap: (id) =>
                                 context.push('/order/$id?mode=feed'),
                           ),
+                        // Переключатель «Карта/Список» показываем всегда:
+                        // это control режима просмотра, а не «открыть заказы».
+                        // Если в городе пусто — у списка есть своё empty-state
+                        // с фразой про «загляните позже / создайте сами»,
+                        // там это понятнее, чем смотреть на голую карту.
                         Positioned(
                           left: 0,
                           right: 0,
@@ -107,7 +145,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                           child: Center(
                             child: _ToggleViewButton(
                               isMap: _mapMode,
-                              onTap: () => setState(() => _mapMode = !_mapMode),
+                              onTap: () =>
+                                  setState(() => _mapMode = !_mapMode),
                             ),
                           ),
                         ),
@@ -127,6 +166,7 @@ class _Header extends StatelessWidget {
     required this.onSwitchRole,
     required this.roleCta,
     required this.roleActive,
+    this.showSearch = true,
   });
 
   final String title;
@@ -134,6 +174,7 @@ class _Header extends StatelessWidget {
   final VoidCallback onSwitchRole;
   final String roleCta;
   final bool roleActive;
+  final bool showSearch;
 
   @override
   Widget build(BuildContext context) {
@@ -208,7 +249,7 @@ class _Header extends StatelessWidget {
                       ),
                     ),
                   ),
-                  if (roleActive)
+                  if (roleActive && showSearch)
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onTap: () => context.push('/search'),
@@ -251,33 +292,75 @@ class _ListView extends ConsumerWidget {
     }
 
     if (orders.isEmpty) {
+      // Если фид ещё грузится, не показываем «Пока нет заказов» — иначе
+      // после онбординга он мигает на доли секунды до подгрузки реальных
+      // данных. Показываем нейтральный спиннер до первого ответа.
+      final feedAsync = ref.watch(feedOrdersProvider);
+      if (feedAsync.isLoading && !feedAsync.hasValue) {
+        return const Center(
+          child: CircularProgressIndicator(color: AppColors.primary),
+        );
+      }
       return RefreshIndicator(
         color: AppColors.primary,
         onRefresh: doRefresh,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          children: [
-            SizedBox(height: 120.h),
-            Padding(
-              padding: EdgeInsets.symmetric(horizontal: 24.w),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(IconsaxPlusLinear.archive,
-                      size: 64.r, color: AppColors.textTertiary),
-                  SizedBox(height: 12.h),
-                  Text('Пока нет открытых заказов',
-                      style: AppText.h4(), textAlign: TextAlign.center),
-                  SizedBox(height: 6.h),
-                  Text(
-                    'Скоро появятся новые. Загляните позже.',
-                    style: AppText.body(color: AppColors.textSecondary),
-                    textAlign: TextAlign.center,
+        child: LayoutBuilder(
+          builder: (context, constraints) => SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 32.w),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Image.asset(
+                        'assets/images/tab_orders_active.webp',
+                        width: 80.r,
+                        height: 80.r,
+                      ),
+                      SizedBox(height: 24.h),
+                      Text(
+                        'Пока нет открытых заказов',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.black,
+                          fontSize: 20.sp,
+                          fontWeight: FontWeight.w600,
+                          height: 1.25,
+                          letterSpacing: -0.45,
+                        ),
+                      ),
+                      SizedBox(height: 4.h),
+                      Text.rich(
+                        TextSpan(
+                          children: [
+                            const TextSpan(text: 'Загляните позже или '),
+                            TextSpan(
+                              text: 'создайте заказ самостоятельно',
+                              style: TextStyle(color: AppColors.primary),
+                              recognizer: TapGestureRecognizer()
+                                ..onTap = () => context.go('/home/create'),
+                            ),
+                            const TextSpan(text: '.'),
+                          ],
+                        ),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.black.withValues(alpha: 0.60),
+                          fontSize: 17.sp,
+                          fontWeight: FontWeight.w400,
+                          height: 1.29,
+                          letterSpacing: -0.40,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
-          ],
+          ),
         ),
       );
     }
@@ -302,7 +385,7 @@ class _ListView extends ConsumerWidget {
   }
 }
 
-class _MapView extends StatelessWidget {
+class _MapView extends StatefulWidget {
   const _MapView({
     required this.orders,
     required this.center,
@@ -313,24 +396,58 @@ class _MapView extends StatelessWidget {
   final ValueChanged<String>? onMarkerTap;
 
   @override
+  State<_MapView> createState() => _MapViewState();
+}
+
+class _MapViewState extends State<_MapView> {
+  /// Последнее известное местоположение пользователя. Используем как
+  /// стартовый центр карты, если permission уже выдан. Если нет —
+  /// остаёмся на центре выбранного города (см. widget.center).
+  LatLng? _myLocation;
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrapMyLocation();
+  }
+
+  Future<void> _bootstrapMyLocation() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) return;
+      final perm = await Geolocator.checkPermission();
+      if (perm != LocationPermission.always &&
+          perm != LocationPermission.whileInUse) {
+        return;
+      }
+      final pos = await Geolocator.getLastKnownPosition();
+      if (pos == null || !mounted) return;
+      setState(() => _myLocation = LatLng(pos.latitude, pos.longitude));
+    } catch (_) {/* нет GPS / сервис выключен — оставляем центр города */}
+  }
+
+  @override
   Widget build(BuildContext context) {
     // Только заказы с валидной геоточкой попадают на карту. Маркеры
     // окрашиваются по статусу: красный — open, оранжевый — accepted/
     // awaiting_payment, зелёный — completed, серый — cancelled.
-    final markers = orders
+    final markers = widget.orders
         .map((o) => OpenFreeMapMarker(
               id: o.id,
               point: o.location,
               color: _markerColorByStatus(o.status),
             ))
         .toList();
+    // Приоритет: пользовательская позиция (если permission выдан) →
+    // центр выбранного города.
+    final initialCenter = _myLocation ?? widget.center;
+    final initialZoom = _myLocation != null ? 13.0 : 11.0;
     return OpenFreeMapView(
       markers: markers,
-      initialCenter: center,
-      initialZoom: 11,
+      initialCenter: initialCenter,
+      initialZoom: initialZoom,
       showMyLocation: true,
       showZoomControls: true,
-      onMarkerTap: onMarkerTap,
+      onMarkerTap: widget.onMarkerTap,
     );
   }
 }

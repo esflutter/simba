@@ -45,6 +45,11 @@ dependencies:
   http: ^1.2.2
   geolocator: ^13.0.2
   pocketbase: ^0.22.0
+  # Дисковый/memory кэш для удалённых картинок (аватары авторов отзывов,
+  # фото к заказам, профильное фото контрагентов). Без кэша Image.network
+  # перезапрашивал картинку на каждый ребилд — на ленте отзывов это
+  # давало десятки HTTP-запросов на одно открытие экрана.
+  cached_network_image: ^3.4.1
 
 dev_dependencies:
   flutter_test:
@@ -65,3 +70,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+    - assets/maps/

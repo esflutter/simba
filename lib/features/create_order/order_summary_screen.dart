@@ -22,10 +22,9 @@ import '../../data/remote/orders_repository.dart';
 import 'order_draft.dart';
 import 'select_payment_method_screen.dart';
 
-// Минимум совпадает с проверкой в `_canPublish`; максимум берётся из
-// общей константы `kPriceMax` (`core/utils/date_time_formatters.dart`),
-// чтобы RubFormatter и UI-валидация ходили от одного значения.
-const _minPrice = 100;
+// Минимум/максимум суммы — из общих констант `kPriceMin`/`kPriceMax`
+// в `core/utils/date_time_formatters.dart`, чтобы UI-валидация, фильтр
+// feed-парсера и схема бэка ходили от одного значения.
 
 class OrderSummaryScreen extends ConsumerStatefulWidget {
   const OrderSummaryScreen({super.key});
@@ -81,7 +80,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
 
   /// Полная валидация перед публикацией. Кнопка дизейблится, если хоть одно
   /// условие не выполнено: категория, адрес + координаты, цена в диапазоне
-  /// [_minPrice .. kPriceMax], выбран способ оплаты. Потолок 99 999 999 ₽ —
+  /// [kPriceMin .. kPriceMax], выбран способ оплаты. Потолок 99 999 999 ₽ —
   /// формальный (чтобы не лезли 10-значные суммы по ошибке), реалистично
   /// не достижим.
   bool get _canPublish {
@@ -91,7 +90,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
         draft.categoryId != null &&
         draft.address.trim().isNotEmpty &&
         draft.location != null &&
-        p >= _minPrice &&
+        p >= kPriceMin &&
         p <= kPriceMax &&
         (draft.paymentMethod?.isNotEmpty ?? false);
   }
@@ -173,7 +172,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
                 Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16.w),
                   child: Text(
-                    'Минимальная стоимость заказа составляет $_minPrice рублей',
+                    'Минимальная стоимость заказа составляет $kPriceMin рублей',
                     style: AppText.caption(
                       color: Colors.black.withValues(alpha: 0.60),
                     ).copyWith(height: 1.33),
@@ -240,8 +239,8 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       return;
     }
     final price = _priceRub;
-    if (price < _minPrice) {
-      AppToast.show(context, 'Минимальная цена $_minPrice ₽');
+    if (price < kPriceMin) {
+      AppToast.show(context, 'Минимальная цена $kPriceMin ₽');
       return;
     }
     if (price > kPriceMax) {
@@ -325,6 +324,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
           .create(draft: order, photoFiles: photoFiles);
       // Успех — обновляем мои заказы и ленту исполнителей, чистим черновик.
       ref.invalidate(myOrdersStreamProvider);
+      ref.invalidate(myExecutorOrdersProvider);
       ref.invalidate(feedOrdersProvider);
       ref.read(orderDraftProvider.notifier).reset();
       if (!context.mounted) return;

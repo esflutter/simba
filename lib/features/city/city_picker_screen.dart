@@ -408,18 +408,31 @@ class _NoCityFound extends StatelessWidget {
             ),
           ),
           SizedBox(height: 24.h),
+          // Единый стиль empty-state (как «Нет активных заказов» в ленте
+          // и «Нет отзывов»): 20/w600/-0.45 заголовок + 17/w400/-0.40
+          // подзаголовок при alpha 60%. Раньше тут стоял h2 как у шапки
+          // — типографика выпадала из стиля остальных empty-state'ов.
           Text(
             'Города пока нет в списке',
             textAlign: TextAlign.center,
-            style: AppText.h2().copyWith(letterSpacing: -0.10),
+            style: TextStyle(
+              color: Colors.black,
+              fontSize: 20.sp,
+              fontWeight: FontWeight.w600,
+              height: 1.25,
+              letterSpacing: -0.45,
+            ),
           ),
-          SizedBox(height: 9.h),
+          SizedBox(height: 4.h),
           Text(
             'Оставьте заявку — добавим ваш населённый пункт',
             textAlign: TextAlign.center,
-            style: AppText.body().copyWith(
+            style: TextStyle(
               color: Colors.black.withValues(alpha: 0.60),
-              height: 1.38,
+              fontSize: 17.sp,
+              fontWeight: FontWeight.w400,
+              height: 1.29,
+              letterSpacing: -0.40,
             ),
           ),
           SizedBox(height: 28.h),

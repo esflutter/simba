@@ -17,20 +17,16 @@ class BottomTabBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(
+      decoration: const BoxDecoration(
         color: AppColors.surface,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 12,
-            offset: const Offset(0, -2),
-          ),
-        ],
+        border: Border(
+          top: BorderSide(width: 1, color: Color(0xFFEFEFF0)),
+        ),
       ),
       child: SafeArea(
         top: false,
         child: SizedBox(
-          height: 70.h,
+          height: 64.h,
           child: Row(
             children: [
               _Tab(
@@ -86,27 +82,33 @@ class _Tab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = active ? AppColors.primary : AppColors.textSecondary;
+    final color = active ? AppColors.primary : Colors.black.withValues(alpha: 0.60);
     return Expanded(
       child: InkResponse(
         onTap: onTap,
         radius: 36.r,
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            SizedBox(height: 10.h),
-            Image.asset(
-              active ? iconAssetActive : iconAsset,
-              width: 28.r,
-              height: 28.r,
+            SizedBox(
+              width: 56.w,
+              height: 32.h,
+              child: Center(
+                child: Image.asset(
+                  active ? iconAssetActive : iconAsset,
+                  width: 24.r,
+                  height: 24.r,
+                ),
+              ),
             ),
-            SizedBox(height: 7.h),
+            SizedBox(height: 2.h),
             Text(
               label,
+              textAlign: TextAlign.center,
               style: AppText.tab(color: color, weight: FontWeight.w500)
                   .copyWith(height: 1.45, letterSpacing: -0.40),
             ),
-            SizedBox(height: 10.h),
           ],
         ),
       ),

@@ -13,6 +13,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
+import '../../data/mock/app_state.dart';
 import '../../data/remote/auth_repository.dart';
 
 /// Форма ввода 4-значного OTP-кода. Длина диктуется SMS Aero Mobile
@@ -273,6 +274,15 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
         return;
       }
       if (!mounted) return;
+      // Существующий юзер логинится снова — регистрация на этом
+      // устройстве считается завершённой. Помечаем онбординг
+      // просмотренным заранее, чтобы дальше он не появлялся даже
+      // при logout. Для нового юзера флаг ставится в конце role-picker
+      // (там завершение регистрации).
+      if (!result.isNewUser) {
+        await ref.read(appControllerProvider.notifier).markOnboardingSeen();
+        if (!mounted) return;
+      }
       context.go(postAuthRoute(ref, isNewUser: result.isNewUser));
     } finally {
       if (mounted) setState(() => _isVerifying = false);
@@ -360,10 +370,13 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
                       LayoutBuilder(
                         builder: (context, constraints) {
                           final gap = 8.w;
-                          // 4 ячейки, шире чем 6 при той же ширине экрана.
-                          // Visual: ~64×64px на Pixel 9, в Figma-стиле SimbA.
+                          // 4 ячейки, делаем СТРОГО квадратные. Когда было
+                          // 6 ячеек, пропорции диктовали свою ширину; для 4-х
+                          // ширина по умолчанию вылазит слишком большой и
+                          // ячейки выглядят растянутыми. Поэтому жёстко
+                          // ограничиваем максимум и приравниваем высоту.
                           final cellW = (constraints.maxWidth - (_codeLength - 1) * gap) / _codeLength;
-                          final cellSize = cellW.clamp(48.0, 72.0);
+                          final cellSize = cellW.clamp(48.0, 56.0);
                           return Center(
                             child: SizedBox(
                               width: cellSize * _codeLength + gap * (_codeLength - 1),
@@ -374,7 +387,7 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
                                 keyboardType: TextInputType.number,
                                 theme: MaterialPinTheme(
                                   shape: MaterialPinShape.outlined,
-                                  cellSize: Size(cellSize, 64.h),
+                                  cellSize: Size(cellSize, cellSize),
                                   spacing: gap,
                                   borderRadius: BorderRadius.circular(12.r),
                                   borderWidth: 1,
@@ -386,7 +399,20 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
                                   fillColor: AppColors.surface,
                                   focusedFillColor: AppColors.surface,
                                   filledFillColor: AppColors.surface,
-                                  textStyle: AppText.h2().copyWith(fontWeight: FontWeight.w400),
+                                  // Figma даёт 28sp для 6-ячеек дизайна.
+                                  // У нас 4 ячейки, ячейка пропорционально
+                                  // шире (~64-72px), поэтому шрифт увеличен
+                                  // до 32sp — иначе цифра выглядит «маленькой»
+                                  // в просторной ячейке. Inter / w400.
+                                  // height не задаём: с 0.79 цифра прижималась
+                                  // к верху ячейки (Flutter применяет height
+                                  // к bounding-box символа, baseline смещается).
+                                  textStyle: TextStyle(
+                                    color: Colors.black,
+                                    fontFamily: 'Inter',
+                                    fontSize: 32.sp,
+                                    fontWeight: FontWeight.w400,
+                                  ),
                                   cursorColor: AppColors.primary,
                                 ),
                                 onChanged: (v) {
@@ -434,9 +460,15 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
                         children: [
                           Text(
                             'Отправить код повторно',
-                            style: AppText.body(
+                            // Figma: 16/Inter/w500/1.38. В неактивном
+                            // состоянии (бежит таймер) — серый, активном —
+                            // primary; геометрия одинаковая в обоих.
+                            style: TextStyle(
                               color: AppColors.textSecondary,
-                              weight: FontWeight.w500,
+                              fontFamily: 'Inter',
+                              fontSize: 16.sp,
+                              fontWeight: FontWeight.w500,
+                              height: 1.38,
                             ),
                           ),
                           SizedBox(width: 16.w),
@@ -460,6 +492,15 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
                             : 'Отправить код повторно',
                         height: 43.h,
                         onPressed: _isResending ? null : _onResend,
+                        // Figma: 16/Inter/w500/1.38/#1369CD — стандартный
+                        // AppText.button (17/w400/1.2) не совпадал.
+                        textStyle: TextStyle(
+                          color: AppColors.primary,
+                          fontFamily: 'Inter',
+                          fontSize: 16.sp,
+                          fontWeight: FontWeight.w500,
+                          height: 1.38,
+                        ),
                       ),
               ),
               SizedBox(height: 16.h),

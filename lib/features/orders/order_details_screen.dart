@@ -12,7 +12,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/date_time_formatters.dart';
+import '../../core/utils/backend_error.dart';
 import '../../core/widgets/app_back_button.dart';
+import '../../core/widgets/app_network_image.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/openfreemap_view.dart';
 import '../../core/widgets/primary_button.dart';
@@ -64,11 +66,17 @@ class OrderDetailsScreen extends ConsumerWidget {
     final asyncOrder = ref.watch(orderByIdProvider(orderId));
     return asyncOrder.when(
       data: (order) {
-        if (order == null) return _NotFoundScreen();
+        if (order == null) {
+          return _NotFoundScreen(
+            onRetry: () => ref.invalidate(orderByIdProvider(orderId)),
+          );
+        }
         return _OrderDetailsBody(orderId: orderId, mode: mode, order: order);
       },
       loading: () => const _LoadingScreen(),
-      error: (_, _) => _LoadFailedScreen(),
+      error: (_, _) => _LoadFailedScreen(
+        onRetry: () => ref.invalidate(orderByIdProvider(orderId)),
+      ),
     );
   }
 }
@@ -107,44 +115,36 @@ class _LoadingScreen extends StatelessWidget {
 }
 
 class _NotFoundScreen extends StatelessWidget {
+  const _NotFoundScreen({this.onRetry});
+  final VoidCallback? onRetry;
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
-      body: Column(
-        children: [
-          Container(
-            color: AppColors.surface,
-            child: SafeArea(
-              bottom: false,
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 8.w, vertical: 4.h),
-                  child: const AppBackButton(),
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: Center(
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 32.w),
-                child: Text(
-                  'Заказ не найден',
-                  textAlign: TextAlign.center,
-                  style: AppText.h3(),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return _ErrorScreenScaffold(
+      message: 'Заказ не найден',
+      onRetry: onRetry,
     );
   }
 }
 
 class _LoadFailedScreen extends StatelessWidget {
+  const _LoadFailedScreen({this.onRetry});
+  final VoidCallback? onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return _ErrorScreenScaffold(
+      message: 'Не удалось загрузить заказ',
+      onRetry: onRetry,
+    );
+  }
+}
+
+class _ErrorScreenScaffold extends StatelessWidget {
+  const _ErrorScreenScaffold({required this.message, this.onRetry});
+  final String message;
+  final VoidCallback? onRetry;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -168,10 +168,19 @@ class _LoadFailedScreen extends StatelessWidget {
             child: Center(
               child: Padding(
                 padding: EdgeInsets.symmetric(horizontal: 32.w),
-                child: Text(
-                  'Не удалось загрузить заказ',
-                  textAlign: TextAlign.center,
-                  style: AppText.h3(),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      message,
+                      textAlign: TextAlign.center,
+                      style: AppText.h3(),
+                    ),
+                    if (onRetry != null) ...[
+                      SizedBox(height: 16.h),
+                      PrimaryButton(label: 'Повторить', onPressed: onRetry!),
+                    ],
+                  ],
                 ),
               ),
             ),
@@ -209,22 +218,46 @@ class _OrderDetailsBody extends ConsumerWidget {
     // В live `order.responses` может быть пуст (маппер не подгружает),
     // поэтому дополнительно проверяем через async-провайдер ниже.
     final hasMyResponseFromOrder = order.responses.contains(myId);
-    final hasMyResponseAsync = ref.watch(
-      _hasMyResponseProvider((orderId: order.id, executorId: myId)),
-    );
-    final hasMyResponse = hasMyResponseAsync.maybeWhen(
-      data: (v) => v,
-      orElse: () => hasMyResponseFromOrder,
-    );
+    // Заказчику этот запрос не нужен — он сам себе откликаться не может.
+    // Также не нужен исполнителю когда заказ уже не `open` (после accept
+    // у других исполнителей кнопка «Откликнуться» всё равно скрыта, а
+    // assigned executor видит другие CTA). Раньше провайдер дёргался
+    // всегда и делал лишний запрос на бэк.
+    final needHasResponseCheck =
+        !isCustomer && order.status == OrderStatus.open;
+    final hasMyResponseAsync = needHasResponseCheck
+        ? ref.watch(
+            _hasMyResponseProvider((orderId: order.id, executorId: myId)),
+          )
+        : null;
+    final hasMyResponse = !needHasResponseCheck
+        ? hasMyResponseFromOrder
+        : (hasMyResponseAsync?.maybeWhen(
+              data: (v) => v,
+              orElse: () => hasMyResponseFromOrder,
+            ) ??
+            hasMyResponseFromOrder);
+    // Пока проверка отклика грузится в первый раз и у нас нет даже
+    // ранее закэшированного значения — мы НЕ знаем, отвечал ли уже
+    // исполнитель. В этот момент нельзя показывать активную кнопку
+    // «Откликнуться», иначе при открытии экрана с уже отправленным
+    // откликом кнопка кратко моргает синей и потом превращается в
+    // серый баннер «Отклик отправлен».
+    final isCheckingMyResponse = needHasResponseCheck &&
+        (hasMyResponseAsync?.isLoading ?? false) &&
+        !(hasMyResponseAsync?.hasValue ?? false);
 
     // City-guard: deep-link мог открыть заказ из чужого города
-    // (push-уведомление, history, шаринг). Исполнителю запрещаем
-    // откликаться — бизнес-правило SimbA: только в своём городе.
-    // Заказчику свой заказ показываем как обычно, даже если он сменил город
-    // после создания (order.cityId зафиксирован в момент создания).
+    // (push-уведомление, history, шаринг). Баннер «Откликаться нельзя»
+    // имеет смысл только когда заказ ещё открыт и пользователь к нему
+    // никак не привязан. В истории исполнителя на собственном заказе
+    // (executorId == myId) баннер был бы ложным — он уже отработал заказ
+    // и «откликаться» там нечего; то же — для accepted/completed/cancelled.
     final selectedCityId =
         ref.watch(appControllerProvider.select((s) => s.selectedCityId));
     final isForeignCity = !isMine &&
+        order.status == OrderStatus.open &&
+        order.executorId != myId &&
         order.cityId != null &&
         selectedCityId != null &&
         order.cityId != selectedCityId;
@@ -241,7 +274,7 @@ class _OrderDetailsBody extends ConsumerWidget {
             (order.scheduledAt ?? order.createdAt).toLocal(),
           )
         : order.scheduledAt != null
-            ? DateFormat('dd.MM.yyyy HH:mm')
+            ? DateFormat('dd.MM.yyyy HH:mm', 'ru_RU')
                 .format(order.scheduledAt!.toLocal())
             : 'Как можно скорее';
     final whenFieldLabel =
@@ -271,14 +304,6 @@ class _OrderDetailsBody extends ConsumerWidget {
             child: ListView(
               padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 8.h),
               children: [
-                if (isForeignCity) ...[
-                  _StatusBanner(
-                    color: AppColors.surfaceVariant,
-                    textColor: AppColors.textSecondary,
-                    label: 'Заказ из другого города. Откликаться нельзя.',
-                  ),
-                  SizedBox(height: 16.h),
-                ],
                 Text(order.title, style: AppText.h2().copyWith(height: 1.20)),
                 SizedBox(height: 16.h),
                 Text(
@@ -314,34 +339,27 @@ class _OrderDetailsBody extends ConsumerWidget {
                         final path = order.photoPaths[i];
                         final isUrl = path.startsWith('http://') ||
                             path.startsWith('https://');
+                        final placeholder = Container(
+                          width: 96.w,
+                          color: AppColors.surfaceVariant,
+                          child: Icon(
+                            IconsaxPlusLinear.image,
+                            color: AppColors.textTertiary,
+                          ),
+                        );
                         return ClipRRect(
                           borderRadius: BorderRadius.circular(12.r),
                           child: isUrl
-                              ? Image.network(
-                                  path,
+                              ? AppNetworkImage(
+                                  url: path,
                                   width: 96.w,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => Container(
-                                    width: 96.w,
-                                    color: AppColors.surfaceVariant,
-                                    child: Icon(
-                                      IconsaxPlusLinear.image,
-                                      color: AppColors.textTertiary,
-                                    ),
-                                  ),
+                                  fallback: placeholder,
                                 )
                               : Image.file(
                                   File(path),
                                   width: 96.w,
                                   fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => Container(
-                                    width: 96.w,
-                                    color: AppColors.surfaceVariant,
-                                    child: Icon(
-                                      IconsaxPlusLinear.image,
-                                      color: AppColors.textTertiary,
-                                    ),
-                                  ),
+                                  errorBuilder: (_, _, _) => placeholder,
                                 ),
                         );
                       },
@@ -383,6 +401,7 @@ class _OrderDetailsBody extends ConsumerWidget {
               hasMyResponse,
               myId,
               isForeignCity,
+              isCheckingMyResponse,
             ),
           ),
         ],
@@ -399,17 +418,25 @@ class _OrderDetailsBody extends ConsumerWidget {
     bool hasMyResponse,
     String myId,
     bool isForeignCity,
+    bool isCheckingMyResponse,
   ) {
     // Источник правды по отзывам — `reviewsByOrderProvider`. В live-режиме
     // `state.reviews` маппером не наполняется, и hasMyReview через локальный
     // стейт остался бы false даже после успешной отправки — кнопка «Оставить
     // отзыв» дублировалась бы, повторный клик ловил бы 4xx от бэка.
-    // Pessimistic-fallback на локальный стейт сохранён внутри провайдера.
+    //
+    // Пока запрос грузится — считаем, что отзыв уже есть. Так кнопка
+    // «Оставить отзыв» не мигнёт на доли секунды при открытии экрана,
+    // если на самом деле юзер уже оставлял отзыв.
     final reviewsAsync = ref.watch(reviewsByOrderProvider(order.id));
-    final reviewsLocal = ref.watch(appControllerProvider).reviews;
-    final hasMyReview = reviewsAsync.maybeWhen(
+    // .select — иначе любая мутация AppState ребилдит _buildActions.
+    final reviewsLocal = ref.watch(
+      appControllerProvider.select((s) => s.reviews),
+    );
+    final hasMyReview = reviewsAsync.when(
       data: (list) => list.any((r) => r.fromUserId == myId),
-      orElse: () => reviewsLocal
+      loading: () => true,
+      error: (_, _) => reviewsLocal
           .any((r) => r.orderId == order.id && r.fromUserId == myId),
     );
     final widgets = <Widget>[];
@@ -419,11 +446,12 @@ class _OrderDetailsBody extends ConsumerWidget {
         await ref.read(ordersRepositoryProvider).markWorkDone(order.id);
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(myExecutorOrdersProvider);
         ref.invalidate(feedOrdersProvider);
         ref.invalidate(orderByIdProvider(order.id));
-      } catch (_) {
+      } catch (e) {
         if (!context.mounted) return;
-        AppToast.show(context, 'Ошибка. Попробуйте позже');
+        AppToast.show(context, humanizeBackendError(e));
       }
     }
 
@@ -432,11 +460,12 @@ class _OrderDetailsBody extends ConsumerWidget {
         await ref.read(ordersRepositoryProvider).confirmWork(order.id);
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(myExecutorOrdersProvider);
         ref.invalidate(feedOrdersProvider);
         ref.invalidate(orderByIdProvider(order.id));
-      } catch (_) {
+      } catch (e) {
         if (!context.mounted) return;
-        AppToast.show(context, 'Ошибка. Попробуйте позже');
+        AppToast.show(context, humanizeBackendError(e));
       }
     }
 
@@ -447,11 +476,12 @@ class _OrderDetailsBody extends ConsumerWidget {
             .confirmPaymentReceived(order.id);
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(myExecutorOrdersProvider);
         ref.invalidate(feedOrdersProvider);
         ref.invalidate(orderByIdProvider(order.id));
-      } catch (_) {
+      } catch (e) {
         if (!context.mounted) return;
-        AppToast.show(context, 'Ошибка. Попробуйте позже');
+        AppToast.show(context, humanizeBackendError(e));
       }
     }
 
@@ -462,12 +492,13 @@ class _OrderDetailsBody extends ConsumerWidget {
             .cancelAsExecutor(order.id);
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(myExecutorOrdersProvider);
         ref.invalidate(feedOrdersProvider);
         ref.invalidate(orderByIdProvider(order.id));
         AppToast.show(context, 'Заказ возвращён в ленту');
-      } catch (_) {
+      } catch (e) {
         if (!context.mounted) return;
-        AppToast.show(context, 'Ошибка. Попробуйте позже');
+        AppToast.show(context, humanizeBackendError(e));
       }
     }
 
@@ -476,15 +507,31 @@ class _OrderDetailsBody extends ConsumerWidget {
         await ref.read(orderResponsesRepositoryProvider).respond(order.id);
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(myExecutorOrdersProvider);
         ref.invalidate(feedOrdersProvider);
         ref.invalidate(orderByIdProvider(order.id));
         ref.invalidate(
           _hasMyResponseProvider((orderId: order.id, executorId: myId)),
         );
-        AppToast.show(context, 'Отклик отправлен');
-      } catch (_) {
+        // Дожидаемся, пока провайдер с проверкой отклика подтянет свежее
+        // значение. Без этого кнопка успевает мигнуть «снова активной»
+        // между концом запроса и моментом, когда родитель получит
+        // hasMyResponse=true и заменит кнопку на серый баннер
+        // «Отклик отправлен». Таймаут — чтобы кнопка не висла навсегда
+        // при потере сети между запросами; следующий ребилд всё равно
+        // подхватит свежие данные, когда они придут.
+        try {
+          await ref.read(
+            _hasMyResponseProvider(
+              (orderId: order.id, executorId: myId),
+            ).future,
+          ).timeout(const Duration(seconds: 4));
+        } catch (_) {/* timeout / network error — не критично */}
         if (!context.mounted) return;
-        AppToast.show(context, 'Ошибка. Попробуйте позже');
+        AppToast.show(context, 'Отклик отправлен');
+      } catch (e) {
+        if (!context.mounted) return;
+        AppToast.show(context, humanizeBackendError(e));
       }
     }
 
@@ -530,8 +577,22 @@ class _OrderDetailsBody extends ConsumerWidget {
       switch (order.status) {
         case OrderStatus.open:
           if (isForeignCity) {
-            // Баннер сверху карточки уже информирует пользователя — кнопку
-            // «Откликнуться» в этом случае не показываем вообще.
+            // Вместо активной кнопки «Откликнуться» — серая надпись в той же
+            // позиции экшен-бара, по высоте как обычная строка-статус
+            // («Заказ принят другим исполнителем» и т.п.).
+            widgets.add(_StatusBanner(
+              color: AppColors.surfaceVariant,
+              textColor: AppColors.textSecondary,
+              label: 'Заказ из другого города',
+            ));
+            break;
+          }
+          if (isCheckingMyResponse) {
+            // Резервируем место кнопки, пока не пришёл ответ «отвечал ли
+            // уже исполнитель»: без этого активная синяя «Откликнуться»
+            // успела бы мигнуть до того, как мы поймём, что отклик уже
+            // отправлен — и поверх рисуется баннер.
+            widgets.add(SizedBox(height: 48.h));
             break;
           }
           if (hasMyResponse) {
@@ -578,6 +639,23 @@ class _OrderDetailsBody extends ConsumerWidget {
                   cancelAsExecutor,
                 ),
               ));
+            } else {
+              // Отказ невозможен в двух случаях:
+              //   1) ASAP-заказ (scheduled_at = null) — время = «сейчас»;
+              //   2) запланированное время уже наступило — окно отмены закрыто.
+              // В обоих случаях исполнитель должен видеть пояснение, иначе
+              // непонятно, почему есть только кнопка «Работа выполнена»
+              // и нет «Отменить».
+              widgets.add(SizedBox(height: 12.h));
+              widgets.add(_StatusBanner(
+                color: AppColors.surfaceVariant,
+                textColor: AppColors.textSecondary,
+                label: sched == null
+                    ? 'Срочный заказ — отказаться нельзя. '
+                        'Если работа сорвалась, свяжитесь с заказчиком.'
+                    : 'Время заказа уже наступило — отказаться нельзя. '
+                        'Если работа сорвалась, свяжитесь с заказчиком.',
+              ));
             }
           } else {
             widgets.add(_StatusBanner(
@@ -617,10 +695,11 @@ class _OrderDetailsBody extends ConsumerWidget {
         await ref.read(ordersRepositoryProvider).cancel(id);
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(myExecutorOrdersProvider);
         ref.invalidate(feedOrdersProvider);
-      } catch (_) {
+      } catch (e) {
         if (!context.mounted) return;
-        AppToast.show(context, 'Ошибка. Попробуйте позже');
+        AppToast.show(context, humanizeBackendError(e));
       }
     }
 
@@ -681,9 +760,14 @@ class _OrderDetailsBody extends ConsumerWidget {
                 label: 'Отменить заказ',
                 background: AppColors.primary,
                 textColor: Colors.white,
-                onTap: () {
+                onTap: () async {
+                  // Сначала закрываем диалог, потом ждём cancel, и только
+                  // после успеха pop'аем экран. Раньше doCancel() шло без
+                  // await и context.pop() вызывался синхронно — если cancel
+                  // упал, тост ошибки летел на уже dispose'нутый экран.
                   Navigator.of(dialogCtx).pop();
-                  doCancel();
+                  await doCancel();
+                  if (!context.mounted) return;
                   context.pop();
                 },
               ),
@@ -768,9 +852,9 @@ class _OrderDetailsBody extends ConsumerWidget {
                 label: 'Отменить выполнение',
                 background: AppColors.primary,
                 textColor: Colors.white,
-                onTap: () {
+                onTap: () async {
                   Navigator.of(dialogCtx).pop();
-                  doCancel();
+                  await doCancel();
                 },
               ),
               SizedBox(height: 8.h),
@@ -1163,31 +1247,22 @@ class _PartyCard extends StatelessWidget {
                   shape: BoxShape.circle,
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: photoPath != null
-                    ? (photoPath.startsWith('http')
-                        ? Image.network(
-                            photoPath,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Icon(
-                              IconsaxPlusLinear.user,
-                              color: AppColors.primary,
-                              size: 32.r,
-                            ),
-                          )
-                        : Image.file(
-                            File(photoPath),
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => Icon(
-                              IconsaxPlusLinear.user,
-                              color: AppColors.primary,
-                              size: 32.r,
-                            ),
-                          ))
-                    : Icon(
-                        IconsaxPlusLinear.user,
-                        color: AppColors.primary,
-                        size: 32.r,
-                      ),
+                child: Builder(builder: (_) {
+                  final fallback = Icon(
+                    IconsaxPlusLinear.user,
+                    color: AppColors.primary,
+                    size: 32.r,
+                  );
+                  if (photoPath == null) return fallback;
+                  if (photoPath.startsWith('http')) {
+                    return AppNetworkImage(url: photoPath, fallback: fallback);
+                  }
+                  return Image.file(
+                    File(photoPath),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => fallback,
+                  );
+                }),
               ),
               SizedBox(width: 16.w),
               Expanded(

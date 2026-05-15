@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:pocketbase/pocketbase.dart';
 
+import '../../core/utils/date_time_formatters.dart' show kPriceMin;
 import '../../core/utils/pb_date.dart';
 import '../mock/app_state.dart';
 import '../models/models.dart';
@@ -430,10 +431,10 @@ class OrdersRepository {
         debugPrint('[orders_repository] feed item ${m['id']} has invalid `created` — skipping');
         return null;
       }
-      // priceRub=0 валидно невозможен (минимум 100 ₽) — это сигнал что
+      // priceRub меньше kPriceMin валидно невозможен — это сигнал что
       // бэк прислал битую запись, лучше не показывать чем «бесплатный заказ».
       final price = (m['price_rub'] as num?)?.toInt() ?? 0;
-      if (price < 100) {
+      if (price < kPriceMin) {
         debugPrint('[orders_repository] feed item ${m['id']} has invalid price_rub=$price — skipping');
         return null;
       }
