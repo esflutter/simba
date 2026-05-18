@@ -6,12 +6,16 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/order_display.dart';
 import '../../core/widgets/app_back_button.dart';
+import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/orders_repository.dart';
 import '../orders/order_card.dart';
+import '../reviews/leave_review_screen.dart' show showLeaveReviewSheet;
+import '../reviews/reviews_providers.dart' show myReviewedOrderIdsProvider;
 
 enum _Tab { posted, executed }
 
@@ -22,8 +26,31 @@ class HistoryScreen extends ConsumerStatefulWidget {
   ConsumerState<HistoryScreen> createState() => _HistoryScreenState();
 }
 
-class _HistoryScreenState extends ConsumerState<HistoryScreen> {
+class _HistoryScreenState extends ConsumerState<HistoryScreen>
+    with WidgetsBindingObserver {
   _Tab _tab = _Tab.posted;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // При возврате из фона — освежаем «Мои заказы»: пока юзер был
+    // свёрнут, заказы могли быть завершены/отменены другой стороной
+    // или авто-кроном.
+    if (state == AppLifecycleState.resumed) {
+      ref.invalidate(myOrdersStreamProvider);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -37,45 +64,45 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
     final mockOrders = ref.watch(
       appControllerProvider.select((s) => s.orders),
     );
-    // Берём «мои заказы» из репозитория (live) с fallback на мок-стейт
-    // только при ОШИБКЕ. На loading возвращаем null → ниже рендерим спиннер
-    // вместо empty-state, чтобы экран не мигал «Здесь будет отображаться…»
-    // до прихода реальных данных (раньше maybeWhen с orElse возвращал
-    // пустой мок-стейт сразу же, и empty-state мигал на доли секунды).
+    // Берём «мои заказы» из репозитория (live) и отдельно отслеживаем
+    // три фазы: loading → спиннер, error → state с кнопкой «попробовать
+    // снова», data → реальный список. Раньше на error мы тихо падали
+    // на пустой мок-стейт, и юзер с реальной историей видел экран
+    // «Здесь будет отображаться…» — невозможно отличить от настоящей
+    // пустоты, никак нельзя повторить запрос.
     final asyncMine = ref.watch(myOrdersStreamProvider);
+    final hasError = asyncMine.hasError;
+    final isLoading = asyncMine.isLoading && !asyncMine.hasValue;
     final myId = myUserId ?? 'me';
 
-    // Размещённые: заказы, которые я создал как заказчик и завершил со
-    // своей стороны (статус awaitingPayment, либо completed).
-    List<Order> mockPosted() => mockMyOrders
-        .where((o) =>
-            o.status == OrderStatus.awaitingPayment ||
-            o.status == OrderStatus.completed)
-        .toList();
+    // По новой схеме (per-side completion, без awaitingPayment как отдельной
+    // ветки) заказ попадает в историю стороны, как только она отметила
+    // свою часть — независимо от того, отметила ли другая. Также сюда
+    // включаем `cancelled` (схема: «Заказ исчезает» / «возвращается в ленту»
+    // — это историческое событие для соответствующей стороны).
+    //
+    // Размещённые: я был заказчиком, и либо я отметил «работа выполнена»
+    // (workConfirmedAt != null), либо заказ отменён.
+    bool isCustomerHistory(Order o) =>
+        (o.customerId == myId || o.customerId == 'me') &&
+        (o.isCompletedByCustomer || o.status == OrderStatus.cancelled);
+    List<Order> mockPosted() =>
+        mockMyOrders.where(isCustomerHistory).toList();
     final List<Order>? posted = asyncMine.when(
-      data: (xs) => xs
-          .where((o) =>
-              (o.customerId == myId || o.customerId == 'me') &&
-              (o.status == OrderStatus.awaitingPayment ||
-                  o.status == OrderStatus.completed))
-          .toList(),
+      data: (xs) => xs.where(isCustomerHistory).toList(),
       loading: () => null,
       error: (_, _) => mockPosted(),
     );
 
-    // Выполненные: заказы, в которых я был исполнителем и они завершены.
-    // Отдельного `myExecutorOrders()` нет — берём из общего `myOrders()`.
-    List<Order> mockExecuted() => mockOrders
-        .where((o) =>
-            (o.executorId == myId || o.executorId == 'me') &&
-            o.status == OrderStatus.completed)
-        .toList();
+    // Выполненные: я был исполнителем, и я отметил «оплата получена»
+    // (paymentReceivedAt != null), либо заказ отменён уже после accept.
+    bool isExecutorHistory(Order o) =>
+        (o.executorId == myId || o.executorId == 'me') &&
+        (o.isCompletedByExecutor || o.status == OrderStatus.cancelled);
+    List<Order> mockExecuted() =>
+        mockOrders.where(isExecutorHistory).toList();
     final List<Order>? executed = asyncMine.when(
-      data: (xs) => xs
-          .where((o) =>
-              (o.executorId == myId || o.executorId == 'me') &&
-              o.status == OrderStatus.completed)
-          .toList(),
+      data: (xs) => xs.where(isExecutorHistory).toList(),
       loading: () => null,
       error: (_, _) => mockExecuted(),
     );
@@ -107,7 +134,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                       child: Text(
                         'История заказов',
                         style: TextStyle(
-                          color: Colors.black,
+                          color: AppColors.textPrimary,
                           fontSize: 17.sp,
                           fontWeight: FontWeight.w600,
                           height: 1.29,
@@ -130,15 +157,19 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
           ),
           // ── Body ──
           Expanded(
-            child: list == null
+            child: isLoading
                 ? const Center(
                     child: CircularProgressIndicator(color: AppColors.primary),
                   )
-                : list.isEmpty
+                : hasError && (list == null || list.isEmpty)
+                ? _HistoryError(
+                    onRetry: () => ref.invalidate(myOrdersStreamProvider),
+                  )
+                : (list == null || list.isEmpty)
                 ? _EmptyHistory(
                     subtitle: _tab == _Tab.posted
-                        ? 'Здесь будет отображаться история заказов, размещённых Вами в качестве заказчика'
-                        : 'Здесь будет отображаться история заказов, выполненных Вами в качестве исполнителя',
+                        ? 'Здесь будет отображаться история заказов, размещённых вами в качестве заказчика'
+                        : 'Здесь будет отображаться история заказов, выполненных вами в качестве исполнителя',
                   )
                 : ListView.builder(
                     padding: EdgeInsets.fromLTRB(
@@ -171,12 +202,9 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen> {
                                 padding: EdgeInsets.only(
                                   bottom: i == g.orders.length - 1 ? 0 : 8.h,
                                 ),
-                                child: OrderCard(
+                                child: _HistoryOrderTile(
                                   order: o,
                                   categoryName: categoryNameOf(o),
-                                  showTime: false,
-                                  onTap: () => context
-                                      .push('/order/${o.id}?mode=mine'),
                                 ),
                               );
                             }),
@@ -231,6 +259,89 @@ class _DateGroup {
   final List<Order> orders;
 }
 
+/// Карточка заказа в истории + (если уместно) CTA «Оставить отзыв» под ней.
+///
+/// CTA рисуем, когда:
+///   - заказ не отменён (для cancelled-заказов отзыв смысла не имеет);
+///   - я ещё не оставлял отзыв по этому заказу
+///     (проверяется через [myReviewedOrderIdsProvider] одним запросом
+///     на весь список истории, а не одним запросом на карточку);
+///   - дедлайн оставления отзыва не истёк — это проверяет уже
+///     `showLeaveReviewSheet` внутри (она открывает шторку «срок истёк»,
+///     если дни прошли).
+///
+/// `showLeaveReviewSheet` принимает `BuildContext` и `orderId`; внутри сам
+/// инвалидирует нужные провайдеры после успешной отправки, в т.ч.
+/// `myReviewedOrderIdsProvider` — кнопка пропадёт без ручного refresh.
+class _HistoryOrderTile extends ConsumerWidget {
+  const _HistoryOrderTile({
+    required this.order,
+    required this.categoryName,
+  });
+
+  final Order order;
+  final String categoryName;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final reviewedAsync = ref.watch(myReviewedOrderIdsProvider);
+    // Пока запрос не пришёл — считаем, что отзыв уже есть (кнопка скрыта).
+    // Так CTA не мигнёт «пустым» состоянием при первом открытии экрана.
+    final hasMyReview = reviewedAsync.maybeWhen(
+      data: (ids) => ids.contains(order.id),
+      orElse: () => true,
+    );
+    final isCancelled = order.status == OrderStatus.cancelled;
+    final showLeaveReview = !isCancelled && !hasMyReview;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        OrderCard(
+          order: order,
+          categoryName: categoryName,
+          showTime: false,
+          onTap: () => context.push('/order/${order.id}?mode=mine'),
+        ),
+        if (showLeaveReview) ...[
+          SizedBox(height: 8.h),
+          Material(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(10.r),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10.r),
+              onTap: () => showLeaveReviewSheet(context, order.id),
+              child: SizedBox(
+                height: 44.h,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      IconsaxPlusLinear.star_1,
+                      size: 18.r,
+                      color: AppColors.primary,
+                    ),
+                    SizedBox(width: 8.w),
+                    Text(
+                      'Оставить отзыв',
+                      style: TextStyle(
+                        color: AppColors.primary,
+                        fontSize: 15.sp,
+                        fontWeight: FontWeight.w600,
+                        height: 1.33,
+                        letterSpacing: -0.23,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _SegmentedTabs extends StatelessWidget {
   const _SegmentedTabs({required this.value, required this.onChanged});
   final _Tab value;
@@ -281,7 +392,7 @@ class _Segment extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         decoration: BoxDecoration(
-          color: active ? Colors.white : Colors.transparent,
+          color: active ? AppColors.surface : Colors.transparent,
           borderRadius: BorderRadius.circular(7.r),
           border: active
               ? Border.all(
@@ -308,7 +419,7 @@ class _Segment extends StatelessWidget {
           child: Text(
             label,
             style: TextStyle(
-              color: active ? AppColors.primary : Colors.black,
+              color: active ? AppColors.primary : AppColors.textPrimary,
               fontSize: 13.sp,
               fontWeight: active ? FontWeight.w600 : FontWeight.w400,
               height: 1.38,
@@ -346,7 +457,7 @@ class _EmptyHistory extends StatelessWidget {
               'Нет заказов',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.black,
+                color: AppColors.textPrimary,
                 fontSize: 20.sp,
                 fontWeight: FontWeight.w600,
                 height: 1.25,
@@ -367,6 +478,45 @@ class _EmptyHistory extends StatelessWidget {
             ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+
+class _HistoryError extends StatelessWidget {
+  const _HistoryError({required this.onRetry});
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 24.w),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(IconsaxPlusLinear.cloud_cross,
+                size: 64.r, color: AppColors.textTertiary),
+            SizedBox(height: 16.h),
+            Text(
+              'Не удалось загрузить историю',
+              textAlign: TextAlign.center,
+              style: AppText.h3(),
+            ),
+            SizedBox(height: 8.h),
+            Text(
+              'Проверьте подключение к интернету и попробуйте снова.',
+              textAlign: TextAlign.center,
+              style: AppText.body(color: AppColors.textSecondary),
+            ),
+            SizedBox(height: 16.h),
+            SizedBox(
+              width: 200.w,
+              child: PrimaryButton(label: 'Попробовать снова', onPressed: onRetry),
+            ),
+          ],
         ),
       ),
     );

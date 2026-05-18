@@ -12,19 +12,41 @@ class Env {
   /// токен DaData в клиенте больше не хранится.
   static const String pocketbaseUrl = String.fromEnvironment('POCKETBASE_URL');
 
-  /// SMS Aero credentials. Сейчас temp в клиенте для dev (тестовый ключ
-  /// бесплатный и не доставляет реальные SMS). В проде — переедет в
-  /// PocketBase, в клиент НЕ попадёт.
-  static const String smsAeroEmail = String.fromEnvironment('SMSAERO_EMAIL');
-  static const String smsAeroApiKey = String.fromEnvironment('SMSAERO_API_KEY');
-  static const String smsAeroSender =
-      String.fromEnvironment('SMSAERO_SENDER', defaultValue: 'SMS Aero');
+  // SMS Aero credentials исключены из клиента полностью: отправка SMS
+  // идёт через PocketBase-эндпоинт `/api/auth/sms/send`, ключи только
+  // на сервере. Раньше тут были `smsAeroEmail`/`smsAeroApiKey`/`Sender`
+  // как `--dart-define` поля; если их кто-то передал бы при сборке
+  // prod-APK, они становились бы `const String` и тривиально
+  // извлекались из .apk через `strings`. Поля удалены, чтобы исключить
+  // даже теоретическую возможность утечки.
 
   /// dev / staging / production
   static const String appEnv = String.fromEnvironment('APP_ENV', defaultValue: 'dev');
 
   static bool get isDev => appEnv == 'dev';
   static bool get hasPocketbase => pocketbaseUrl.isNotEmpty;
-  static bool get hasSmsAero =>
-      smsAeroEmail.isNotEmpty && smsAeroApiKey.isNotEmpty;
+
+  /// Контакты администратора для шторки «Связаться с нами» в профиле.
+  /// Передаются через `--dart-define=SUPPORT_*`. До прихода реальных
+  /// контактов держим placeholder-значения: кнопки всегда активны,
+  /// открывают соответствующий мессенджер с подставленным номером /
+  /// логином. Юзер увидит, что чат пустой — это нормально для preview.
+  ///
+  /// TODO(setup): подменить на реальные значения через `run_prod.bat`
+  /// и CI-конфиг сборки, чтобы перекрыть defaultValue ниже:
+  ///   --dart-define=SUPPORT_WHATSAPP_PHONE=+7XXX...
+  ///   --dart-define=SUPPORT_TELEGRAM_USERNAME=...
+  ///   --dart-define=SUPPORT_MAX_PHONE=+7XXX...
+  static const String supportWhatsAppPhone = String.fromEnvironment(
+    'SUPPORT_WHATSAPP_PHONE',
+    defaultValue: '+79991234567',
+  );
+  static const String supportTelegramUsername = String.fromEnvironment(
+    'SUPPORT_TELEGRAM_USERNAME',
+    defaultValue: 'SimbAsupport',
+  );
+  static const String supportMaxPhone = String.fromEnvironment(
+    'SUPPORT_MAX_PHONE',
+    defaultValue: '+79991234567',
+  );
 }

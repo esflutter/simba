@@ -39,6 +39,35 @@ class ReviewsRepository {
     return records.map(_fromRecord).toList();
   }
 
+  /// Отзывы, оставленные текущим пользователем (where `from_user = me`).
+  /// Нужно для экрана истории, чтобы под карточкой завершённого заказа
+  /// показать CTA «Оставить отзыв» только если он ещё не оставлен.
+  ///
+  /// На моке возвращает локальный `state.reviews` фильтрованный по `fromUserId`.
+  /// На live делает запрос в PB; на любой ошибке возвращает пустой список,
+  /// чтобы экран истории не падал в error-стейт из-за побочного провайдера.
+  Future<List<Review>> mineFromMe() async {
+    if (!_isLive) {
+      final myId = _ref.read(appControllerProvider).user?.id ?? 'me';
+      return _ref
+          .read(appControllerProvider)
+          .reviews
+          .where((r) => r.fromUserId == myId || r.fromUserId == 'me')
+          .toList();
+    }
+    final pb = _pb!;
+    final me = pb.authStore.record;
+    if (me == null) return const [];
+    final records = await withPbAuthRetry(_ref, () => pb
+        .collection('reviews')
+        .getFullList(
+          filter: pb.filter('from_user = {:uid}', {'uid': me.id}),
+          sort: '-created',
+        )
+        .timeout(const Duration(seconds: 15)));
+    return records.map(_fromRecord).toList();
+  }
+
   /// Все отзывы по конкретному заказу. Нужно, чтобы определить, оставил ли
   /// текущий пользователь свой отзыв — без этого live-кнопка «Оставить
   /// отзыв» дублировалась бы после успешной отправки (state.reviews в live

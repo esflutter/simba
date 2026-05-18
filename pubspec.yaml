@@ -43,6 +43,12 @@ dependencies:
   shared_preferences: ^2.5.5
   url_launcher: ^6.3.1
   http: ^1.2.2
+  # Прямая зависимость нужна, чтобы явно указывать MediaType для аватаров
+  # в multipart-запросах (PocketBase валидирует mime по контенту, без
+  # правильного content-type шлёт «invalid mime type»). Транзитивно
+  # подтягивается через http, но Dart-анализатор требует явного
+  # объявления, как и vector_tile_renderer выше.
+  http_parser: ^4.0.2
   geolocator: ^13.0.2
   pocketbase: ^0.22.0
   # Дисковый/memory кэш для удалённых картинок (аватары авторов отзывов,

@@ -27,9 +27,6 @@ const Map<String, String> _tagSlugByRu = {
   'Дружелюбный': 'friendly',
 };
 
-/// Срок оставления отзыва (дней с момента создания/завершения заказа).
-const int kReviewDeadlineDays = 30;
-
 /// Открывает шторку «Оставить отзыв» снизу экрана.
 Future<void> showLeaveReviewSheet(BuildContext context, String orderId) {
   return showModalBottomSheet<void>(
@@ -41,9 +38,10 @@ Future<void> showLeaveReviewSheet(BuildContext context, String orderId) {
   );
 }
 
-/// Гейт: подгружает заказ через `orderByIdProvider`, валидирует
-/// (заказ существует, отзыв ещё в окне 30 дней) и решает, какой
-/// контент показать в шторке.
+/// Гейт: подгружает заказ и показывает форму. Срока на отзыв нет —
+/// для MVP позволяем оставить отзыв в любой момент после завершения
+/// заказа. Если потом понадобится ограничение, оно ляжет сюда же —
+/// сравнение completedAt с порогом и переход на _DeadlineExpiredView.
 class _LeaveReviewGate extends ConsumerWidget {
   const _LeaveReviewGate({required this.orderId});
   final String orderId;
@@ -54,22 +52,6 @@ class _LeaveReviewGate extends ConsumerWidget {
     return asyncOrder.when(
       data: (order) {
         if (order == null) return const _NotFoundView();
-        // Источник правды — order.completedAt (заполнен бэком при переходе
-        // в status=completed, см. `onRecordUpdate("orders")`). Если бэк не
-        // вернул эту дату (старые записи, моки) — fallback на best-effort
-        // лестницу: payment_received_at → scheduledAt → createdAt.
-        // toLocal(): для согласованности с UI-форматированием — даты в
-        // БД хранятся в UTC, сравниваем по локальному времени.
-        final completedAt = (order.completedAt ??
-                order.paymentReceivedAt ??
-                order.workDoneAt ??
-                order.scheduledAt ??
-                order.createdAt)
-            .toLocal();
-        final daysPassed = DateTime.now().difference(completedAt).inDays;
-        if (daysPassed > kReviewDeadlineDays) {
-          return const _DeadlineExpiredView();
-        }
         return _LeaveReviewSheet(order: order);
       },
       loading: () => const _LoadingView(),
@@ -170,44 +152,6 @@ class _NotFoundView extends StatelessWidget {
   }
 }
 
-class _DeadlineExpiredView extends StatelessWidget {
-  const _DeadlineExpiredView();
-
-  @override
-  Widget build(BuildContext context) {
-    return _SheetShell(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(height: 8.h),
-          Text(
-            'Срок оставления отзыва истёк',
-            textAlign: TextAlign.center,
-            style: AppText.h3(),
-          ),
-          SizedBox(height: 8.h),
-          Text(
-            'Отзыв можно оставить в течение $kReviewDeadlineDays дней '
-            'после завершения заказа.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: Colors.black.withValues(alpha: 0.60),
-              fontSize: 15.sp,
-              fontWeight: FontWeight.w400,
-              height: 1.33,
-            ),
-          ),
-          SizedBox(height: 16.h),
-          PrimaryButton(
-            label: 'Закрыть',
-            onPressed: () => Navigator.of(context).pop(),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _LeaveReviewSheet extends ConsumerStatefulWidget {
   const _LeaveReviewSheet({required this.order});
   final Order order;
@@ -292,10 +236,11 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
       }
       // Инвалидируем связанные провайдеры — отзыв должен сразу
       // появиться на профиле получателя, а у себя в «деталях заказа»
-      // спрятать кнопку «Оставить отзыв».
+      // и в карточке истории спрятать кнопку «Оставить отзыв».
       ref.invalidate(reviewsForUserProvider(recipientId));
       ref.invalidate(reviewsByOrderProvider(order.id));
       ref.invalidate(orderByIdProvider(order.id));
+      ref.invalidate(myReviewedOrderIdsProvider);
     } catch (_) {
       if (!mounted) return;
       AppToast.show(context, 'Не удалось отправить отзыв');
@@ -332,7 +277,7 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
                 'Спасибо за оценку!',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.black,
+                  color: AppColors.textPrimary,
                   fontSize: 20.sp,
                   fontWeight: FontWeight.w600,
                   height: 1.40,
@@ -363,12 +308,16 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
                     },
                     child: SizedBox(
                       width: double.infinity,
-                      height: 36.h,
+                      // 48dp — стандартный минимум touch-target.
+                      height: 48.h,
                       child: Center(
                         child: Text(
                           'Ок',
+                          // Белый поверх AppColors.primary. Раньше тут
+                          // стоял #F5F5F5 (фоновый серый), и текст почти
+                          // сливался с синей кнопкой.
                           style: TextStyle(
-                            color: const Color(0xFFF5F5F5),
+                            color: AppColors.surface,
                             fontSize: 17.sp,
                             fontWeight: FontWeight.w600,
                             height: 1.29,
@@ -414,7 +363,7 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
                     Text(
                       'Как вам заказ?',
                       style: TextStyle(
-                        color: Colors.black,
+                        color: AppColors.textPrimary,
                         fontSize: 17.sp,
                         fontWeight: FontWeight.w600,
                         height: 1.29,
@@ -517,7 +466,7 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
                         child: Text(
                           t,
                           style: AppText.bodySmall(
-                            color: selected ? Colors.white : AppColors.textPrimary,
+                            color: selected ? AppColors.surface : AppColors.textPrimary,
                             weight: FontWeight.w500,
                           ),
                         ),

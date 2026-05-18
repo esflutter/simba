@@ -17,6 +17,8 @@ class AppNetworkImage extends StatelessWidget {
     this.fallback,
     this.width,
     this.height,
+    this.memCacheWidth,
+    this.memCacheHeight,
   });
 
   final String url;
@@ -25,14 +27,35 @@ class AppNetworkImage extends StatelessWidget {
   final double? width;
   final double? height;
 
+  /// Целевые габариты декодированного bitmap (px, не lp). Если не переданы,
+  /// высчитываются из `width/height × devicePixelRatio` (capped до 512px) —
+  /// крупный JPEG аватара (1024×1024) больше НЕ декодируется в полное
+  /// разрешение под виджет 32×32lp. Раньше профильный экран с 20+ отзывами
+  /// держал в RAM ~80МБ декодированных аватарок; теперь — порядка единиц МБ.
+  final int? memCacheWidth;
+  final int? memCacheHeight;
+
   @override
   Widget build(BuildContext context) {
     final placeholder = fallback ?? const SizedBox.shrink();
+    final dpr = MediaQuery.maybeOf(context)?.devicePixelRatio ?? 1.0;
+    int? capDim(double? lp, int? explicit) {
+      if (explicit != null) return explicit;
+      if (lp == null) return null;
+      final px = (lp * dpr).round();
+      // 512px-cap: даже на 3×-устройствах 170lp = 510px, чего хватает для
+      // любого «декоративного» аватара/тамбнейла. Выше — пусть декодит
+      // нативное разрешение (например full-screen фото в order_details).
+      if (px <= 0) return 1;
+      return px > 512 ? 512 : px;
+    }
     return CachedNetworkImage(
       imageUrl: url,
       fit: fit,
       width: width,
       height: height,
+      memCacheWidth: capDim(width, memCacheWidth),
+      memCacheHeight: capDim(height, memCacheHeight),
       placeholder: (_, _) => placeholder,
       errorWidget: (_, _, _) => placeholder,
     );

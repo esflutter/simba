@@ -231,6 +231,7 @@ class Order {
     this.workConfirmedAt,
     this.paymentReceivedAt,
     this.cityId,
+    this.relistedAt,
   });
 
   final String id;
@@ -277,6 +278,15 @@ class Order {
   /// `selectedCityId`, но старые заказы остаются в своём городе.
   final String? cityId;
 
+  /// Момент возврата заказа в ленту после отказа исполнителя
+  /// (`accepted → open`). Серверный хук ставит сюда `now` при таком
+  /// переходе; миграция 028 добавила это поле. Используется как точка
+  /// отсчёта для 30-дневной авто-чистки: иначе заказ, принятый на
+  /// 29-й день и отвергнутый на 30-й, удалялся бы буквально на
+  /// следующий день. На моках всегда null (мок-флоу не пересоздаёт
+  /// эту метку), для свежесозданных заказов — тоже null.
+  final DateTime? relistedAt;
+
   /// Sentinel-паттерн для nullable-полей (см. [AppUser.copyWith]):
   /// явный `null` действительно очищает поле, а не игнорируется
   /// (как было бы при `?? this.field`). Нужно, например, чтобы при
@@ -292,6 +302,7 @@ class Order {
     Object? workConfirmedAt = _sentinel,
     Object? paymentReceivedAt = _sentinel,
     Object? cityId = _sentinel,
+    Object? relistedAt = _sentinel,
   }) =>
       Order(
         id: id,
@@ -335,6 +346,9 @@ class Order {
         cityId: identical(cityId, _sentinel)
             ? this.cityId
             : cityId as String?,
+        relistedAt: identical(relistedAt, _sentinel)
+            ? this.relistedAt
+            : relistedAt as DateTime?,
       );
 }
 
@@ -393,6 +407,12 @@ String reviewTagLabel(String slug) => kReviewTagRu[slug] ?? slug;
 extension OrderLifecycle on Order {
   /// Заказ относится к истории: завершён, отменён, либо запланированная
   /// дата начала уже прошла (наступило указанное время и позже).
+  ///
+  /// NB: для целей UI «у меня в истории» используются per-side флаги
+  /// [isCompletedByCustomer] / [isCompletedByExecutor] — после переезда
+  /// FSM на схему «два независимых флоу»: заказ попадает в историю
+  /// стороны, как только ОНА отметила свою часть, независимо от того,
+  /// отметила ли другая сторона.
   bool get isHistorical {
     if (status == OrderStatus.completed || status == OrderStatus.cancelled) {
       return true;
@@ -412,5 +432,89 @@ extension OrderLifecycle on Order {
     if (status != OrderStatus.open) return false;
     final s = scheduledAt;
     return s != null && s.isBefore(DateTime.now());
+  }
+
+  /// Заказ висит без исполнителя «слишком долго» — на сервере его
+  /// удаляет ночная задача `delete-stale-open-orders` (см.
+  /// `backend/pb_hooks/main.pb.js`, миграция 026). Срок настраивается
+  /// в коллекции `settings` (`order.delete_stale_days`, дефолт 30 дней).
+  /// Если заказ возвращался в ленту после отказа исполнителя, отсчёт
+  /// идёт от `relisted_at` (миграция 028), иначе — от `created`.
+  ///
+  /// Клиент держит эту проверку как «защитную сетку»: если устройство
+  /// давно не открывали и в кэше остались протухшие заказы, мы их
+  /// прячем из лент локально. Сервер — источник правды.
+  ///
+  /// Константа 60 — намеренно с запасом относительно серверного дефолта
+  /// 30: если админ поменяет серверный TTL на 45 или 60, клиент не
+  /// начнёт преждевременно прятать ещё живые заказы. Если на сервере
+  /// поставят >60 — клиент будет скрывать раньше; это известный лимит
+  /// MVP, для полной синхронизации нужен публичный эндпоинт настроек.
+  bool get isStaleOpenWithoutExecutor {
+    if (status != OrderStatus.open) return false;
+    if (executorId != null) return false;
+    // Берём максимум из createdAt и relistedAt — для заказов, которые
+    // возвращались в ленту после отказа исполнителя, точка отсчёта —
+    // момент возврата, иначе — момент публикации.
+    final baseline = relistedAt ?? createdAt;
+    final age = DateTime.now().difference(baseline);
+    return age.inDays >= 60;
+  }
+
+  /// Наступило ли время начала работы. Для ASAP и заказов без даты —
+  /// всегда `true` (по схеме ТЗ «время заказа наступило ИЛИ заказ без даты»).
+  /// Используется как gate в UI: до наступления — доступна отмена,
+  /// после — кнопки выполнения.
+  bool get isTimeArrived {
+    final s = scheduledAt;
+    if (s == null || asap) return true;
+    return !s.toLocal().isAfter(DateTime.now());
+  }
+
+  /// Заказчик уже отметил «работа выполнена» по этому заказу.
+  /// Источник истины — серверная метка [workConfirmedAt]. На моках
+  /// зеркалится туда же.
+  bool get isCompletedByCustomer => workConfirmedAt != null;
+
+  /// Исполнитель уже отметил «оплата получена».
+  bool get isCompletedByExecutor => paymentReceivedAt != null;
+
+  /// Глобально-завершённый заказ: обе стороны отметили свою часть.
+  /// На бэке этому соответствует статус `completed`. Клиент может
+  /// принимать решение и без статуса — по двум флагам.
+  bool get isFullyCompleted =>
+      isCompletedByCustomer && isCompletedByExecutor;
+
+  /// Может ли заказчик ещё отменить заказ. По схеме ТЗ:
+  /// - в статусе `open` — всегда (исполнитель ещё не выбран);
+  /// - в статусе `accepted` — пока время не наступило и НИ ОДНА из трёх
+  ///   FSM-меток не выставлена. Сервер проверяет ровно эти три поля
+  ///   (см. миграция 027 и хук `onRecordDelete("orders")` в
+  ///   main.pb.js); клиентская проверка должна совпадать, иначе UI
+  ///   разрешит тап «Отменить», а сервер вернёт ошибку.
+  bool canCancelByCustomer() {
+    if (status == OrderStatus.open) return true;
+    if (status != OrderStatus.accepted) return false;
+    if (workDoneAt != null ||
+        workConfirmedAt != null ||
+        paymentReceivedAt != null) {
+      return false;
+    }
+    return !isTimeArrived;
+  }
+
+  /// Может ли исполнитель отменить заказ. По схеме ТЗ доступно
+  /// только в статусе `accepted` до наступления времени и до того,
+  /// как кто-то отметил свою часть. Условие на FSM-метки симметрично
+  /// `canCancelByCustomer` — серверная сторона тоже не пустит, если
+  /// исполнитель пробует отказаться после своей отметки work_done.
+  bool canCancelByExecutor() {
+    if (status != OrderStatus.accepted) return false;
+    if (workDoneAt != null ||
+        workConfirmedAt != null ||
+        paymentReceivedAt != null) {
+      return false;
+    }
+    return !isTimeArrived;
   }
 }

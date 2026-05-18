@@ -248,6 +248,14 @@ class OrdersRepository {
       return draft;
     }
     final pb = _pb!;
+    // authStore.record может быть null даже при isValid токене (после refresh
+    // без user-data, после авто-logout по 401). Без явной проверки
+    // `record!.id` ниже даёт TypeError — лучше отвалиться раньше с
+    // понятной диагностикой, чем тащить запрос с битым customer-id.
+    final me = pb.authStore.record;
+    if (me == null) {
+      throw StateError('Cannot create order: PB authStore.record is null');
+    }
     String? normalizedPhone;
     if (draft.forOtherPhone != null && draft.forOtherPhone!.isNotEmpty) {
       final digits = draft.forOtherPhone!.replaceAll(RegExp(r'\D'), '');
@@ -257,7 +265,7 @@ class OrdersRepository {
       if (d.length == 11 && d[0] == '7') normalizedPhone = '+$d';
     }
     final body = <String, dynamic>{
-      'customer': pb.authStore.record!.id,
+      'customer': me.id,
       'category': draft.categoryId,
       'city': _ref.read(appControllerProvider).selectedCity.id,
       'title': draft.title,
@@ -273,16 +281,20 @@ class OrdersRepository {
         'scheduled_at': draft.scheduledAt!.toUtc().toIso8601String(),
       'for_other_phone': ?normalizedPhone,
     };
-    // Асинхронное чтение байтов, чтобы не блокировать UI-isolate на
-    // больших фото. fromBytes требует уже готовый буфер — поэтому
-    // последовательный await readAsBytes (а не fromPath/Stream — там
-    // нужны Length-заголовки на сервере).
+    // Стримим файлы с диска. До этого был `readAsBytes()` + fromBytes —
+    // он загружал все фото в heap одновременно: 3 × 8 МБ = 24 МБ RAM,
+    // OOM на дешёвых Android (1–2 ГБ). MultipartFile.fromPath сам
+    // открывает файл и читает его кусочками во время отправки, не
+    // загружая целиком в память. Размер указываем явно — http package
+    // ставит правильный Content-Length вместо chunked transfer.
     final List<http.MultipartFile> files = [];
     for (final f in photoFiles ?? const <File>[]) {
-      final bytes = await f.readAsBytes();
-      files.add(http.MultipartFile.fromBytes(
+      if (!f.existsSync()) continue;
+      final length = await f.length();
+      files.add(http.MultipartFile(
         'photos',
-        bytes,
+        f.openRead(),
+        length,
         filename: f.path.split(Platform.pathSeparator).last,
       ));
     }
@@ -302,21 +314,36 @@ class OrdersRepository {
     return created;
   }
 
-  /// Отмена заказа заказчиком = полное удаление записи. Доступно ТОЛЬКО
-  /// в статусе open (до принятия отклика). После того как заказчик принял
-  /// исполнителя, удалять заказ нельзя ни вручную, ни автоматически —
-  /// иначе исполнитель потеряет потраченное время и репутационный след.
+  /// Отмена заказа заказчиком = полное удаление записи.
   ///
-  /// Бэк-правило `deleteRule = "customer = @request.auth.id && status = 'open'"`
-  /// (миграция 018) обеспечивает то же на сервере. Любая ошибка (403/404/сеть)
-  /// пробрасывается наверх, чтобы UI показал тост.
+  /// По ТЗ-схеме «Заказчик может отказаться → Заказ исчезает» — без
+  /// различия между `open` (до accept) и `accepted` (после accept,
+  /// пока время не наступило и стороны ещё не отметились).
+  /// Клиентский UI скрывает кнопку «Отменить заказ» вне этого окна
+  /// (см. `Order.canCancelByCustomer()`).
+  ///
+  /// Бэк-правило согласовано с этим окном: миграция 027 расширила
+  /// `orders.deleteRule` и `onRecordDelete`-хук в pb_hooks/main.pb.js
+  /// так, что DELETE проходит и для `accepted`-заказа, пока:
+  ///   - ни одна из 3 FSM-дат не выставлена;
+  ///   - время заказа ещё не наступило (или ASAP без даты).
+  /// На моках то же самое реализовано в `AppController.cancelOrder`.
   Future<void> cancel(String orderId) async {
     if (!_isLive) {
       _ref.read(appControllerProvider.notifier).cancelOrder(orderId);
       return;
     }
-    await _withAuthRetry(() =>
-        _pb!.collection('orders').delete(orderId).timeout(_pbTimeout));
+    try {
+      await _withAuthRetry(() =>
+          _pb!.collection('orders').delete(orderId).timeout(_pbTimeout));
+    } on ClientException catch (e) {
+      // 404 = заказ уже удалён (фоновой задачей 30-дневной чистки, либо
+      // параллельным запросом с другого устройства). Для пользователя это
+      // успех: цель «убрать заказ» уже достигнута. Прокидывать ошибку
+      // наверх не нужно — UI покажет «не удалось», хотя по факту всё ок.
+      if (e.statusCode == 404) return;
+      rethrow;
+    }
   }
 
   /// Исполнитель отказывается от принятого заказа — заказ возвращается
@@ -334,49 +361,84 @@ class OrdersRepository {
           .releaseOrderAsExecutor(orderId);
       return;
     }
-    await _withAuthRetry(() => _pb!.collection('orders').update(orderId, body: {
-      'status': 'open',
-    }).timeout(_pbTimeout));
+    try {
+      await _withAuthRetry(() => _pb!
+          .collection('orders')
+          .update(orderId, body: {'status': 'open'})
+          .timeout(_pbTimeout));
+    } on ClientException catch (e) {
+      // 404 — заказ удалён (заказчик отменил параллельно или сработала
+      // 30-дневная чистка). Для исполнителя «отказаться» уже состоялось.
+      if (e.statusCode == 404) return;
+      rethrow;
+    }
   }
 
-  /// Исполнитель отмечает «работа выполнена».
-  Future<void> markWorkDone(String orderId) async {
+  /// Заказчик отмечает «работа выполнена».
+  ///
+  /// В новой схеме (без `awaitingPayment`) заказчик и исполнитель работают
+  /// в двух независимых флоу: каждый отмечает свою часть и оставляет отзыв.
+  /// Раньше клиент пытался ОПТИМИСТИЧНО проставить и
+  /// `work_done_by_executor_at` для того, чтобы серверный hook сразу мог
+  /// сложить три даты и перевести в completed. Но это поле принадлежит
+  /// исполнителю — сервер отдаёт 400 «only_executor_can_mark_work_done»
+  /// (см. main.pb.js строка ~1099). Заказчик ставит только свою дату;
+  /// финальное «оба отметились» докрутит исполнитель, либо крон
+  /// auto-confirm-completed через 48 часов.
+  Future<void> confirmWork(Order order) async {
     if (!_isLive) {
       _ref
           .read(appControllerProvider.notifier)
-          .markWorkDone(orderId, inMyOrders: false);
+          .markCustomerCompleted(order.id);
       return;
     }
-    await _withAuthRetry(() => _pb!.collection('orders').update(orderId, body: {
-      'work_done_by_executor_at': DateTime.now().toUtc().toIso8601String(),
-    }).timeout(_pbTimeout));
+    final now = DateTime.now().toUtc().toIso8601String();
+    final body = <String, dynamic>{
+      'work_confirmed_by_customer_at': now,
+    };
+    try {
+      await _withAuthRetry(() => _pb!
+          .collection('orders')
+          .update(order.id, body: body)
+          .timeout(_pbTimeout));
+    } on ClientException catch (e) {
+      // 404 — заказ удалён (отменили параллельно, или 30-дневная чистка).
+      if (e.statusCode == 404) return;
+      rethrow;
+    }
   }
 
-  /// Заказчик подтверждает работу (= передал наличные).
-  Future<void> confirmWork(String orderId) async {
+  /// Исполнитель отмечает «оплата получена».
+  ///
+  /// Исполнителю разрешено ставить и `work_done_by_executor_at`, и
+  /// `payment_received_at`. Если первое ещё не выставлено (бывает, если
+  /// executor пропустил отдельную отметку «работа выполнена» и сразу
+  /// тапает «оплата получена») — заполняем оба, чтобы серверный hook
+  /// корректно сложил три даты и перевёл заказ в `completed`.
+  Future<void> confirmPaymentReceived(Order order) async {
     if (!_isLive) {
       _ref
           .read(appControllerProvider.notifier)
-          .confirmPayment(orderId, inMyOrders: true);
+          .markExecutorCompleted(order.id);
       return;
     }
-    await _withAuthRetry(() => _pb!.collection('orders').update(orderId, body: {
-      'work_confirmed_by_customer_at':
-          DateTime.now().toUtc().toIso8601String(),
-    }).timeout(_pbTimeout));
-  }
-
-  /// Исполнитель подтверждает получение оплаты — финальный шаг.
-  Future<void> confirmPaymentReceived(String orderId) async {
-    if (!_isLive) {
-      _ref
-          .read(appControllerProvider.notifier)
-          .confirmPayment(orderId, inMyOrders: false);
-      return;
+    final now = DateTime.now().toUtc().toIso8601String();
+    final body = <String, dynamic>{
+      'payment_received_at': now,
+      if (order.workDoneAt == null) 'work_done_by_executor_at': now,
+    };
+    try {
+      await _withAuthRetry(() => _pb!
+          .collection('orders')
+          .update(order.id, body: body)
+          .timeout(_pbTimeout));
+    } on ClientException catch (e) {
+      // 404 — заказ удалён (заказчик отменил параллельно, или сработала
+      // 30-дневная чистка). Считаем действие выполненным — отметка
+      // больше не нужна, заказа нет.
+      if (e.statusCode == 404) return;
+      rethrow;
     }
-    await _withAuthRetry(() => _pb!.collection('orders').update(orderId, body: {
-      'payment_received_at': DateTime.now().toUtc().toIso8601String(),
-    }).timeout(_pbTimeout));
   }
 
 
@@ -418,11 +480,26 @@ class OrdersRepository {
       final executorIdRaw = m['executor']?.toString();
       final paymentRaw = m['payment_method']?.toString();
       final cityRaw = m['city']?.toString();
+      // Имя и имя файла фото заказчика — отдаются бэк-эндпоинтом
+      // /api/orders/feed inline. Без них клиент рисовал «Пользователь»
+      // в карточке заказа до первого открытия деталей (там подтягивает
+      // expand=customer). См. соответствующее место в pb_hooks/main.pb.js.
+      final customerNameRaw = m['customer_name']?.toString();
+      final customerPhotoRaw = m['customer_photo']?.toString();
       // Без customer теряется логика «свой/чужой заказ» (см. order_mapper).
       // Пропускаем такую запись — выше она отфильтруется через whereType.
       if (customerIdRaw == null || customerIdRaw.isEmpty) {
         return null;
       }
+      final customerPhotoUrl =
+          (customerPhotoRaw != null && customerPhotoRaw.isNotEmpty)
+              ? pbFileUrl(
+                  pb,
+                  collection: 'users',
+                  recordId: customerIdRaw,
+                  filename: customerPhotoRaw,
+                )
+              : null;
       // Битая `created` → пропускаем запись целиком. Раньше fallback на
       // DateTime.now() выглядел как «только что создан» — сортировка ленты
       // ставила такие заказы наверх, искажая порядок.
@@ -457,6 +534,11 @@ class OrdersRepository {
             : executorIdRaw,
         paymentMethod: PaymentMethodMapping.fromDbValue(paymentRaw),
         photoPaths: photoUrls,
+        customerName:
+            (customerNameRaw != null && customerNameRaw.isNotEmpty)
+                ? customerNameRaw
+                : null,
+        customerPhotoUrl: customerPhotoUrl,
       );
     } catch (e) {
       debugPrint('[orders_repository] failed to parse feed item: $e');

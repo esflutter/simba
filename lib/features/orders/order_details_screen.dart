@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
@@ -347,20 +348,38 @@ class _OrderDetailsBody extends ConsumerWidget {
                             color: AppColors.textTertiary,
                           ),
                         );
-                        return ClipRRect(
-                          borderRadius: BorderRadius.circular(12.r),
-                          child: isUrl
-                              ? AppNetworkImage(
-                                  url: path,
-                                  width: 96.w,
-                                  fallback: placeholder,
-                                )
-                              : Image.file(
-                                  File(path),
-                                  width: 96.w,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => placeholder,
-                                ),
+                        // Превью кликабельны: тап открывает полноэкранную
+                        // галерею с pinch-zoom и свайпом между фото.
+                        return GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => Navigator.of(context).push(
+                            MaterialPageRoute<void>(
+                              fullscreenDialog: true,
+                              builder: (_) => _PhotoGalleryPage(
+                                paths: order.photoPaths,
+                                initialIndex: i,
+                              ),
+                            ),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(12.r),
+                            child: isUrl
+                                ? AppNetworkImage(
+                                    url: path,
+                                    width: 96.w,
+                                    fallback: placeholder,
+                                  )
+                                : Image.file(
+                                    File(path),
+                                    width: 96.w,
+                                    fit: BoxFit.cover,
+                                    // cacheWidth — даунсэмплинг при декодировании,
+                                    // чтобы 4K-фото из камеры не держало в heap
+                                    // мегабайты ради 96px-миниатюры.
+                                    cacheWidth: (192.w).round(),
+                                    errorBuilder: (_, _, _) => placeholder,
+                                  ),
+                          ),
                         );
                       },
                     ),
@@ -441,50 +460,47 @@ class _OrderDetailsBody extends ConsumerWidget {
     );
     final widgets = <Widget>[];
 
-    Future<void> markWorkDone() async {
-      try {
-        await ref.read(ordersRepositoryProvider).markWorkDone(order.id);
-        if (!context.mounted) return;
-        ref.invalidate(myOrdersStreamProvider);
-        ref.invalidate(myExecutorOrdersProvider);
-        ref.invalidate(feedOrdersProvider);
-        ref.invalidate(orderByIdProvider(order.id));
-      } catch (e) {
-        if (!context.mounted) return;
-        AppToast.show(context, humanizeBackendError(e));
-      }
-    }
-
+    // Заказчик отмечает «Отметить работу выполненной».
+    // Передаём весь Order, чтобы репозиторий мог дозаполнить work_done_by_executor_at,
+    // если он ещё пустой — иначе бэк-хук не сможет схлопнуть FSM в `completed`.
     Future<void> confirmWork() async {
       try {
-        await ref.read(ordersRepositoryProvider).confirmWork(order.id);
+        await ref.read(ordersRepositoryProvider).confirmWork(order);
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
         ref.invalidate(myExecutorOrdersProvider);
         ref.invalidate(feedOrdersProvider);
         ref.invalidate(orderByIdProvider(order.id));
+        // Уведомление в стиле приложения: без него юзер не видит, что
+        // действие сработало — карточка просто пропадает из «Мои заказы»
+        // в историю молча. Плашка появляется сверху, через 3 секунды
+        // сама уезжает.
+        AppToast.show(context, 'Заказ завершён');
       } catch (e) {
         if (!context.mounted) return;
         AppToast.show(context, humanizeBackendError(e));
       }
     }
 
+    // Исполнитель отмечает «Отметить оплату полученной».
     Future<void> confirmPaymentReceived() async {
       try {
         await ref
             .read(ordersRepositoryProvider)
-            .confirmPaymentReceived(order.id);
+            .confirmPaymentReceived(order);
         if (!context.mounted) return;
         ref.invalidate(myOrdersStreamProvider);
         ref.invalidate(myExecutorOrdersProvider);
         ref.invalidate(feedOrdersProvider);
         ref.invalidate(orderByIdProvider(order.id));
+        AppToast.show(context, 'Заказ завершён');
       } catch (e) {
         if (!context.mounted) return;
         AppToast.show(context, humanizeBackendError(e));
       }
     }
 
+    // Исполнитель возвращает заказ в ленту.
     Future<void> cancelAsExecutor() async {
       try {
         await ref
@@ -535,156 +551,136 @@ class _OrderDetailsBody extends ConsumerWidget {
       }
     }
 
+    // ── ЗАКАЗЧИК (isMine) ────────────────────────────────────────────────
     if (isMine) {
-      switch (order.status) {
-        case OrderStatus.open:
-          widgets.add(_ResponsesButton(
-            count: order.responses.length,
-            onTap: () => context.push('/order/${order.id}/responses'),
-          ));
-          widgets.add(SizedBox(height: 16.h));
-          widgets.add(_CancelOrderButton(
-            onTap: () => _confirmCancel(context, ref, order.id),
-          ));
-          break;
-        case OrderStatus.accepted:
-          // Пока исполнитель не нажал «Работа выполнена» — заказчику нечего
-          // подтверждать. Раньше кнопка «Подтверждаю работу» показывалась
-          // сразу на accepted, и заказчик мог отправить запрос мимо FSM
-          // (бэк бы вернул 400 «work_confirm_before_work_done», но UX
-          // путался — кнопка есть, а нажать её правильно нельзя).
-          break;
-        case OrderStatus.awaitingPayment:
-          // Исполнитель уже отметил «Работа выполнена» — теперь очередь
-          // заказчика подтвердить выполнение и передать наличные.
-          widgets.add(_AsyncPrimaryButton(
-            label: 'Подтверждаю работу',
-            onPressed: confirmWork,
-          ));
-          break;
-        case OrderStatus.completed:
-          if (!hasMyReview) {
-            widgets.add(PrimaryButton(
-              label: 'Оставить отзыв',
-              onPressed: () => showLeaveReviewSheet(context, order.id),
-            ));
-          }
-          break;
-        case OrderStatus.cancelled:
-          break;
+      if (order.status == OrderStatus.cancelled) {
+        return widgets;
       }
+      if (order.status == OrderStatus.open) {
+        widgets.add(_ResponsesButton(
+          count: order.responses.length,
+          onTap: () => context.push('/order/${order.id}/responses'),
+        ));
+        widgets.add(SizedBox(height: 16.h));
+        widgets.add(_CancelOrderButton(
+          onTap: () => _confirmCancel(context, ref, order.id),
+        ));
+        return widgets;
+      }
+      // status == accepted | awaitingPayment | completed — единый блок
+      // правой части схемы. awaitingPayment в новой схеме отображается
+      // как обычный accepted с уже выставленным workDoneAt у исполнителя.
+      if (order.isCompletedByCustomer) {
+        // Заказчик уже отметил «работа выполнена» → доступен отзыв.
+        if (!hasMyReview) {
+          widgets.add(PrimaryButton(
+            label: 'Оставить отзыв',
+            onPressed: () => showLeaveReviewSheet(context, order.id),
+          ));
+        }
+        return widgets;
+      }
+      // Заказчик ещё не отметил.
+      if (order.isTimeArrived) {
+        // Время наступило (или ASAP) — кнопка отметки. Отмены здесь нет
+        // (по схеме: левая ветка — до времени, правая — после).
+        widgets.add(_AsyncPrimaryButton(
+          label: 'Отметить работу выполненной',
+          onPressed: confirmWork,
+        ));
+      } else {
+        // Время ещё не наступило — доступна только отмена.
+        widgets.add(_CancelOrderButton(
+          onTap: () => _confirmCancel(context, ref, order.id),
+        ));
+      }
+      return widgets;
+    }
+
+    // ── ИСПОЛНИТЕЛЬ / СТОРОННИЙ (не isMine) ─────────────────────────────
+    if (order.status == OrderStatus.cancelled) {
+      return widgets;
+    }
+    if (order.status == OrderStatus.open) {
+      if (isForeignCity) {
+        widgets.add(_StatusBanner(
+          color: AppColors.surfaceVariant,
+          textColor: AppColors.textSecondary,
+          label: 'Заказ из другого города',
+        ));
+        return widgets;
+      }
+      if (isCheckingMyResponse) {
+        // Резервируем место кнопки, пока не пришёл ответ «отвечал ли
+        // уже исполнитель»: без этого активная синяя «Откликнуться»
+        // успела бы мигнуть до того, как мы поймём, что отклик уже
+        // отправлен — и поверх рисуется баннер.
+        widgets.add(SizedBox(height: 48.h));
+        return widgets;
+      }
+      if (hasMyResponse) {
+        widgets.add(_StatusBanner(
+          color: AppColors.primarySoft,
+          textColor: AppColors.primary,
+          label: 'Отклик отправлен',
+        ));
+      } else if (order.isExpiredOpen) {
+        widgets.add(_StatusBanner(
+          color: AppColors.surfaceVariant,
+          textColor: AppColors.textSecondary,
+          label: 'Срок выполнения уже истёк',
+        ));
+      } else if (order.isStaleOpenWithoutExecutor) {
+        // Заказ висел больше 30 дней без выбранного исполнителя — по
+        // продукту он удаляется. Если по какой-то причине исполнитель
+        // всё ещё видит его в деталях (старый кэш, бэк-крон не успел),
+        // объясняем, почему отклик не примут.
+        widgets.add(_StatusBanner(
+          color: AppColors.surfaceVariant,
+          textColor: AppColors.textSecondary,
+          label: 'Заказ устарел и больше не активен',
+        ));
+      } else {
+        widgets.add(_AsyncPrimaryButton(
+          label: 'Откликнуться на заказ',
+          onPressed: respond,
+        ));
+      }
+      return widgets;
+    }
+    // accepted / awaitingPayment / completed для не-владельца.
+    if (order.executorId != myId) {
+      widgets.add(_StatusBanner(
+        color: AppColors.surfaceVariant,
+        textColor: AppColors.textSecondary,
+        label: 'Заказ принят другим исполнителем',
+      ));
+      return widgets;
+    }
+    // Я — принятый исполнитель.
+    if (order.isCompletedByExecutor) {
+      if (!hasMyReview) {
+        widgets.add(PrimaryButton(
+          label: 'Оставить отзыв',
+          onPressed: () => showLeaveReviewSheet(context, order.id),
+        ));
+      }
+      return widgets;
+    }
+    if (order.isTimeArrived) {
+      widgets.add(_AsyncPrimaryButton(
+        label: 'Отметить оплату полученной',
+        onPressed: confirmPaymentReceived,
+      ));
     } else {
-      switch (order.status) {
-        case OrderStatus.open:
-          if (isForeignCity) {
-            // Вместо активной кнопки «Откликнуться» — серая надпись в той же
-            // позиции экшен-бара, по высоте как обычная строка-статус
-            // («Заказ принят другим исполнителем» и т.п.).
-            widgets.add(_StatusBanner(
-              color: AppColors.surfaceVariant,
-              textColor: AppColors.textSecondary,
-              label: 'Заказ из другого города',
-            ));
-            break;
-          }
-          if (isCheckingMyResponse) {
-            // Резервируем место кнопки, пока не пришёл ответ «отвечал ли
-            // уже исполнитель»: без этого активная синяя «Откликнуться»
-            // успела бы мигнуть до того, как мы поймём, что отклик уже
-            // отправлен — и поверх рисуется баннер.
-            widgets.add(SizedBox(height: 48.h));
-            break;
-          }
-          if (hasMyResponse) {
-            widgets.add(_StatusBanner(
-              color: AppColors.primarySoft,
-              textColor: AppColors.primary,
-              label: 'Отклик отправлен',
-            ));
-          } else if (order.isExpiredOpen) {
-            // Cron `expire-open-orders` срабатывает раз в 15 минут — между
-            // тиками заказ с истёкшей `scheduled_at` всё ещё в open. Прячем
-            // кнопку, чтобы исполнитель не упирался в 400 от FSM-валидатора.
-            widgets.add(_StatusBanner(
-              color: AppColors.surfaceVariant,
-              textColor: AppColors.textSecondary,
-              label: 'Срок выполнения уже истёк',
-            ));
-          } else {
-            widgets.add(_AsyncPrimaryButton(
-              label: 'Откликнуться на заказ',
-              onPressed: respond,
-            ));
-          }
-          break;
-        case OrderStatus.accepted:
-          if (order.executorId == myId) {
-            // Исполнитель отмечает «Работа выполнена».
-            widgets.add(_AsyncPrimaryButton(
-              label: 'Работа выполнена',
-              onPressed: markWorkDone,
-            ));
-            // Кнопка отмены принятого заказа — только до наступления
-            // запланированного времени. ASAP-заказы (scheduledAt == null)
-            // отменять нельзя: «время = сейчас», уже наступило. Бэк-FSM
-            // повторно проверяет это же условие.
-            final sched = order.scheduledAt;
-            if (sched != null && sched.isAfter(DateTime.now())) {
-              widgets.add(SizedBox(height: 12.h));
-              widgets.add(_CancelOrderButton(
-                onTap: () => _confirmCancelExecutor(
-                  context,
-                  ref,
-                  order.id,
-                  cancelAsExecutor,
-                ),
-              ));
-            } else {
-              // Отказ невозможен в двух случаях:
-              //   1) ASAP-заказ (scheduled_at = null) — время = «сейчас»;
-              //   2) запланированное время уже наступило — окно отмены закрыто.
-              // В обоих случаях исполнитель должен видеть пояснение, иначе
-              // непонятно, почему есть только кнопка «Работа выполнена»
-              // и нет «Отменить».
-              widgets.add(SizedBox(height: 12.h));
-              widgets.add(_StatusBanner(
-                color: AppColors.surfaceVariant,
-                textColor: AppColors.textSecondary,
-                label: sched == null
-                    ? 'Срочный заказ — отказаться нельзя. '
-                        'Если работа сорвалась, свяжитесь с заказчиком.'
-                    : 'Время заказа уже наступило — отказаться нельзя. '
-                        'Если работа сорвалась, свяжитесь с заказчиком.',
-              ));
-            }
-          } else {
-            widgets.add(_StatusBanner(
-              color: AppColors.surfaceVariant,
-              textColor: AppColors.textSecondary,
-              label: 'Заказ принят другим исполнителем.',
-            ));
-          }
-          break;
-        case OrderStatus.awaitingPayment:
-          if (order.executorId == myId) {
-            // Заказчик подтвердил работу — исполнитель подтверждает получение оплаты.
-            widgets.add(_AsyncPrimaryButton(
-              label: 'Оплата получена',
-              onPressed: confirmPaymentReceived,
-            ));
-          }
-          break;
-        case OrderStatus.completed:
-          if (!hasMyReview) {
-            widgets.add(PrimaryButton(
-              label: 'Оставить отзыв',
-              onPressed: () => showLeaveReviewSheet(context, order.id),
-            ));
-          }
-          break;
-        case OrderStatus.cancelled:
-          break;
-      }
+      widgets.add(_CancelOrderButton(
+        onTap: () => _confirmCancelExecutor(
+          context,
+          ref,
+          order.id,
+          cancelAsExecutor,
+        ),
+      ));
     }
     return widgets;
   }
@@ -713,7 +709,7 @@ class _OrderDetailsBody extends ConsumerWidget {
           width: 313.w,
           padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 16.h),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.surface,
             borderRadius: BorderRadius.circular(24.r),
           ),
           child: Column(
@@ -729,7 +725,7 @@ class _OrderDetailsBody extends ConsumerWidget {
                 child: Center(
                   child: CustomPaint(
                     size: Size(18.r, 18.r),
-                    painter: _XPainter(color: Colors.white, strokeWidth: 3.r),
+                    painter: _XPainter(color: AppColors.surface, strokeWidth: 3.r),
                   ),
                 ),
               ),
@@ -738,7 +734,7 @@ class _OrderDetailsBody extends ConsumerWidget {
                 'Отменить заказ?',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.black,
+                  color: AppColors.textPrimary,
                   fontSize: 20.sp,
                   fontWeight: FontWeight.w600,
                   height: 1.40,
@@ -759,7 +755,7 @@ class _OrderDetailsBody extends ConsumerWidget {
               _DialogActionButton(
                 label: 'Отменить заказ',
                 background: AppColors.primary,
-                textColor: Colors.white,
+                textColor: AppColors.surface,
                 onTap: () async {
                   // Сначала закрываем диалог, потом ждём cancel, и только
                   // после успеха pop'аем экран. Раньше doCancel() шло без
@@ -775,7 +771,7 @@ class _OrderDetailsBody extends ConsumerWidget {
               _DialogActionButton(
                 label: 'Отмена',
                 background: AppColors.surfaceVariant,
-                textColor: Colors.black,
+                textColor: AppColors.textPrimary,
                 onTap: () => Navigator.of(dialogCtx).pop(),
               ),
             ],
@@ -805,7 +801,7 @@ class _OrderDetailsBody extends ConsumerWidget {
           width: 313.w,
           padding: EdgeInsets.symmetric(horizontal: 32.w, vertical: 16.h),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.surface,
             borderRadius: BorderRadius.circular(24.r),
           ),
           child: Column(
@@ -821,7 +817,7 @@ class _OrderDetailsBody extends ConsumerWidget {
                 child: Center(
                   child: CustomPaint(
                     size: Size(18.r, 18.r),
-                    painter: _XPainter(color: Colors.white, strokeWidth: 3.r),
+                    painter: _XPainter(color: AppColors.surface, strokeWidth: 3.r),
                   ),
                 ),
               ),
@@ -830,7 +826,7 @@ class _OrderDetailsBody extends ConsumerWidget {
                 'Отменить выполнение?',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.black,
+                  color: AppColors.textPrimary,
                   fontSize: 20.sp,
                   fontWeight: FontWeight.w600,
                   height: 1.40,
@@ -851,7 +847,7 @@ class _OrderDetailsBody extends ConsumerWidget {
               _DialogActionButton(
                 label: 'Отменить выполнение',
                 background: AppColors.primary,
-                textColor: Colors.white,
+                textColor: AppColors.surface,
                 onTap: () async {
                   Navigator.of(dialogCtx).pop();
                   await doCancel();
@@ -861,7 +857,7 @@ class _OrderDetailsBody extends ConsumerWidget {
               _DialogActionButton(
                 label: 'Не отменять',
                 background: AppColors.surfaceVariant,
-                textColor: Colors.black,
+                textColor: AppColors.textPrimary,
                 onTap: () => Navigator.of(dialogCtx).pop(),
               ),
             ],
@@ -915,7 +911,8 @@ class _DialogActionButton extends StatelessWidget {
         onTap: onTap,
         child: SizedBox(
           width: double.infinity,
-          height: 36.h,
+          // 48dp — стандартный минимум touch-target.
+          height: 48.h,
           child: Center(
             child: Text(
               label,
@@ -993,7 +990,7 @@ class _ResponsesButton extends StatelessWidget {
             children: [
               Text(
                 'Смотреть отклики',
-                style: AppText.bodyLarge(color: Colors.white, weight: FontWeight.w600)
+                style: AppText.bodyLarge(color: AppColors.surface, weight: FontWeight.w600)
                     .copyWith(letterSpacing: -0.40),
               ),
               SizedBox(width: 10.w),
@@ -1003,7 +1000,7 @@ class _ResponsesButton extends StatelessWidget {
                 padding: EdgeInsets.symmetric(horizontal: 6.w),
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(24.r),
                 ),
                 child: Text(
@@ -1058,34 +1055,93 @@ class _AddressBlock extends StatelessWidget {
   final String address;
   final LatLng location;
 
-  Future<void> _openMap() async {
+  Future<void> _openExternalMap() async {
     final lat = location.latitude;
     final lng = location.longitude;
-    // Отдаём координаты системе и она показывает chooser среди установленных
-    // приложений карт (Яндекс.Карты, 2ГИС, Google Maps, Apple Maps и т.п.) —
-    // пользователь сам выбирает, чем строить маршрут. Не навязываем порядок:
-    // у россиян чаще стоит Яндекс/2ГИС, у других — Google Maps, и каждому
-    // удобнее свой.
-    //   - iOS: maps:// откроет Apple Maps; если у юзера ещё стоит Яндекс/2ГИС,
-    //          они тоже зарегистрированы как обработчики и попадут в chooser.
-    //   - Android: geo: показывает все приложения, объявившие <intent-filter>
-    //              на геоданные — это и есть нативный chooser.
-    final encodedAddr = Uri.encodeComponent(address);
-    final uri = Platform.isIOS
-        ? Uri.parse('maps://?daddr=$lat,$lng&q=$encodedAddr')
-        : Uri.parse('geo:$lat,$lng?q=$lat,$lng($encodedAddr)');
+    // Пытаемся передать в карты СРАЗУ маршрут (от текущего положения к
+    // адресу заказа), а не просто точку. Тогда нативное приложение карт
+    // (Яндекс/2ГИС/Google Maps/Apple Maps) открывает экран с готовым
+    // построенным маршрутом, и юзеру остаётся нажать «В путь». До этого
+    // мы открывали просто точку, и человек вручную нажимал «Маршрут».
+    //
+    // Текущие координаты берём через Geolocator, но только если
+    // разрешение уже есть — иначе не дёргаем permission popup ради
+    // фичи маршрута, спокойно открываем точку (как было раньше).
+    double? fromLat;
+    double? fromLng;
     try {
-      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      final perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.always ||
+          perm == LocationPermission.whileInUse) {
+        final pos = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.medium,
+            timeLimit: Duration(seconds: 5),
+          ),
+        );
+        fromLat = pos.latitude;
+        fromLng = pos.longitude;
+      }
+    } catch (_) {/* нет GPS, таймаут — открываем без origin */}
+
+    // Отдаём координаты системе — она показывает chooser среди
+    // установленных приложений карт (Яндекс.Карты, 2ГИС, Google Maps,
+    // Apple Maps), пользователь сам выбирает чем строить. Не навязываем
+    // порядок.
+    //   - iOS: maps://?saddr=...&daddr=... → Apple Maps строит маршрут;
+    //     если стоит Яндекс/2ГИС, они тоже зарегистрированы как
+    //     обработчики этой схемы и попадут в chooser.
+    //   - Android: geo:0,0?q=lat,lng(адрес) — стандарт Android для
+    //     показа точки. Для МАРШРУТА используем Google Maps directions
+    //     URL (https://www.google.com/maps/dir/) — он открывается во всех
+    //     приложениях карт, объявивших intent-filter на этот хост, и
+    //     создаёт chooser. Чистый geo:-маршрут Android не стандартизировал.
+    final encodedAddr = Uri.encodeComponent(address);
+    final hasOrigin = fromLat != null && fromLng != null;
+
+    Uri primary;
+    if (Platform.isIOS) {
+      primary = hasOrigin
+          ? Uri.parse(
+              'maps://?saddr=$fromLat,$fromLng&daddr=$lat,$lng&q=$encodedAddr')
+          : Uri.parse('maps://?daddr=$lat,$lng&q=$encodedAddr');
+    } else {
+      primary = hasOrigin
+          ? Uri.parse(
+              'https://www.google.com/maps/dir/?api=1&origin=$fromLat,$fromLng&destination=$lat,$lng&travelmode=driving')
+          : Uri.parse('geo:$lat,$lng?q=$lat,$lng($encodedAddr)');
+    }
+    try {
+      final ok = await launchUrl(primary, mode: LaunchMode.externalApplication);
       if (ok) return;
     } catch (_) {}
     // Жёсткий fallback на случай, если приложений карт нет вообще —
-    // открываем веб-Яндекс в браузере.
+    // открываем веб-Яндекс с уже построенным маршрутом (если знаем
+    // origin) или просто точкой назначения.
     try {
+      final webUrl = hasOrigin
+          ? 'https://yandex.ru/maps/?rtext=$fromLat,$fromLng~$lat,$lng&rtt=auto'
+          : 'https://yandex.ru/maps/?rtext=~$lat,$lng&rtt=auto';
       await launchUrl(
-        Uri.parse('https://yandex.ru/maps/?rtext=~$lat,$lng&rtt=auto'),
+        Uri.parse(webUrl),
         mode: LaunchMode.externalApplication,
       );
     } catch (_) {}
+  }
+
+  void _openFullscreenMap(BuildContext context) {
+    // Открываем полноэкранную карту через обычный Navigator.push, без
+    // регистрации отдельного route в go_router: эта подстраница нужна
+    // только из карточки заказа, deep-link на неё бессмысленен (без
+    // location/адреса нечего показывать).
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _OrderLocationFullscreenPage(
+          address: address,
+          location: location,
+        ),
+      ),
+    );
   }
 
   @override
@@ -1095,48 +1151,116 @@ class _AddressBlock extends StatelessWidget {
       children: [
         const _FieldLabel('Адрес'),
         SizedBox(height: 12.h),
+        // Карта-превью: позволяем крутить (interactive: true), а по
+        // тапу разворачиваем во весь экран. Жесты pan/zoom не вызывают
+        // onMapTap — он срабатывает только на короткое касание без
+        // перемещения, так что юзер может и подвинуть карту, и нажать
+        // для разворота, без конфликта.
+        // Карта-превью: interactive: false, чтобы flutter_map гарантированно
+        // не съедал тап жестом pan. Поверх карты лежит видимая «развернуть»-
+        // кнопка справа сверху, и весь блок обёрнут в InkWell, который
+        // открывает полноэкранную карту по тапу куда угодно. Раньше карта
+        // была interactive + onMapTap, и тап непредсказуемо терялся в
+        // gesture-detector flutter_map.
         ClipRRect(
           borderRadius: BorderRadius.circular(10.r),
           child: SizedBox(
             width: double.infinity,
             height: 170.h,
-            child: OpenFreeMapView(
-              initialCenter: location,
-              initialZoom: 15,
-              interactive: false,
-              markers: [
-                OpenFreeMapMarker(
-                  id: 'order',
-                  point: location,
-                  color: AppColors.markerRed,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: OpenFreeMapView(
+                      initialCenter: location,
+                      initialZoom: 15,
+                      interactive: false,
+                      markers: [
+                        OpenFreeMapMarker(
+                          id: 'order',
+                          point: location,
+                          color: AppColors.markerRed,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned.fill(
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () => _openFullscreenMap(context),
+                      child: const SizedBox.expand(),
+                    ),
+                  ),
+                ),
+                // Иконка «развернуть» — даёт визуальную подсказку, что
+                // карта кликабельна. Без неё юзер может думать, что
+                // это просто иллюстрация.
+                Positioned(
+                  right: 8.r,
+                  top: 8.r,
+                  child: Container(
+                    width: 32.r,
+                    height: 32.r,
+                    decoration: BoxDecoration(
+                      color: AppColors.surface,
+                      borderRadius: BorderRadius.circular(8.r),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.10),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      IconsaxPlusLinear.maximize_4,
+                      color: AppColors.primary,
+                      size: 18.r,
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
         ),
         SizedBox(height: 12.h),
-        Row(
-          children: [
-            Icon(IconsaxPlusLinear.location, color: AppColors.primary, size: 18.r),
-            SizedBox(width: 6.w),
-            Expanded(
-              child: Text(
-                address,
-                style: TextStyle(
-                  color: AppColors.primary,
-                  fontSize: 13.sp,
-                  fontWeight: FontWeight.w500,
-                  height: 1.60,
+        // Адрес-строка тоже кликабельна — тап открывает ту же
+        // полноэкранную карту. Это страховка для пользователей, которые
+        // тапнут именно по тексту, не по карте.
+        InkWell(
+          onTap: () => _openFullscreenMap(context),
+          borderRadius: BorderRadius.circular(6.r),
+          child: Padding(
+            padding: EdgeInsets.symmetric(vertical: 2.h),
+            child: Row(
+              children: [
+                Icon(IconsaxPlusLinear.location,
+                    color: AppColors.primary, size: 18.r),
+                SizedBox(width: 6.w),
+                Expanded(
+                  child: Text(
+                    address,
+                    style: TextStyle(
+                      color: AppColors.primary,
+                      fontSize: 13.sp,
+                      fontWeight: FontWeight.w500,
+                      height: 1.60,
+                    ),
+                    // Раньше было maxLines: 1 — длинные адреса с
+                    // корпусом/строением обрезались, и исполнитель не
+                    // мог дочитать. Квартиры/подъезды в SimbA не
+                    // хранятся, но базовый адрес с «д. 12 стр. 3» уже
+                    // не влезал на 360px. 2 строки покрывают 99%
+                    // реальных адресов.
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
-                // Раньше было maxLines: 1 — длинные адреса с корпусом/строением
-                // обрезались, и исполнитель не мог дочитать. Квартиры/подъезды
-                // в SimbA не хранятся, но базовый адрес с «д. 12 стр. 3» уже
-                // не влезал на 360px. 2 строки покрывают 99% реальных адресов.
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
+              ],
             ),
-          ],
+          ),
         ),
         SizedBox(height: 12.h),
         Material(
@@ -1144,13 +1268,14 @@ class _AddressBlock extends StatelessWidget {
           borderRadius: BorderRadius.circular(8.r),
           child: InkWell(
             borderRadius: BorderRadius.circular(8.r),
-            onTap: _openMap,
+            onTap: _openExternalMap,
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(IconsaxPlusLinear.routing_2, color: AppColors.primary, size: 20.r),
+                  Icon(IconsaxPlusLinear.routing_2,
+                      color: AppColors.primary, size: 20.r),
                   SizedBox(width: 6.w),
                   Text(
                     'Построить маршрут',
@@ -1168,6 +1293,144 @@ class _AddressBlock extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Полноэкранная карта с маркером заказа. Структура повторяет экран
+/// выбора адреса при создании заказа, но в read-only варианте:
+///   - белая шапка с pill-индикатором, заголовком «Адрес» и кнопкой
+///     назад слева;
+///   - карточка-поле с самим адресом (текст слева, иконка локации
+///     справа). Поле не редактируется — только показывает значение;
+///   - карта во всю оставшуюся высоту: pan/zoom, кнопки `+`/`−` и
+///     «моё местоположение» — те же, что в основной ленте;
+///   - кнопки «Выбрать» нет (read-only).
+class _OrderLocationFullscreenPage extends StatelessWidget {
+  const _OrderLocationFullscreenPage({
+    required this.address,
+    required this.location,
+  });
+
+  final String address;
+  final LatLng location;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Column(
+        children: [
+          // ── Header ── такой же, как в `SelectAddressScreen`: pill +
+          // центрированный заголовок «Адрес» + кнопка назад слева.
+          Container(
+            color: AppColors.surface,
+            child: SafeArea(
+              bottom: false,
+              child: Column(
+                children: [
+                  SizedBox(height: 4.h),
+                  Center(
+                    child: Container(
+                      width: 36.w,
+                      height: 4.h,
+                      decoration: BoxDecoration(
+                        color: const Color(0x4C3C3C43),
+                        borderRadius: BorderRadius.circular(2.5.r),
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 4.h),
+                  SizedBox(
+                    height: 36.h,
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Center(
+                          child: Text(
+                            'Адрес',
+                            style: AppText.bodyLarge(weight: FontWeight.w600)
+                                .copyWith(
+                                  letterSpacing: -0.43,
+                                  height: 1.29,
+                                ),
+                          ),
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 8.w),
+                            child: const AppBackButton(),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 4.h),
+                ],
+              ),
+            ),
+          ),
+          // ── Адрес-карточка ── визуально как поле ввода (как при выборе
+          // адреса), но read-only: текст занимает основное пространство,
+          // справа — иконка локации.
+          Padding(
+            padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 0),
+            child: Container(
+              height: 56.h,
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(16.r),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 12,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 4.h),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      address,
+                      style: AppText.body(color: AppColors.textPrimary)
+                          .copyWith(height: 1.50),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  SizedBox(width: 12.w),
+                  Icon(
+                    IconsaxPlusLinear.location,
+                    size: 24.r,
+                    color: AppColors.primary,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(height: 16.h),
+          // ── Карта на оставшуюся высоту ──
+          Expanded(
+            child: OpenFreeMapView(
+              initialCenter: location,
+              initialZoom: 15,
+              interactive: true,
+              showZoomControls: true,
+              showMyLocation: true,
+              markers: [
+                OpenFreeMapMarker(
+                  id: 'order',
+                  point: location,
+                  color: AppColors.markerRed,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1229,7 +1492,7 @@ class _PartyCard extends StatelessWidget {
     final mockUser = userById(userId);
     final name = (nameFromOrder != null && nameFromOrder!.isNotEmpty)
         ? nameFromOrder!
-        : (mockUser?.name ?? 'Пользователь');
+        : (mockUser?.name ?? 'Без имени');
     final photoPath = photoUrlFromOrder ?? mockUser?.photoPath;
     return InkWell(
       onTap: () => context.push('/order/$orderId/user/$userId'),
@@ -1260,6 +1523,8 @@ class _PartyCard extends StatelessWidget {
                   return Image.file(
                     File(photoPath),
                     fit: BoxFit.cover,
+                    cacheWidth: (112.r).round(),
+                    cacheHeight: (112.r).round(),
                     errorBuilder: (_, _, _) => fallback,
                   );
                 }),
@@ -1269,7 +1534,7 @@ class _PartyCard extends StatelessWidget {
                 child: Text(
                   name,
                   style: TextStyle(
-                    color: Colors.black,
+                    color: AppColors.textPrimary,
                     fontSize: 16.sp,
                     fontWeight: FontWeight.w600,
                     height: 1.50,
@@ -1345,6 +1610,140 @@ class _AsyncPrimaryButtonState extends State<_AsyncPrimaryButton> {
     return PrimaryButton(
       label: widget.label,
       onPressed: _busy ? null : _run,
+    );
+  }
+}
+
+/// Полноэкранный просмотр фото заказа. Свайп между фото по горизонтали,
+/// pinch-zoom внутри одного фото (через InteractiveViewer), кнопка
+/// «Назад» поверх и счётчик «1 / 5», если фото больше одного.
+class _PhotoGalleryPage extends StatefulWidget {
+  const _PhotoGalleryPage({
+    required this.paths,
+    required this.initialIndex,
+  });
+
+  final List<String> paths;
+  final int initialIndex;
+
+  @override
+  State<_PhotoGalleryPage> createState() => _PhotoGalleryPageState();
+}
+
+class _PhotoGalleryPageState extends State<_PhotoGalleryPage> {
+  late final PageController _pageController;
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialIndex;
+    _pageController = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: AppColors.textPrimary,
+      body: Stack(
+        children: [
+          // ── Сам PageView с фото ──
+          PageView.builder(
+            controller: _pageController,
+            itemCount: widget.paths.length,
+            onPageChanged: (i) => setState(() => _currentIndex = i),
+            itemBuilder: (_, i) {
+              final path = widget.paths[i];
+              final isUrl = path.startsWith('http://') ||
+                  path.startsWith('https://');
+              // Pinch-zoom + pan: InteractiveViewer стандартный
+              // флаттеровский путь, не тянет тяжёлых зависимостей
+              // (photo_view) ради одной фичи.
+              final image = isUrl
+                  ? AppNetworkImage(
+                      url: path,
+                      fit: BoxFit.contain,
+                    )
+                  : Image.file(
+                      File(path),
+                      fit: BoxFit.contain,
+                      // Без cacheWidth — фото в фуллскрине должно
+                      // декодиться в фактическом разрешении.
+                      errorBuilder: (_, _, _) => const Center(
+                        child: Icon(
+                          IconsaxPlusLinear.image,
+                          color: Colors.white54,
+                          size: 64,
+                        ),
+                      ),
+                    );
+              return InteractiveViewer(
+                minScale: 1.0,
+                maxScale: 4.0,
+                child: Center(child: image),
+              );
+            },
+          ),
+          // ── Кнопка «Назад» поверх ──
+          SafeArea(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(12.w, 8.h, 12.w, 0),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: Material(
+                  color: Colors.black.withValues(alpha: 0.45),
+                  shape: const CircleBorder(),
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: () => Navigator.of(context).pop(),
+                    child: SizedBox(
+                      width: 44.r,
+                      height: 44.r,
+                      child: Icon(
+                        IconsaxPlusLinear.arrow_left_2,
+                        color: AppColors.surface,
+                        size: 22.r,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // ── Счётчик «N / M» — только если фото больше одного ──
+          if (widget.paths.length > 1)
+            SafeArea(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(12.w, 8.h, 12.w, 0),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: Container(
+                    padding:
+                        EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.45),
+                      borderRadius: BorderRadius.circular(12.r),
+                    ),
+                    child: Text(
+                      '${_currentIndex + 1} / ${widget.paths.length}',
+                      style: TextStyle(
+                        color: AppColors.surface,
+                        fontSize: 14.sp,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

@@ -12,6 +12,12 @@
 	<string>Чтобы прикрепить фото к заказу или поставить на профиль</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Чтобы сделать фото для заказа или профиля</string>
+	<!-- Без NSLocationWhenInUseUsageDescription iOS принудительно завершает
+	     приложение при первом вызове Geolocator.requestPermission() —
+	     это происходит, когда пользователь переключается в режим
+	     исполнителя или нажимает «Моё местоположение» при создании заказа. -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Чтобы показать заказы рядом с вами и подсказать адрес при создании заказа</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -64,6 +70,15 @@
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+	<!-- LSApplicationQueriesSchemes — без этого canLaunchUrl на iOS 9+ для
+	     соответствующих схем вернёт false, и наш fallback на https не сработает.
+	     tel/sms/mailto уже встроены в iOS и не требуют декларации. -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>whatsapp</string>
+		<string>tg</string>
+		<string>max</string>
 	</array>
 </dict>
 </plist>

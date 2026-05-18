@@ -143,8 +143,21 @@ GoRouter _buildRouter(Ref ref) {
         if (phone == null || phone.isEmpty) return '/auth/phone';
       } else if (loc == '/auth/profile') {
         final pb = ref.read(pocketbaseProvider);
-        final pbValid = pb != null && pb.authStore.isValid;
-        if (!pbValid || state.user == null) return '/auth/phone';
+        // В live-режиме (бэкенд подключён) обязательно требуем валидный
+        // токен — иначе deep-link на /auth/profile может перетащить юзера
+        // на этот экран без авторизации и затем перетереть имя/город в
+        // prefs до того, как он реально залогинится.
+        //
+        // В mock-режиме (бэкенд не подключён, демо-сборка) сервера нет,
+        // достаточно state.user, который mock-completeAuth ставит после
+        // ввода кода. Без этой развилки сборка без --dart-define=
+        // POCKETBASE_URL=... возвращала юзера обратно на /auth/phone
+        // сразу после успешной mock-проверки кода.
+        if (pb != null) {
+          if (!pb.authStore.isValid || state.user == null) return '/auth/phone';
+        } else {
+          if (state.user == null) return '/auth/phone';
+        }
         // Дополнительная защита от deep-link на /auth/profile минуя /city:
         // без выбранного города заполнение профиля бессмысленно (отклики и
         // создание заказов на бэке валидируют city, и заказчик упрётся в 403).

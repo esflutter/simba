@@ -1,12 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Modify this file to customize your launch splash screen -->
+<!--
+  SimbA: фоном launch screen используем фирменный синий (тот же, что в
+  Dart-сплэше и в windowSplashScreenBackground на Android 12+). Раньше
+  тут стоял @android:color/white — между системным сплэшем и Dart-UI
+  на долю секунды мигало белым. Сейчас переход незаметен.
+-->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
-    <item android:drawable="@android:color/white" />
-
-    <!-- You can insert your own image assets here -->
-    <!-- <item>
-        <bitmap
-            android:gravity="center"
-            android:src="@mipmap/launch_image" />
-    </item> -->
+    <item android:drawable="@color/splash_background" />
 </layer-list>

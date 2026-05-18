@@ -7,6 +7,7 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/plural_ru.dart' show formatRetryAfter;
 import '../../core/utils/ru_phone_formatter.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/app_toast.dart';
@@ -82,12 +83,14 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
   }
 
   /// Маппинг error-кодов от auth-репозитория → текст для пользователя.
-  /// `retryAfter` приходит в секундах из AuthResult. Если значение > 60 —
-  /// форматируем в минутах с правильной плюрализацией.
+  /// `retryAfter` приходит в секундах из AuthResult. Форматирование
+  /// сек/мин с RU-плюрализацией — общий хелпер [formatRetryAfter] в
+  /// `core/utils/plural_ru.dart` (раньше эта же формула была скопирована
+  /// сюда и в sms_code_screen).
   String _errorMessage(String? code, int? retryAfter) {
     switch (code) {
       case 'rate_limited':
-        return 'Слишком много попыток. Попробуйте через ${_formatRetry(retryAfter)}.';
+        return 'Слишком много попыток. Попробуйте через ${formatRetryAfter(retryAfter)}.';
       case 'phone_unavailable':
         return 'Этот номер недоступен';
       case 'sms_provider_failed':
@@ -97,32 +100,6 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
       default:
         return 'Не удалось отправить SMS';
     }
-  }
-
-  /// Плюрализация для русского: сек/мин с правильным окончанием.
-  String _formatRetry(int? retryAfter) {
-    final s = retryAfter ?? 60;
-    if (s >= 60) {
-      final m = s ~/ 60;
-      return '$m ${_pluralMin(m)}';
-    }
-    return '$s ${_pluralSec(s)}';
-  }
-
-  String _pluralSec(int n) {
-    final mod10 = n % 10;
-    final mod100 = n % 100;
-    if (mod10 == 1 && mod100 != 11) return 'секунду';
-    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'секунды';
-    return 'секунд';
-  }
-
-  String _pluralMin(int n) {
-    final mod10 = n % 10;
-    final mod100 = n % 100;
-    if (mod10 == 1 && mod100 != 11) return 'минуту';
-    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'минуты';
-    return 'минут';
   }
 
   Future<void> _onNext() async {
@@ -230,8 +207,8 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                           ? Icon(
   Icons.check_rounded,
   size: 18.r,
-  color: Colors.white,
-  shadows: const [Shadow(color: Colors.white, blurRadius: 2)],
+  color: AppColors.surface,
+  shadows: const [Shadow(color: AppColors.surface, blurRadius: 2)],
 )
                           : null,
                     ),
@@ -304,7 +281,7 @@ class _PhoneNextButton extends StatelessWidget {
               width: 22.r,
               height: 22.r,
               child: const CircularProgressIndicator(
-                color: Colors.white,
+                color: AppColors.surface,
                 strokeWidth: 2.5,
               ),
             ),

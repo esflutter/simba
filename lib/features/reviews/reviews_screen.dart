@@ -7,6 +7,7 @@ import 'package:intl/intl.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_network_image.dart';
+import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import 'reviews_providers.dart';
@@ -24,16 +25,20 @@ class ReviewsScreen extends ConsumerWidget {
     final me = ref.watch(appControllerProvider.select((s) => s.user));
     final myId = me?.id ?? 'me';
     final asyncReviews = ref.watch(reviewsForUserProvider(myId));
-    final List<Review>? reviewsOrNull = asyncReviews.when(
+    // Различаем три состояния:
+    //   loading → спиннер
+    //   error   → плашка «не удалось загрузить» с retry (раньше тихо
+    //             падали на мок-стейт и юзер видел «Нет отзывов», даже
+    //             если на сервере отзывы реально есть)
+    //   data    → реальный список
+    final bool isLoading =
+        asyncReviews.isLoading && !asyncReviews.hasValue;
+    final bool hasError = asyncReviews.hasError;
+    final List<Review> reviews = asyncReviews.when(
       data: (list) => list,
-      loading: () => null,
-      error: (_, _) => ref
-          .watch(appControllerProvider)
-          .reviews
-          .where((r) => r.toUserId == myId || r.toUserId == 'me')
-          .toList(),
+      loading: () => const <Review>[],
+      error: (_, _) => const <Review>[],
     );
-    final reviews = reviewsOrNull ?? const <Review>[];
     final ratingDistribution = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
     for (final r in reviews) {
       ratingDistribution[r.rating] = (ratingDistribution[r.rating] ?? 0) + 1;
@@ -66,7 +71,7 @@ class ReviewsScreen extends ConsumerWidget {
                       child: Text(
                         'Отзывы',
                         style: TextStyle(
-                          color: Colors.black,
+                          color: AppColors.textPrimary,
                           fontSize: 17.sp,
                           fontWeight: FontWeight.w600,
                           height: 1.29,
@@ -81,9 +86,13 @@ class ReviewsScreen extends ConsumerWidget {
           ),
           // ── Body ──
           Expanded(
-            child: reviewsOrNull == null
+            child: isLoading
                 ? const Center(
                     child: CircularProgressIndicator(color: AppColors.primary),
+                  )
+                : hasError && reviews.isEmpty
+                ? _ReviewsLoadError(
+                    onRetry: () => ref.invalidate(reviewsForUserProvider(myId)),
                   )
                 : reviews.isEmpty
                 ? Padding(
@@ -116,7 +125,7 @@ class ReviewsScreen extends ConsumerWidget {
                                   'Нет отзывов',
                                   textAlign: TextAlign.center,
                                   style: TextStyle(
-                                    color: Colors.black,
+                                    color: AppColors.textPrimary,
                                     fontSize: 20.sp,
                                     fontWeight: FontWeight.w600,
                                     height: 1.25,
@@ -208,7 +217,7 @@ class _RatingSummaryCard extends StatelessWidget {
                     ? average.toStringAsFixed(1)
                     : '0',
                 style: TextStyle(
-                  color: Colors.black,
+                  color: AppColors.textPrimary,
                   fontSize: 20.sp,
                   fontWeight: FontWeight.w700,
                   height: 1.20,
@@ -314,7 +323,7 @@ class _DistributionRow extends StatelessWidget {
             softWrap: false,
             overflow: TextOverflow.visible,
             style: TextStyle(
-              color: Colors.black,
+              color: AppColors.textPrimary,
               fontSize: 13.sp,
               fontWeight: FontWeight.w500,
               height: 1.38,
@@ -337,7 +346,7 @@ class _ReviewCard extends StatelessWidget {
     // PB-id ничего не находит, и все отзывы становились «Пользователь».
     final authorName = review.fromUserName.isNotEmpty
         ? review.fromUserName
-        : (userById(review.fromUserId)?.name ?? 'Пользователь');
+        : (userById(review.fromUserId)?.name ?? 'Без имени');
     return Container(
       padding: EdgeInsets.all(12.w),
       decoration: BoxDecoration(
@@ -357,7 +366,7 @@ class _ReviewCard extends StatelessWidget {
                   child: Text(
                     authorName,
                     style: TextStyle(
-                      color: Colors.black,
+                      color: AppColors.textPrimary,
                       fontSize: 15.sp,
                       fontWeight: FontWeight.w600,
                       height: 1.33,
@@ -397,10 +406,17 @@ class _ReviewCard extends StatelessWidget {
             ],
           ),
           SizedBox(height: 8.h),
+          // Лимит на 5 строк с многоточием: длинный отзыв (до 1000
+          // символов в БД) превращал карточку в простыню высотой
+          // ~400px, ломая визуальную ритмику списка. Полный текст
+          // открывается тапом по карточке в детали отзыва (TODO для
+          // отдельного screen — пока обрезка достаточна).
           Text(
             review.comment,
+            maxLines: 5,
+            overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: Colors.black.withValues(alpha: 0.60),
+              color: AppColors.textSecondary,
               fontSize: 13.sp,
               fontWeight: FontWeight.w400,
               height: 1.38,
@@ -425,7 +441,7 @@ class _ReviewCard extends StatelessWidget {
                         style: TextStyle(
                           fontSize: 13.sp,
                           fontWeight: FontWeight.w500,
-                          color: Colors.black,
+                          color: AppColors.textPrimary,
                         ),
                       ),
                     ),
@@ -461,6 +477,58 @@ class _ReviewAvatar extends StatelessWidget {
       child: (photoUrl == null || photoUrl!.isEmpty)
           ? fallback
           : AppNetworkImage(url: photoUrl!, fallback: fallback),
+    );
+  }
+}
+
+
+/// Плашка ошибки загрузки отзывов с кнопкой повтора. До этого при
+/// сетевой ошибке экран показывал «Нет отзывов» через fallback на
+/// мок-стейт — пользователь думал, что отзывов реально нет.
+class _ReviewsLoadError extends StatelessWidget {
+  const _ReviewsLoadError({required this.onRetry});
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 24.w),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(IconsaxPlusLinear.cloud_cross,
+                size: 64.r, color: AppColors.textTertiary),
+            SizedBox(height: 16.h),
+            Text(
+              'Не удалось загрузить отзывы',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 20.sp,
+                fontWeight: FontWeight.w600,
+                height: 1.25,
+              ),
+            ),
+            SizedBox(height: 8.h),
+            Text(
+              'Проверьте подключение к интернету и попробуйте снова.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 15.sp,
+                fontWeight: FontWeight.w400,
+                height: 1.33,
+              ),
+            ),
+            SizedBox(height: 16.h),
+            SizedBox(
+              width: 200.w,
+              child: PrimaryButton(label: 'Попробовать снова', onPressed: onRetry),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

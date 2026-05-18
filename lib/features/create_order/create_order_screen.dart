@@ -102,7 +102,13 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
       ref.read(orderDraftProvider.notifier).update(
             photoPaths: [...draft.photoPaths, ready.path],
           );
-    } catch (_) {}
+    } catch (e) {
+      // Не глотаем молча — раньше тап на «Добавить фото» не давал
+      // обратной связи при ошибке (OOM/permission), и юзер тыкал ещё.
+      debugPrint('[create_order] addPhoto failed: $e');
+      if (!mounted) return;
+      AppToast.show(context, 'Не удалось добавить фото');
+    }
   }
 
   void _removePhoto(int i) {
@@ -536,7 +542,31 @@ class _PhotoTile extends StatelessWidget {
         children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(16.r),
-            child: Image.file(File(path), width: 72.r, height: 72.r, fit: BoxFit.cover),
+            // cacheWidth/Height = 2 × dpi-radius чтобы Flutter не держал
+            // в RAM полноразмерное фото с камеры (~4K) для рендера в
+            // 72×72 миниатюре. Без этого 3 фото съедают 100+ МБ heap.
+            child: Image.file(
+              File(path),
+              width: 72.r,
+              height: 72.r,
+              fit: BoxFit.cover,
+              cacheWidth: (144.r).round(),
+              cacheHeight: (144.r).round(),
+              // Если OS вычистила tmp-кэш (например, юзер свернул
+              // приложение на ночь между picker и публикацией) — без
+              // errorBuilder Image.file рисует красный крест Flutter,
+              // что выглядит как краш. Показываем нейтральную плашку.
+              errorBuilder: (_, _, _) => Container(
+                width: 72.r,
+                height: 72.r,
+                color: AppColors.surfaceVariant,
+                child: Icon(
+                  IconsaxPlusLinear.image,
+                  color: AppColors.textTertiary,
+                  size: 32.r,
+                ),
+              ),
+            ),
           ),
           Positioned(
             right: 4.r,
@@ -548,7 +578,7 @@ class _PhotoTile extends StatelessWidget {
                 width: 16.r,
                 height: 16.r,
                 decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
-                child: Icon(Icons.close_rounded, size: 12.r, color: Colors.white),
+                child: Icon(Icons.close_rounded, size: 12.r, color: AppColors.surface),
               ),
             ),
           ),

@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/messenger_launcher.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_network_image.dart';
@@ -85,7 +86,7 @@ class UserProfileScreen extends ConsumerWidget {
         mockUser ??
         AppUser(
           id: userId,
-          name: nameFromOrder ?? 'Пользователь',
+          name: nameFromOrder ?? 'Без имени',
           phone: '',
           photoPath: photoFromOrder,
         );
@@ -161,12 +162,18 @@ class UserProfileScreen extends ConsumerWidget {
                             if (displayPhoto.startsWith('http')) {
                               return AppNetworkImage(
                                 url: displayPhoto,
+                                width: 56.r,
+                                height: 56.r,
                                 fallback: fallback,
                               );
                             }
                             return Image.file(
                               File(displayPhoto),
                               fit: BoxFit.cover,
+                              // 56r ≈ 168px. Без cap-а аватар 1024×1024
+                              // декодится целиком под кружок 56lp.
+                              cacheWidth: 168,
+                              cacheHeight: 168,
                               errorBuilder: (_, _, _) => fallback,
                             );
                           }),
@@ -183,7 +190,7 @@ class UserProfileScreen extends ConsumerWidget {
                                     child: Text(
                                       displayName,
                                       style: TextStyle(
-                                        color: Colors.black,
+                                        color: AppColors.textPrimary,
                                         fontSize: 20.sp,
                                         fontWeight: FontWeight.w600,
                                         height: 1.20,
@@ -202,16 +209,10 @@ class UserProfileScreen extends ConsumerWidget {
                                   ],
                                   if (user.hasTransport) ...[
                                     SizedBox(width: 8.w),
-                                    // По фигме грузовик тёмный, не синий
-                                    // как ключ. Перекрашиваем синий ассет
-                                    // в textPrimary через srcIn-блендинг,
-                                    // чтобы не плодить отдельный файл.
                                     Image.asset(
                                       'assets/images/icon_transport.png',
                                       width: 20.r,
                                       height: 16.r,
-                                      color: AppColors.textPrimary,
-                                      colorBlendMode: BlendMode.srcIn,
                                     ),
                                   ],
                                 ],
@@ -232,7 +233,7 @@ class UserProfileScreen extends ConsumerWidget {
                                   return Text(
                                     phone,
                                     style: TextStyle(
-                                      color: Colors.black,
+                                      color: AppColors.textPrimary,
                                       fontSize: 16.sp,
                                       fontWeight: FontWeight.w600,
                                       height: 1.50,
@@ -267,7 +268,7 @@ class UserProfileScreen extends ConsumerWidget {
                               child: _ContactButton(
                                 label: 'Написать',
                                 background: AppColors.surface,
-                                color: Colors.black,
+                                color: AppColors.textPrimary,
                                 onTap: () => _showContactSheet(context, phone),
                               ),
                             ),
@@ -276,7 +277,11 @@ class UserProfileScreen extends ConsumerWidget {
                               child: _ContactButton(
                                 label: 'Позвонить',
                                 background: AppColors.primary,
-                                color: const Color(0xFFF5F5F5),
+                                // Белый текст на синем — нормальный
+                                // контраст. До этого тут был #F5F5F5
+                                // (фоновый серый), и надпись почти
+                                // не читалась.
+                                color: AppColors.surface,
                                 onTap: () => _callPhone(phone),
                               ),
                             ),
@@ -318,7 +323,7 @@ class UserProfileScreen extends ConsumerWidget {
                             'Нет отзывов',
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              color: Colors.black,
+                              color: AppColors.textPrimary,
                               fontSize: 20.sp,
                               fontWeight: FontWeight.w600,
                               height: 1.25,
@@ -339,16 +344,11 @@ class UserProfileScreen extends ConsumerWidget {
                       ),
                     ),
                     SizedBox(height: 8.h),
-                    ...reviews.map(
-                      (r) => Padding(
-                        padding: EdgeInsets.only(bottom: 8.h),
-                        child: AppCard(
-                          padding: EdgeInsets.all(12.w),
-                          borderRadius: BorderRadius.circular(12.r),
-                          child: _ReviewItem(review: r),
-                        ),
-                      ),
-                    ),
+                    // На большом количестве отзывов (100+) разворачивать всё
+                    // сразу через spread дорого: каждая карточка декодит
+                    // аватарку и считает свой layout. Показываем порциями,
+                    // подгрузка — по тапу пользователя.
+                    _ReviewsList(reviews: reviews),
                   ],
                 ],
               ),
@@ -487,7 +487,7 @@ class _CandidateActionBarState extends State<_CandidateActionBar> {
               _ActionBarButton(
                 label: 'Принять',
                 background: AppColors.primary,
-                textColor: Colors.white,
+                textColor: AppColors.surface,
                 onTap: _busy ? null : () => _run(widget.onAccept),
               ),
               SizedBox(height: 8.h),
@@ -569,7 +569,9 @@ class _ContactButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(10.r),
         onTap: onTap,
         child: SizedBox(
-          height: 36.h,
+          // 48dp — стандартный минимум touch-target. Раньше 36 — кнопки
+          // «Написать»/«Позвонить» были слишком маленькие для пальца.
+          height: 48.h,
           child: Center(
             child: Text(
               label,
@@ -590,13 +592,34 @@ class _ContactButton extends StatelessWidget {
 
 class _ContactSheet extends StatelessWidget {
   const _ContactSheet({required this.phone});
+
+  /// Телефон контрагента (в любом формате — `+7 (900)…` либо E.164).
+  /// MessengerLauncher сам приведёт строку к цифрам.
   final String phone;
+
+  /// Открыть мессенджер через [launcher] и закрыть шторку. На отказ
+  /// (приложение не установлено + web-fallback не сработал) показываем
+  /// тост — раньше тут был молчаливый `pop()`, юзер не понимал, что
+  /// произошло.
+  Future<void> _open(
+    BuildContext sheetContext,
+    Future<bool> Function() launcher,
+    String labelOnFail,
+  ) async {
+    final ok = await launcher();
+    if (!sheetContext.mounted) return;
+    Navigator.of(sheetContext).pop();
+    if (!ok) {
+      AppToast.show(sheetContext, '$labelOnFail не открылся');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final hasPhone = phone.trim().isNotEmpty;
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.surface,
         borderRadius: BorderRadius.vertical(top: Radius.circular(15.r)),
       ),
       child: SafeArea(
@@ -618,7 +641,7 @@ class _ContactSheet extends StatelessWidget {
                   Text(
                     'Написать',
                     style: TextStyle(
-                      color: Colors.black,
+                      color: AppColors.textPrimary,
                       fontSize: 17.sp,
                       fontWeight: FontWeight.w600,
                       height: 1.29,
@@ -647,19 +670,34 @@ class _ContactSheet extends StatelessWidget {
                   _Messenger(
                     label: 'WhatsApp',
                     asset: 'assets/images/icon_whatsapp.webp',
-                    onTap: () => Navigator.of(context).pop(),
+                    enabled: hasPhone,
+                    onTap: () => _open(
+                      context,
+                      () => MessengerLauncher.openWhatsApp(phone),
+                      'WhatsApp',
+                    ),
                   ),
                   SizedBox(width: 28.w),
                   _Messenger(
                     label: 'Telegram',
                     asset: 'assets/images/icon_telegram.webp',
-                    onTap: () => Navigator.of(context).pop(),
+                    enabled: hasPhone,
+                    onTap: () => _open(
+                      context,
+                      () => MessengerLauncher.openTelegram(phone: phone),
+                      'Telegram',
+                    ),
                   ),
                   SizedBox(width: 28.w),
                   _Messenger(
                     label: 'MAX',
                     asset: 'assets/images/icon_max.webp',
-                    onTap: () => Navigator.of(context).pop(),
+                    enabled: hasPhone,
+                    onTap: () => _open(
+                      context,
+                      () => MessengerLauncher.openMax(phone: phone),
+                      'MAX',
+                    ),
                   ),
                 ],
               ),
@@ -677,32 +715,41 @@ class _Messenger extends StatelessWidget {
     required this.label,
     required this.asset,
     required this.onTap,
+    this.enabled = true,
   });
 
   final String label;
   final String asset;
   final VoidCallback onTap;
 
+  /// `false` → иконка приглушена, тап игнорируется. Используется, когда
+  /// у контакта нет телефона (или для шторки поддержки не настроен
+  /// соответствующий канал в Env).
+  final bool enabled;
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       behavior: HitTestBehavior.opaque,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Image.asset(asset, width: 60.r, height: 60.r),
-          SizedBox(height: 5.h),
-          Text(
-            label,
-            style: TextStyle(
-              color: Colors.black,
-              fontSize: 11.sp,
-              fontWeight: FontWeight.w600,
-              height: 1.18,
+      child: Opacity(
+        opacity: enabled ? 1.0 : 0.4,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.asset(asset, width: 60.r, height: 60.r),
+            SizedBox(height: 5.h),
+            Text(
+              label,
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 11.sp,
+                fontWeight: FontWeight.w600,
+                height: 1.18,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -731,7 +778,7 @@ class _RatingSummary extends StatelessWidget {
             Text(
               average.toStringAsFixed(1),
               style: TextStyle(
-                color: Colors.black,
+                color: AppColors.textPrimary,
                 fontSize: 20.sp,
                 fontWeight: FontWeight.w700,
                 height: 1.20,
@@ -801,7 +848,7 @@ class _RatingSummary extends StatelessWidget {
                   softWrap: false,
                   overflow: TextOverflow.visible,
                   style: TextStyle(
-                    color: Colors.black,
+                    color: AppColors.textPrimary,
                     fontSize: 13.sp,
                     fontWeight: FontWeight.w500,
                     height: 1.38,
@@ -838,7 +885,7 @@ class _ReviewItem extends StatelessWidget {
     final author = userById(review.fromUserId);
     final authorName = review.fromUserName.isNotEmpty
         ? review.fromUserName
-        : (author?.name ?? 'Пользователь');
+        : (author?.name ?? 'Без имени');
     final authorPhoto = (review.fromUserPhotoUrl != null &&
             review.fromUserPhotoUrl!.isNotEmpty)
         ? review.fromUserPhotoUrl
@@ -866,12 +913,17 @@ class _ReviewItem extends StatelessWidget {
                 if (authorPhoto.startsWith('http')) {
                   return AppNetworkImage(
                     url: authorPhoto,
+                    width: 32.r,
+                    height: 32.r,
                     fallback: fallback,
                   );
                 }
                 return Image.file(
                   File(authorPhoto),
                   fit: BoxFit.cover,
+                  // 32r ≈ 96px — авторская аватарка отзыва небольшая.
+                  cacheWidth: 96,
+                  cacheHeight: 96,
                   errorBuilder: (_, _, _) => fallback,
                 );
               }),
@@ -881,7 +933,7 @@ class _ReviewItem extends StatelessWidget {
               child: Text(
                 authorName,
                 style: TextStyle(
-                  color: Colors.black,
+                  color: AppColors.textPrimary,
                   fontSize: 15.sp,
                   fontWeight: FontWeight.w600,
                   height: 1.33,
@@ -920,10 +972,14 @@ class _ReviewItem extends StatelessWidget {
           ],
         ),
         SizedBox(height: 8.h),
+        // Лимит на 5 строк — длинные отзывы (до 1000 символов) делали
+        // карточку слишком высокой и ломали ритмику списка.
         Text(
           review.comment,
+          maxLines: 5,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
-            color: Colors.black.withValues(alpha: 0.60),
+            color: AppColors.textSecondary,
             fontSize: 13.sp,
             fontWeight: FontWeight.w400,
             height: 1.38,
@@ -947,7 +1003,7 @@ class _ReviewItem extends StatelessWidget {
                       style: TextStyle(
                         fontSize: 13.sp,
                         fontWeight: FontWeight.w500,
-                        color: Colors.black,
+                        color: AppColors.textPrimary,
                       ),
                     ),
                   ),
@@ -955,6 +1011,71 @@ class _ReviewItem extends StatelessWidget {
                 .toList(),
           ),
         ],
+      ],
+    );
+  }
+}
+
+/// Список отзывов с подгрузкой по запросу. Спред-разворот через
+/// `...reviews.map(...)` строил все карточки сразу, что на 100+ отзывах
+/// заметно тормозило открытие профиля и съедало память. Здесь рендерим
+/// первую порцию, остальное — по тапу «Показать ещё».
+class _ReviewsList extends StatefulWidget {
+  const _ReviewsList({required this.reviews});
+  final List<Review> reviews;
+
+  @override
+  State<_ReviewsList> createState() => _ReviewsListState();
+}
+
+class _ReviewsListState extends State<_ReviewsList> {
+  static const int _initialBatch = 20;
+  static const int _incrementBatch = 20;
+  int _visible = _initialBatch;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = widget.reviews.length;
+    final shown = _visible.clamp(0, total);
+    final hasMore = shown < total;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (int i = 0; i < shown; i++)
+          Padding(
+            padding: EdgeInsets.only(bottom: 8.h),
+            child: AppCard(
+              padding: EdgeInsets.all(12.w),
+              borderRadius: BorderRadius.circular(12.r),
+              child: _ReviewItem(review: widget.reviews[i]),
+            ),
+          ),
+        if (hasMore)
+          Padding(
+            padding: EdgeInsets.only(top: 4.h, bottom: 16.h),
+            child: Material(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(10.r),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(10.r),
+                onTap: () => setState(() {
+                  _visible = (shown + _incrementBatch).clamp(0, total);
+                }),
+                child: Container(
+                  padding: EdgeInsets.symmetric(vertical: 12.h),
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Показать ещё (${total - shown})',
+                    style: TextStyle(
+                      color: AppColors.primary,
+                      fontSize: 15.sp,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }

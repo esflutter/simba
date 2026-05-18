@@ -40,3 +40,27 @@ final reviewsByOrderProvider = FutureProvider.autoDispose
         .toList();
   }
 });
+
+/// Set order_id'ов, по которым текущий пользователь уже оставил отзыв.
+/// Нужен экрану истории, чтобы рисовать «Оставить отзыв» только под теми
+/// карточками, по которым отзыва ещё нет — без N round-trip'ов
+/// reviewsByOrderProvider на каждую запись.
+///
+/// Не autoDispose: одна выборка переиспользуется обоими табами
+/// (Размещённые / Выполненные) и при возвратах на экран. Свежесть
+/// обеспечивается через `ref.invalidate(myReviewedOrderIdsProvider)`
+/// после успешной отправки отзыва.
+final myReviewedOrderIdsProvider = FutureProvider<Set<String>>((ref) async {
+  try {
+    final reviews = await ref.read(reviewsRepositoryProvider).mineFromMe();
+    return reviews.map((r) => r.orderId).toSet();
+  } catch (_) {
+    final myId = ref.read(appControllerProvider).user?.id ?? 'me';
+    return ref
+        .read(appControllerProvider)
+        .reviews
+        .where((r) => r.fromUserId == myId || r.fromUserId == 'me')
+        .map((r) => r.orderId)
+        .toSet();
+  }
+});

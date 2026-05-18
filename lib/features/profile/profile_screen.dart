@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -7,10 +8,13 @@ import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import 'package:iconsax_plus/iconsax_plus.dart';
 
+import '../../core/config/env.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/messenger_launcher.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_network_image.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/auth_repository.dart';
@@ -133,7 +137,7 @@ class ProfileScreen extends ConsumerWidget {
           width: 313.w,
           padding: EdgeInsets.all(16.w),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.surface,
             borderRadius: BorderRadius.circular(14.r),
           ),
           child: Column(
@@ -159,7 +163,7 @@ class ProfileScreen extends ConsumerWidget {
                     _LogoutDialogButton(
                       label: 'Выйти',
                       background: AppColors.primary,
-                      textColor: Colors.white,
+                      textColor: AppColors.surface,
                       onTap: () async {
                         // authRepository.logout() сам зовёт appController + clear authStore.
                         await ref.read(authRepositoryProvider).logout();
@@ -233,7 +237,7 @@ class ProfileScreen extends ConsumerWidget {
           width: 313.w,
           padding: EdgeInsets.all(16.w),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.surface,
             borderRadius: BorderRadius.circular(14.r),
           ),
           child: Column(
@@ -269,7 +273,7 @@ class ProfileScreen extends ConsumerWidget {
                     _LogoutDialogButton(
                       label: 'Удалить',
                       background: AppColors.primary,
-                      textColor: Colors.white,
+                      textColor: AppColors.surface,
                       onTap: () async {
                         await doDelete();
                         if (!dialogCtx.mounted) return;
@@ -327,7 +331,7 @@ class _ProfileCard extends StatelessWidget {
               _Avatar(photoPath: user.photoPath),
               SizedBox(height: 16.h),
               Text(
-                user.name.isEmpty ? 'Пользователь' : user.name,
+                user.name.isEmpty ? 'Без имени' : user.name,
                 textAlign: TextAlign.center,
                 style: AppText.h3().copyWith(height: 1.10),
               ),
@@ -359,9 +363,6 @@ class _ProfileCard extends StatelessWidget {
                     'assets/images/icon_transport.png',
                     width: 20.r,
                     height: 16.r,
-                    // По фигме грузовик тёмный (в отличие от синего ключа).
-                    color: AppColors.textPrimary,
-                    colorBlendMode: BlendMode.srcIn,
                   ));
                 }
                 if (reviewsCount > 0) {
@@ -455,10 +456,20 @@ class _Avatar extends StatelessWidget {
       child: path == null
           ? fallback
           : isUrl
-              ? AppNetworkImage(url: path, fallback: fallback)
+              ? AppNetworkImage(
+                  url: path,
+                  width: 100.r,
+                  height: 100.r,
+                  fallback: fallback,
+                )
               : Image.file(
                   File(path),
                   fit: BoxFit.cover,
+                  // 100r ≈ 300px на 3×-устройстве; декодить full-res
+                  // оригинал (потенциально 1024×1024) под кружок 100lp —
+                  // лишние ~4МБ RAM на каждый виджет.
+                  cacheWidth: 300,
+                  cacheHeight: 300,
                   errorBuilder: (_, _, _) => fallback,
                 ),
     );
@@ -523,7 +534,13 @@ class _MenuItem extends StatelessWidget {
   }
 }
 
-class _LogoutDialogButton extends StatelessWidget {
+/// Кнопка диалога logout/удаление с встроенной защитой от двойного тапа.
+/// Раньше StatelessWidget без блокировки — второй тап за пол-секунды
+/// запускал второй logout/delete параллельно (две отмены push-токенов,
+/// гонка навигации). Теперь после первого тапа кнопка дизейблится до
+/// завершения onTap, а на время выполнения показывается крутилка вместо
+/// текста.
+class _LogoutDialogButton extends StatefulWidget {
   const _LogoutDialogButton({
     required this.label,
     required this.background,
@@ -533,30 +550,61 @@ class _LogoutDialogButton extends StatelessWidget {
   final String label;
   final Color background;
   final Color textColor;
-  final VoidCallback onTap;
+  // FutureOr — чтобы можно было передать как обычный void callback
+  // («Отмена»), так и async-операцию («Выйти», «Удалить»).
+  final FutureOr<void> Function() onTap;
+
+  @override
+  State<_LogoutDialogButton> createState() => _LogoutDialogButtonState();
+}
+
+class _LogoutDialogButtonState extends State<_LogoutDialogButton> {
+  bool _busy = false;
+
+  Future<void> _handle() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await widget.onTap();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: background,
+      color: widget.background,
       borderRadius: BorderRadius.circular(10.r),
       child: InkWell(
         borderRadius: BorderRadius.circular(10.r),
-        onTap: onTap,
+        // null при _busy — кнопка не реагирует на второй тап.
+        onTap: _busy ? null : _handle,
         child: SizedBox(
           width: double.infinity,
-          height: 36.h,
+          // 48dp — стандартный touch-target Material/Android. Раньше
+          // было 36, что меньше рекомендуемого минимума.
+          height: 48.h,
           child: Center(
-            child: Text(
-              label,
-              style: TextStyle(
-                color: textColor,
-                fontSize: 17.sp,
-                fontWeight: FontWeight.w600,
-                height: 1.29,
-                letterSpacing: -0.40,
-              ),
-            ),
+            child: _busy
+                ? SizedBox(
+                    width: 20.r,
+                    height: 20.r,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: widget.textColor,
+                    ),
+                  )
+                : Text(
+                    widget.label,
+                    style: TextStyle(
+                      color: widget.textColor,
+                      fontSize: 17.sp,
+                      fontWeight: FontWeight.w600,
+                      height: 1.29,
+                      letterSpacing: -0.40,
+                    ),
+                  ),
           ),
         ),
       ),
@@ -567,11 +615,31 @@ class _LogoutDialogButton extends StatelessWidget {
 class _SupportSheet extends StatelessWidget {
   const _SupportSheet();
 
+  /// Открыть мессенджер поддержки. На отказ — тост («WhatsApp / Telegram / MAX
+  /// не открылся»). Канал считается «настроенным», если в Env есть
+  /// соответствующий идентификатор; иначе кнопка изначально дизейблена,
+  /// и сюда мы не попадём.
+  Future<void> _open(
+    BuildContext sheetContext,
+    Future<bool> Function() launcher,
+    String labelOnFail,
+  ) async {
+    final ok = await launcher();
+    if (!sheetContext.mounted) return;
+    Navigator.of(sheetContext).pop();
+    if (!ok) {
+      AppToast.show(sheetContext, '$labelOnFail не открылся');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Все три кнопки всегда активны. Значения берутся из Env (с
+    // placeholder-дефолтами, см. env.dart). Раньше при пустом Env кнопки
+    // дизейблились — выглядело как баг, юзер думал «контакты не работают».
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.surface,
         borderRadius: BorderRadius.vertical(top: Radius.circular(15.r)),
       ),
       child: SafeArea(
@@ -593,7 +661,7 @@ class _SupportSheet extends StatelessWidget {
                   Text(
                     'Связаться с нами',
                     style: TextStyle(
-                      color: Colors.black,
+                      color: AppColors.textPrimary,
                       fontSize: 17.sp,
                       fontWeight: FontWeight.w600,
                       height: 1.29,
@@ -622,19 +690,37 @@ class _SupportSheet extends StatelessWidget {
                   _SupportMessenger(
                     label: 'WhatsApp',
                     asset: 'assets/images/icon_whatsapp.webp',
-                    onTap: () => Navigator.of(context).pop(),
+                    onTap: () => _open(
+                      context,
+                      () => MessengerLauncher.openWhatsApp(
+                        Env.supportWhatsAppPhone,
+                      ),
+                      'WhatsApp',
+                    ),
                   ),
                   SizedBox(width: 28.w),
                   _SupportMessenger(
                     label: 'Telegram',
                     asset: 'assets/images/icon_telegram.webp',
-                    onTap: () => Navigator.of(context).pop(),
+                    onTap: () => _open(
+                      context,
+                      () => MessengerLauncher.openTelegram(
+                        username: Env.supportTelegramUsername,
+                      ),
+                      'Telegram',
+                    ),
                   ),
                   SizedBox(width: 28.w),
                   _SupportMessenger(
                     label: 'MAX',
                     asset: 'assets/images/icon_max.webp',
-                    onTap: () => Navigator.of(context).pop(),
+                    onTap: () => _open(
+                      context,
+                      () => MessengerLauncher.openMax(
+                        phone: Env.supportMaxPhone,
+                      ),
+                      'MAX',
+                    ),
                   ),
                 ],
               ),
@@ -671,7 +757,7 @@ class _SupportMessenger extends StatelessWidget {
           Text(
             label,
             style: TextStyle(
-              color: Colors.black,
+              color: AppColors.textPrimary,
               fontSize: 11.sp,
               fontWeight: FontWeight.w600,
               height: 1.18,

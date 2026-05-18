@@ -1,14 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Прозрачный vector drawable для windowSplashScreenAnimatedIcon
-     (Android 12+). Shape-drawable система не принимает и подставляет
-     launcher icon. Пустой vector делает иконку невидимой — splash
-     показывает только синий фон. -->
+<!--
+  Vector drawable для windowSplashScreenAnimatedIcon на Android 12+.
+  Залит ТЕМ ЖЕ синим, что и фон сплэша (#1369CD = splash_background).
+  Раньше тут был прозрачный path — Android 16 (а похоже и более ранние
+  версии в некоторых сборках) такой icon игнорирует и подсовывает
+  адаптивную launcher-иконку с белым логотипом на синем. В итоге
+  пользователь видит «круг в центре экрана» вместо однотонного фона.
+  Сплошная заливка тем же синим решает проблему: даже если система
+  отрисует icon-контейнер, он визуально сольётся с фоном.
+
+  Цвет дублирован хардкодом, потому что в vector drawable нельзя
+  ссылаться на @color/* — Android Studio инлайнит значение в drawable
+  ещё на этапе сборки.
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:fillColor="#00000000"
+        android:fillColor="#1369CD"
         android:pathData="M0,0L108,0L108,108L0,108Z" />
 </vector>

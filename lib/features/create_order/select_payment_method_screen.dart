@@ -12,8 +12,7 @@ import 'order_draft.dart';
 // SimbA эквайринг не делает: оплата всегда идёт напрямую между заказчиком
 // и исполнителем на месте. Источник подписей — extension `PaymentMethod.label`,
 // чтобы не плодить дубликаты строк по экранам.
-final List<String> paymentMethods =
-    PaymentMethod.values.map((m) => m.label).toList(growable: false);
+const List<PaymentMethod> _paymentMethods = PaymentMethod.values;
 
 class SelectPaymentMethodScreen extends ConsumerWidget {
   const SelectPaymentMethodScreen({super.key});
@@ -77,17 +76,23 @@ class SelectPaymentMethodScreen extends ConsumerWidget {
                 16.w,
                 16.h + MediaQuery.viewPaddingOf(context).bottom,
               ),
-              itemCount: paymentMethods.length,
+              itemCount: _paymentMethods.length,
               separatorBuilder: (_, _) => SizedBox(height: 8.h),
               itemBuilder: (_, i) {
-                final m = paymentMethods[i];
+                final m = _paymentMethods[i];
                 return Material(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(16.r),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(16.r),
                     onTap: () {
-                      ref.read(orderDraftProvider.notifier).update(paymentMethod: m);
+                      // Храним именно `dbValue` (cash/cashless_transfer),
+                      // а не RU-label. Иначе при ребрендинге подписи
+                      // старые черновики из prefs не распарсятся
+                      // через `PaymentMethodMapping.fromLabel`.
+                      ref
+                          .read(orderDraftProvider.notifier)
+                          .update(paymentMethod: m.dbValue);
                       context.pop();
                     },
                     child: SizedBox(
@@ -96,7 +101,7 @@ class SelectPaymentMethodScreen extends ConsumerWidget {
                         padding: EdgeInsets.symmetric(horizontal: 20.w),
                         child: Align(
                           alignment: Alignment.centerLeft,
-                          child: Text(m, style: AppText.bodyLarge()),
+                          child: Text(m.label, style: AppText.bodyLarge()),
                         ),
                       ),
                     ),

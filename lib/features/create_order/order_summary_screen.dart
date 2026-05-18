@@ -10,7 +10,9 @@ import 'package:latlong2/latlong.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/backend_error.dart';
 import '../../core/utils/date_time_formatters.dart';
+import '../../core/utils/plural_ru.dart' show pluralRubles;
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/app_toast.dart';
@@ -80,20 +82,30 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
 
   /// Полная валидация перед публикацией. Кнопка дизейблится, если хоть одно
   /// условие не выполнено: категория, адрес + координаты, цена в диапазоне
-  /// [kPriceMin .. kPriceMax], выбран способ оплаты. Потолок 99 999 999 ₽ —
-  /// формальный (чтобы не лезли 10-значные суммы по ошибке), реалистично
-  /// не достижим.
+  /// [kPriceMin .. kPriceMax], выбран способ оплаты, и `scheduledAt` (если
+  /// введён) — не в прошлом. Потолок 99 999 999 ₽ — формальный (чтобы
+  /// не лезли 10-значные суммы по ошибке), реалистично не достижим.
   bool get _canPublish {
     final draft = ref.read(orderDraftProvider);
     final p = _priceRub;
+    final s = draft.scheduledAt;
+    final scheduledOk = s == null || !s.isBefore(DateTime.now());
     return !_isPublishing &&
         draft.categoryId != null &&
         draft.address.trim().isNotEmpty &&
         draft.location != null &&
         p >= kPriceMin &&
         p <= kPriceMax &&
+        scheduledOk &&
         (draft.paymentMethod?.isNotEmpty ?? false);
   }
+
+  /// Полный ли DD.MM.YYYY и HH:mm одновременно введены. Используется только
+  /// для подсказки ошибки «дата в прошлом» — пока юзер заполняет одну
+  /// половину, ругаться рано.
+  bool get _scheduleFullyEntered =>
+      parseRuDate(_dateCtrl.text) != null &&
+      parseRuTime(_timeCtrl.text) != null;
 
   @override
   Widget build(BuildContext context) {
@@ -154,6 +166,22 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
                   inputFormatters: [TimeMaskFormatter()],
                   onChanged: (_) => _syncSchedule(),
                 ),
+                // Подсказка про прошлое время — показываем, только когда обе
+                // части (дата + время) полностью введены и итог уже в прошлом.
+                // Не ругаемся, пока юзер ещё допечатывает.
+                if (_scheduleFullyEntered &&
+                    draft.scheduledAt != null &&
+                    draft.scheduledAt!.isBefore(DateTime.now())) ...[
+                  SizedBox(height: 4.h),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.w),
+                    child: Text(
+                      'Дата и время уже прошли',
+                      style: AppText.caption(color: AppColors.error)
+                          .copyWith(height: 1.33),
+                    ),
+                  ),
+                ],
                 SizedBox(height: 16.h),
                 AppTextField(
                   label: 'Стоимость работы',
@@ -172,7 +200,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
                 Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16.w),
                   child: Text(
-                    'Минимальная стоимость заказа составляет $kPriceMin рублей',
+                    'Минимальная стоимость заказа — $kPriceMin ${pluralRubles(kPriceMin)}',
                     style: AppText.caption(
                       color: Colors.black.withValues(alpha: 0.60),
                     ).copyWith(height: 1.33),
@@ -180,7 +208,15 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
                 ),
                 SizedBox(height: 16.h),
                 _PaymentMethod(
-                  value: draft.paymentMethod ?? 'Укажите способ оплаты',
+                  // draft.paymentMethod хранит dbValue (cash/cashless_transfer)
+                  // — конвертируем в RU-label для отображения. Раньше
+                  // хранился сам label, при ребрендинге подписи старый
+                  // черновик ломался в `PaymentMethodMapping.fromLabel`.
+                  value: draft.paymentMethod != null
+                      ? PaymentMethodMapping
+                          .fromDbValue(draft.paymentMethod)
+                          .label
+                      : 'Укажите способ оплаты',
                   onTap: _isPublishing
                       ? () {}
                       : () async {
@@ -310,7 +346,12 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
         asap: draft.asap,
         photoPaths: draft.photoPaths,
         forOtherPhone: draft.forOtherPhone,
-        paymentMethod: PaymentMethodMapping.fromLabel(draft.paymentMethod),
+        // draft.paymentMethod хранит уже dbValue; mappings.fromDbValue
+        // прямо ему соответствует. fromLabel оставлен в коде для
+        // обратной совместимости со старыми prefs-черновиками
+        // (если у юзера в кэше остался label — мы его не парсим как
+        // dbValue, и упадём в default=cash).
+        paymentMethod: PaymentMethodMapping.fromDbValue(draft.paymentMethod),
       );
       final photoFiles = draft.photoPaths
           .map((p) => File(p))
@@ -335,11 +376,14 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       );
       if (!context.mounted) return;
       context.go('/home/my');
-    } catch (_) {
-      // При ошибке остаёмся на экране, показываем тост. Никаких
-      // «фантомных» fallback-создаваний через appController.createOrder.
+    } catch (e) {
+      // При ошибке остаёмся на экране, показываем юзеру конкретику
+      // через humanizeBackendError — лимиты публикаций, city_mismatch,
+      // размер фото, нет сети — всё переводится в дружелюбный русский.
+      // До этого тут был обычный «Не удалось создать заказ» без
+      // подсказки, что именно сломалось.
       if (!context.mounted) return;
-      AppToast.show(context, 'Не удалось создать заказ. Попробуйте позже.');
+      AppToast.show(context, humanizeBackendError(e));
     } finally {
       if (mounted) setState(() => _isPublishing = false);
     }
@@ -370,7 +414,7 @@ class _PublishButton extends StatelessWidget {
               width: 22.r,
               height: 22.r,
               child: const CircularProgressIndicator(
-                color: Colors.white,
+                color: AppColors.surface,
                 strokeWidth: 2.5,
               ),
             ),
@@ -431,13 +475,17 @@ class _OrderCreatedDialog extends StatelessWidget {
                   onTap: () => Navigator.of(context).pop(),
                   child: SizedBox(
                     width: double.infinity,
-                    height: 36.h,
+                    // 48dp — стандартный минимум touch-target.
+                    height: 48.h,
                     child: Center(
                       child: Text(
                         'Ок',
                         textAlign: TextAlign.center,
+                        // Белый текст на синем — нормальный контраст.
+                        // Раньше тут стоял background (#F5F5F5) — серый,
+                        // плохо читался на синей кнопке.
                         style: AppText.bodyLarge(
-                          color: AppColors.background,
+                          color: AppColors.surface,
                           weight: FontWeight.w600,
                         ).copyWith(
                           height: 1.29,

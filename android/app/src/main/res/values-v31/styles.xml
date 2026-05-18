@@ -1,8 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ (API 31+) splash screen API.
+  Цель: чтобы экран до Dart-сплэша был полностью однородно синим, без
+  визуального «острова» в центре. На Android 16 система всё равно рисует
+  круглый container для иконки даже когда windowSplashScreenAnimatedIcon
+  пустой — поэтому ЯВНО задаём windowSplashScreenIconBackgroundColor
+  тем же оттенком, что и фон. Тогда круг сливается с фоном и юзер видит
+  один сплошной синий.
+-->
 <resources>
     <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
         <item name="android:windowSplashScreenBackground">@color/splash_background</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/splash_background</item>
         <item name="android:windowBackground">@drawable/launch_background</item>
     </style>
     <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">

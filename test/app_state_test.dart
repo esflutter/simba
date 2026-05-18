@@ -110,17 +110,25 @@ void main() {
       expect(found, isEmpty);
     });
 
-    test('cancelOrder does NOT delete accepted orders', () {
-      // После того как заказчик принял исполнителя, заказ удалить нельзя:
-      // исполнитель уже потратил время, должен дойти цикл до completed
-      // (markWorkDone → confirmPayment) или auto-cancel-no-show на бэке.
+    test('cancelOrder removes accepted order if cancel window still open', () {
+      // По обновлённой ТЗ-схеме «Заказчик может отказаться → Заказ исчезает»
+      // действует и после accept, пока:
+      //   - время заказа не наступило (`canCancelByCustomer == true`);
+      //   - ни одна из сторон не отметила свою часть.
+      // Раньше после accept запись была заперта до полного цикла FSM;
+      // теперь — полностью удаляется (delete на бэке, drop из state
+      // на моках).
+      //
+      // Тест берёт accepted-заказ с scheduledAt в будущем (m2 в seed:
+      // `now + 1 day, 18:30`), убеждается что окно открыто, отменяет —
+      // запись исчезает.
       final accepted = container.read(appControllerProvider).myOrders
-          .firstWhere((o) => o.status == OrderStatus.accepted);
+          .firstWhere((o) =>
+              o.status == OrderStatus.accepted && o.canCancelByCustomer());
       ctrl.cancelOrder(accepted.id);
       final stillThere = container.read(appControllerProvider).myOrders
           .where((o) => o.id == accepted.id);
-      expect(stillThere, isNotEmpty);
-      expect(stillThere.first.status, OrderStatus.accepted);
+      expect(stillThere, isEmpty);
     });
 
     test('takeOrderAsExecutor refuses to respond to own order', () {
@@ -142,21 +150,113 @@ void main() {
       }
     });
 
-    test('full flow accepted → awaitingPayment → completed', () {
+    test('full flow accepted → both sides marked → completed', () {
+      // По новой схеме `awaitingPayment` как отдельной фазы нет:
+      // заказчик и исполнитель отмечают свои части независимо.
+      // Когда обе отметки сделаны — заказ переходит в `completed`.
+      //
+      // Берём accepted-заказ, у которого ВРЕМЯ УЖЕ НАСТУПИЛО — иначе
+      // контроллер (по guard isTimeArrived) корректно отказывается
+      // отмечать заказ, у которого scheduledAt ещё в будущем.
+      // В seed это m2b: accepted, scheduledAt = now - 1 час.
       final accepted = container.read(appControllerProvider).myOrders
-          .firstWhere((o) => o.status == OrderStatus.accepted);
-      ctrl.markWorkDone(accepted.id, inMyOrders: true);
-      expect(
-        container.read(appControllerProvider).myOrders
-            .firstWhere((o) => o.id == accepted.id).status,
-        OrderStatus.awaitingPayment,
+          .firstWhere((o) =>
+              o.status == OrderStatus.accepted && o.isTimeArrived);
+
+      // Заказчик отмечает «работа выполнена».
+      ctrl.markCustomerCompleted(accepted.id);
+      final afterCustomer = container.read(appControllerProvider).myOrders
+          .firstWhere((o) => o.id == accepted.id);
+      expect(afterCustomer.isCompletedByCustomer, isTrue);
+      // Исполнитель ещё не отметил → статус остаётся accepted, completedAt null.
+      expect(afterCustomer.isCompletedByExecutor, isFalse);
+      expect(afterCustomer.status, OrderStatus.accepted);
+
+      // Исполнитель отмечает «оплата получена» → обе отметки → completed.
+      ctrl.markExecutorCompleted(accepted.id);
+      final afterExecutor = container.read(appControllerProvider).myOrders
+          .firstWhere((o) => o.id == accepted.id);
+      expect(afterExecutor.isCompletedByExecutor, isTrue);
+      expect(afterExecutor.status, OrderStatus.completed);
+    });
+
+    test('очень старые open-заказы без исполнителя пропадают из «Моих заказов»', () {
+      // Продуктовое правило: если за 30 дней с момента публикации никто
+      // не выбран в исполнители, сервер удаляет заказ ночной задачей.
+      // На клиенте порог 60 дней — защитная сетка относительно
+      // серверного дефолта (см. Order.isStaleOpenWithoutExecutor).
+      //
+      // В seed лежит m_stale (createdAt = now - 65 дней): по клиентскому
+      // порогу 60 дней он уже stale, фильтр build'а должен его убрать.
+      final raw = MockData.seedMyOrders(const LatLng(55.0, 37.0));
+      expect(raw.any((o) => o.id == 'm_stale'), isTrue,
+          reason: 'sanity: stale seed должен быть в исходных данных');
+      final filtered = container.read(appControllerProvider).myOrders;
+      expect(filtered.any((o) => o.id == 'm_stale'), isFalse,
+          reason: 'stale-заказ обязан быть отфильтрован build()-ом');
+    });
+
+    test('isStaleOpenWithoutExecutor: только open без исполнителя и старше клиентского порога', () {
+      // Сам предикат на модели — проверяем граничные случаи.
+      // 65 дней > 60-дневного клиентского порога → stale.
+      final base = Order(
+        id: 'tmp',
+        customerId: 'me',
+        categoryId: 'snow',
+        title: '',
+        description: '',
+        address: '',
+        location: const LatLng(55.0, 37.0),
+        priceRub: 100,
+        status: OrderStatus.open,
+        createdAt: DateTime.now().subtract(const Duration(days: 65)),
       );
-      ctrl.confirmPayment(accepted.id, inMyOrders: true);
-      expect(
-        container.read(appControllerProvider).myOrders
-            .firstWhere((o) => o.id == accepted.id).status,
-        OrderStatus.completed,
+      expect(base.isStaleOpenWithoutExecutor, isTrue);
+      // Только что созданный — не stale.
+      final fresh = Order(
+        id: 'tmp2',
+        customerId: 'me',
+        categoryId: 'snow',
+        title: '',
+        description: '',
+        address: '',
+        location: const LatLng(55.0, 37.0),
+        priceRub: 100,
+        status: OrderStatus.open,
+        createdAt: DateTime.now().subtract(const Duration(days: 5)),
       );
+      expect(fresh.isStaleOpenWithoutExecutor, isFalse);
+      // С выбранным исполнителем — не stale (это уже accepted-флоу).
+      final withExecutor = Order(
+        id: 'tmp3',
+        customerId: 'me',
+        categoryId: 'snow',
+        title: '',
+        description: '',
+        address: '',
+        location: const LatLng(55.0, 37.0),
+        priceRub: 100,
+        status: OrderStatus.accepted,
+        createdAt: DateTime.now().subtract(const Duration(days: 65)),
+        executorId: 'u1',
+      );
+      expect(withExecutor.isStaleOpenWithoutExecutor, isFalse);
+      // Возвращённый в ленту (relistedAt свежий) — НЕ stale, даже если
+      // createdAt далеко позади. Покрывает миграцию 028 с сервера.
+      final relisted = Order(
+        id: 'tmp4',
+        customerId: 'me',
+        categoryId: 'snow',
+        title: '',
+        description: '',
+        address: '',
+        location: const LatLng(55.0, 37.0),
+        priceRub: 100,
+        status: OrderStatus.open,
+        createdAt: DateTime.now().subtract(const Duration(days: 90)),
+        relistedAt: DateTime.now().subtract(const Duration(days: 2)),
+      );
+      expect(relisted.isStaleOpenWithoutExecutor, isFalse);
     });
 
     test('logout сбрасывает user/role, но сохраняет city и onboardingSeen', () {

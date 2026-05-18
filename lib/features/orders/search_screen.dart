@@ -24,6 +24,14 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _focus = FocusNode();
   String _query = '';
 
+  /// Кэш отфильтрованного результата для текущего запроса. Без него
+  /// каждое нажатие клавиши прогоняло where+sort по всему списку даже
+  /// при ребилдах, не связанных с _query (например, при переключении
+  /// провайдеров). Ключ собран из identity-хэша источника и фильтрующих
+  /// полей; при любом изменении пересчитываем, иначе отдаём прошлый.
+  List<Order>? _cachedResults;
+  int? _cachedKey;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +58,37 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         categoryNameOf(o).toLowerCase().contains(lq);
   }
 
+  List<Order> _buildResults({
+    required List<Order> source,
+    required String? selectedCityId,
+    required String? myId,
+    required String query,
+  }) {
+    final key = Object.hash(
+      identityHashCode(source),
+      source.length,
+      selectedCityId,
+      myId,
+      query,
+    );
+    if (_cachedKey == key && _cachedResults != null) return _cachedResults!;
+    final filtered = source
+        .where((o) =>
+            o.status == OrderStatus.open &&
+            !o.isExpiredOpen &&
+            !o.isStaleOpenWithoutExecutor &&
+            (selectedCityId == null ||
+                o.cityId == null ||
+                o.cityId == selectedCityId) &&
+            (myId == null || o.customerId != myId) &&
+            _matches(o, query))
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _cachedKey = key;
+    _cachedResults = filtered;
+    return filtered;
+  }
+
   @override
   Widget build(BuildContext context) {
     // .select — иначе каждое нажатие клавиши в поиске + любая мутация
@@ -69,19 +108,16 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           orElse: () => null,
         );
     final source = remoteFeed ?? mockOrders;
-    // Те же фильтры, что в feed_screen: open, не expired, мой город, не мой
-    // заказ. Плюс совпадение поискового запроса. Сортировка от новых к старым.
-    final results = source
-        .where((o) =>
-            o.status == OrderStatus.open &&
-            !o.isExpiredOpen &&
-            (selectedCityId == null ||
-                o.cityId == null ||
-                o.cityId == selectedCityId) &&
-            (myId == null || o.customerId != myId) &&
-            _matches(o, _query))
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    // Те же фильтры, что в ленте: open, не expired, не stale-30d, мой
+    // город, не свой. Плюс совпадение поискового запроса. Кэшируем по
+    // ключу (source, city, myId, query) — на каждое нажатие клавиши при
+    // том же остальном контексте отдаём готовый результат.
+    final results = _buildResults(
+      source: source,
+      selectedCityId: selectedCityId,
+      myId: myId,
+      query: _query,
+    );
     final hasQuery = _query.isNotEmpty;
 
     return Scaffold(
@@ -171,7 +207,7 @@ class _SearchField extends StatelessWidget {
               textInputAction: TextInputAction.search,
               maxLength: 100,
               style: TextStyle(
-                color: Colors.black,
+                color: AppColors.textPrimary,
                 fontSize: 17.sp,
                 fontWeight: FontWeight.w400,
                 height: 1.29,
@@ -219,7 +255,7 @@ class _NoResults extends StatelessWidget {
               'Нет результатов',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.black,
+                color: AppColors.textPrimary,
                 fontSize: 20.sp,
                 fontWeight: FontWeight.w600,
                 height: 1.25,

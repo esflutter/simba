@@ -53,6 +53,31 @@ void resetSharedHttpClient() {
   _sharedHttpClientOrNull = null;
 }
 
+/// Хелпер для HTTP-запросов через [sharedHttpClient] с авто-сбросом
+/// при `ClientException: Client is already closed`.
+///
+/// Сценарий, который покрывает: на iOS/Android при long sleep устройства
+/// нативный сокет в нашем `http.Client` помечается как closed, но Dart-side
+/// клиент об этом не знает. Первый запрос после wake-up валится с
+/// `ClientException`. Один раз сбрасываем кэш и повторяем.
+///
+/// Использовать вместо прямых `sharedHttpClient.post(...)` / `get(...)`.
+Future<http.Response> sendWithSharedClient(
+  Future<http.Response> Function(http.Client client) op,
+) async {
+  try {
+    return await op(sharedHttpClient);
+  } on http.ClientException catch (e) {
+    // Точный матч на текст SDK, без обращения к приватному coded полю.
+    final msg = e.message.toLowerCase();
+    if (!msg.contains('already closed') && !msg.contains('client is closed')) {
+      rethrow;
+    }
+    resetSharedHttpClient();
+    return op(sharedHttpClient);
+  }
+}
+
 /// Фабрика клиента: создаётся один раз в `main()` после `SharedPreferences.getInstance()`.
 /// Возвращает null, если URL не задан (моки).
 PocketBase? buildPocketBase(SharedPreferences prefs) {

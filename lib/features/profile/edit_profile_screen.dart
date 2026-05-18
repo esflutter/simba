@@ -8,9 +8,13 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'package:http_parser/http_parser.dart' show MediaType;
+
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/backend_error.dart';
 import '../../core/utils/image_compressor.dart';
 import '../../core/widgets/app_back_button.dart';
+import '../../core/widgets/app_network_image.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
@@ -82,7 +86,13 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       await source.copy(dst.path);
       if (!mounted) return;
       setState(() => _photoPath = dst.path);
-    } catch (_) {}
+    } catch (e) {
+      // Не глушим исключение молча — раньше пользователь не понимал,
+      // почему «Выбрать фото» ничего не открывает. Показываем тост.
+      debugPrint('[edit_profile] pickPhoto failed: $e');
+      if (!mounted) return;
+      AppToast.show(context, 'Не удалось добавить фото');
+    }
   }
 
   Future<void> _onAvatarTap() async {
@@ -122,20 +132,54 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       // Если фото — локальный путь (не URL), грузим как multipart-файл.
       // На моках просто обновляем appController (как было раньше).
       final pb = ref.read(pocketbaseProvider);
-      if (pb != null && pb.authStore.isValid) {
+      // authStore.record может оказаться null даже при isValid (после refresh
+      // без user-data или гонки logout). Без явной проверки `record!.id`
+      // ниже даст TypeError; лучше тихо пропустить sync — локальный
+      // AppController всё равно обновится через completeProfile.
+      final me = pb?.authStore.record;
+      if (pb != null && pb.authStore.isValid && me != null) {
         final photo = _photoPath;
         final hasNewPhoto = photo != null && !photo.startsWith('http');
+        // Если в исходном профиле было фото (URL с сервера), а сейчас
+        // _photoPath == null — пользователь нажал «Удалить фото». Надо
+        // явно сказать серверу очистить файл-поле, иначе PATCH без
+        // упоминания photo оставляет старое значение, и после рестарта
+        // приложения старая аватарка возвращается из PB.
+        final serverPhotoUrl =
+            ref.read(appControllerProvider).user?.photoPath ?? '';
+        final hadServerPhoto = serverPhotoUrl.startsWith('http');
+        final photoCleared = !hasNewPhoto && photo == null && hadServerPhoto;
         // PB Dart SDK при передаче files: [...] (даже пустого) собирает
         // multipart/form-data и сериализует bool как "true"/"false" — PB
         // потом отказывается записать строку в BOOLEAN-поле. Поэтому в
         // отсутствии нового фото шлём чистый JSON, а multipart используем
         // только когда реально аплоадим аватар (там bool кодируем как 1/0).
         if (hasNewPhoto) {
+          // Грузим через bytes-буфер, не stream. Поток `openRead()` в
+          // паре с PB SDK 0.22 даёт PATCH-ошибку «не удалось сохранить»:
+          // SDK при ретраях или внутреннем re-finalize пытается прочесть
+          // stream повторно, а он уже исчерпан. Для аватара (лимит 4 МБ)
+          // буфер безопаснее: тяжёлые случаи (фото заказов) обходим в
+          // orders_repository, там есть `_withAuthRetry`-ловушка.
           final bytes = await File(photo).readAsBytes();
+          // Корректный content-type важен: PB users.photo разрешает
+          // jpeg/png/webp (см. миграцию 002 + 011). По умолчанию
+          // MultipartFile.fromBytes ставит application/octet-stream —
+          // PB по нему не угадает картинку и вернёт «invalid mime type».
+          // Тип определяем по расширению файла (после ensurePhotoUnderLimit
+          // оно соответствует реальному формату — image_compressor
+          // конвертирует в jpeg при пересжатии).
+          final ext = photo.toLowerCase().split('.').last;
+          final mime = switch (ext) {
+            'png' => MediaType('image', 'png'),
+            'webp' => MediaType('image', 'webp'),
+            _ => MediaType('image', 'jpeg'),
+          };
+          final fname = 'avatar.${ext == 'jpg' ? 'jpg' : ext}';
           await pb
               .collection('users')
               .update(
-                pb.authStore.record!.id,
+                me.id,
                 body: {
                   'name': _name.text.trim(),
                   // В multipart булевы поля пишем как "1"/"0" — иначе SDK
@@ -147,22 +191,27 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                   http.MultipartFile.fromBytes(
                     'photo',
                     bytes,
-                    filename: 'avatar.jpg',
+                    filename: fname,
+                    contentType: mime,
                   ),
                 ],
               )
               .timeout(const Duration(seconds: 30));
         } else {
+          // PB-документация: чтобы очистить single-file-поле, шлём
+          // его значение как пустую строку (поведение проверено на
+          // версии 0.22 SDK). null в JSON-теле обрабатывается так же,
+          // но пустая строка надёжнее — некоторые серверы PB строго
+          // проверяют тип.
+          final body = <String, dynamic>{
+            'name': _name.text.trim(),
+            'has_tools': _hasTools,
+            'has_transport': _hasTransport,
+            if (photoCleared) 'photo': '',
+          };
           await pb
               .collection('users')
-              .update(
-                pb.authStore.record!.id,
-                body: {
-                  'name': _name.text.trim(),
-                  'has_tools': _hasTools,
-                  'has_transport': _hasTransport,
-                },
-              )
+              .update(me.id, body: body)
               .timeout(const Duration(seconds: 30));
         }
       }
@@ -175,11 +224,13 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       if (!mounted) return;
       context.pop();
     } catch (e, st) {
-      // Логируем причину — без неё toast «Не удалось сохранить» не даёт
-      // понять, что именно сломалось (миссинг-поле в схеме PB, 401, 5xx).
+      // Логируем + показываем юзеру конкретную причину через
+      // humanizeBackendError: лимиты, 401 (сессия истекла), 5xx,
+      // mime/размер фото — всё переводится в дружелюбный русский текст.
+      // До этого был просто «Не удалось сохранить» без подсказки.
       debugPrint('[edit_profile] save failed: $e\n$st');
       if (!mounted) return;
-      AppToast.show(context, 'Не удалось сохранить');
+      AppToast.show(context, humanizeBackendError(e));
     } finally {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -211,7 +262,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                       child: Text(
                         'Редактирование',
                         style: TextStyle(
-                          color: Colors.black,
+                          color: AppColors.textPrimary,
                           fontSize: 17.sp,
                           fontWeight: FontWeight.w600,
                           height: 1.29,
@@ -250,11 +301,17 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                               clipBehavior: Clip.antiAlias,
                               child: _photoPath != null
                                   ? (_photoPath!.startsWith('http')
-                                      ? Image.network(
-                                          _photoPath!,
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (_, _, _) =>
-                                              Image.asset(
+                                      // AppNetworkImage даёт disk+memory
+                                      // cache и memCacheWidth под фактический
+                                      // размер виджета — без этого аватар PB
+                                      // 1024×1024 декодился под 100r-кружок
+                                      // целиком. Размер передаём явно: cap
+                                      // считается из `width × dpr`.
+                                      ? AppNetworkImage(
+                                          url: _photoPath!,
+                                          width: 100.r,
+                                          height: 100.r,
+                                          fallback: Image.asset(
                                             'assets/images/avatar_default.webp',
                                             fit: BoxFit.contain,
                                           ),
@@ -262,6 +319,11 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
                                       : Image.file(
                                           File(_photoPath!),
                                           fit: BoxFit.cover,
+                                          // 100r-аватар на 3×-устройстве =
+                                          // 300px. Декодим именно столько,
+                                          // а не весь 1024×1024 оригинал.
+                                          cacheWidth: 300,
+                                          cacheHeight: 300,
                                           errorBuilder: (_, _, _) =>
                                               Image.asset(
                                             'assets/images/avatar_default.webp',
@@ -360,7 +422,7 @@ class _CheckRow extends StatelessWidget {
                   child: Text(
                     label,
                     style: TextStyle(
-                      color: Colors.black,
+                      color: AppColors.textPrimary,
                       fontSize: 16.sp,
                       fontWeight: FontWeight.w400,
                       height: 1.50,
@@ -398,8 +460,8 @@ class _CheckBox extends StatelessWidget {
           ? Icon(
               Icons.check_rounded,
               size: 18.r,
-              color: Colors.white,
-              shadows: const [Shadow(color: Colors.white, blurRadius: 2)],
+              color: AppColors.surface,
+              shadows: const [Shadow(color: AppColors.surface, blurRadius: 2)],
             )
           : null,
     );
@@ -415,7 +477,7 @@ class _AvatarSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppColors.surface,
         borderRadius: BorderRadius.vertical(top: Radius.circular(15.r)),
       ),
       child: SafeArea(
@@ -477,7 +539,7 @@ class _AvatarSheetItem extends StatelessWidget {
               Text(
                 label,
                 style: TextStyle(
-                  color: destructive ? AppColors.error : Colors.black,
+                  color: destructive ? AppColors.error : AppColors.textPrimary,
                   fontSize: 16.sp,
                   fontWeight: FontWeight.w500,
                   height: 1.50,
@@ -518,14 +580,14 @@ class _SaveButton extends StatelessWidget {
                     width: 22.r,
                     height: 22.r,
                     child: const CircularProgressIndicator(
-                      color: Colors.white,
+                      color: AppColors.surface,
                       strokeWidth: 2.5,
                     ),
                   )
                 : Text(
                     'Сохранить',
                     style: TextStyle(
-                      color: enabled ? Colors.white : const Color(0x4C3C3C43),
+                      color: enabled ? AppColors.surface : const Color(0x4C3C3C43),
                       fontSize: 17.sp,
                       fontWeight:
                           enabled ? FontWeight.w600 : FontWeight.w400,

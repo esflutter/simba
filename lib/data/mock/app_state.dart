@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:pocketbase/pocketbase.dart' show PocketBase;
 
 import '../../core/config/env.dart';
 import '../../features/create_order/order_draft.dart';
@@ -11,6 +13,13 @@ import '../local/preferences_store.dart';
 import '../models/models.dart';
 import '../remote/pocketbase_client.dart';
 import 'mock_data.dart';
+
+/// Sentinel для nullable-полей в [AppState.copyWith]. Передача `null`
+/// явно (`copyWith(user: null)`) раньше игнорировалась через `?? this.user`
+/// — нельзя было обнулить поле через copyWith, приходилось собирать новый
+/// AppState вручную (как в `logout`). Теперь: пропущенный аргумент
+/// оставляет старое значение, явный `null` — стирает.
+const _appStateSentinel = Object();
 
 @immutable
 class AppState {
@@ -45,23 +54,27 @@ class AppState {
       );
 
   AppState copyWith({
-    AppUser? user,
+    Object? user = _appStateSentinel,
     UserRole? role,
     List<Order>? orders,
     List<Order>? myOrders,
     List<Review>? reviews,
-    String? selectedCityId,
+    Object? selectedCityId = _appStateSentinel,
     bool? executorActive,
     double? searchRadiusKm,
     bool? onboardingSeen,
   }) =>
       AppState(
-        user: user ?? this.user,
+        user: identical(user, _appStateSentinel)
+            ? this.user
+            : user as AppUser?,
         role: role ?? this.role,
         orders: orders ?? this.orders,
         myOrders: myOrders ?? this.myOrders,
         reviews: reviews ?? this.reviews,
-        selectedCityId: selectedCityId ?? this.selectedCityId,
+        selectedCityId: identical(selectedCityId, _appStateSentinel)
+            ? this.selectedCityId
+            : selectedCityId as String?,
         executorActive: executorActive ?? this.executorActive,
         searchRadiusKm: searchRadiusKm ?? this.searchRadiusKm,
         onboardingSeen: onboardingSeen ?? this.onboardingSeen,
@@ -121,20 +134,44 @@ class AppController extends Notifier<AppState> {
     }
   }
 
-  /// Отбрасывает «размещённые» заказы, у которых истекла назначенная дата
-  /// и так и не нашёлся исполнитель — они автоматически удаляются.
-  List<Order> _withoutExpiredOpen(List<Order> orders) =>
-      orders.where((o) => !o.isExpiredOpen).toList();
+  /// Отбрасывает «размещённые» заказы, которые должны исчезнуть:
+  ///   1) назначенная дата уже прошла, а исполнитель так и не выбран
+  ///      ([Order.isExpiredOpen]);
+  ///   2) с момента публикации прошло 30 дней, исполнитель не выбран
+  ///      ([Order.isStaleOpenWithoutExecutor]) — продуктовое правило:
+  ///      такие заказы удаляются целиком, без следа.
+  /// На бэке физическим удалением занимается крон-задача; здесь —
+  /// клиентская сетка безопасности, чтобы протухший заказ не «всплыл»
+  /// в ленте на устройстве, которое давно не открывали.
+  List<Order> _withoutExpiredOpen(List<Order> orders) => orders
+      .where((o) => !o.isExpiredOpen && !o.isStaleOpenWithoutExecutor)
+      .toList();
 
   /// Идентификатор города, который ждёт синка с бэком. Пока он не null,
   /// `_consumeAuthEnvelope` НЕ перезатирает selectedCityId из record —
   /// иначе fire-and-forget PATCH мог быть перезаписан ответом authRefresh,
   /// прилетевшим раньше, чем дойдёт сам PATCH.
+  ///
+  /// `_citySyncSeq` — счётчик, который растёт при каждом setCity. Когда
+  /// приходит ответ от PATCH, он сбрасывает `_pendingCitySync` только если
+  /// его seq совпадает с текущим. Без счётчика три быстрых переключения
+  /// порождали три fire-and-forget запроса, и поздний (с устаревшим city)
+  /// мог стереть pending‑флаг для последующего PATCH.
+  ///
+  /// Публичный getter [pendingCitySync] читает `auth_repository`, чтобы
+  /// при `_consumeAuthEnvelope` не перетереть `selectedCityId` тем
+  /// значением, которое прилетит из authRefresh раньше, чем дойдёт PATCH.
   String? _pendingCitySync;
   String? get pendingCitySync => _pendingCitySync;
+  int _citySyncSeq = 0;
 
   void setCity(String id) {
     final prevCity = state.selectedCityId;
+    // Short-circuit: тот же город — не пересоздаём seed моков и не шлём
+    // лишний PATCH. До этого тап на свой же текущий город обнулял
+    // моковую myOrders на дефолтный seed и слал бесполезный запрос.
+    if (prevCity == id) return;
+
     final c = MockData.cities.firstWhere((c) => c.id == id);
     state = state.copyWith(
       selectedCityId: id,
@@ -149,7 +186,7 @@ class AppController extends Notifier<AppState> {
     // юзер вводил адрес в Москве, переключал город на Питер и упирался
     // на summary в city-guard «адрес не в вашем городе» — после того,
     // как уже прошёл весь wizard. Тут сбрасываем рано.
-    if (prevCity != null && prevCity.isNotEmpty && prevCity != id) {
+    if (prevCity != null && prevCity.isNotEmpty) {
       try {
         ref.read(orderDraftProvider.notifier).clearAddress();
       } catch (_) {
@@ -160,24 +197,25 @@ class AppController extends Notifier<AppState> {
     // Live-режим: PATCH users.city → источник правды на бэке. Помечаем
     // city как «в полёте», чтобы _consumeAuthEnvelope не сбросил локальный
     // выбор, если до завершения PATCH прилетит authRefresh со старым city.
-    // По завершении (успех или ошибка) — снимаем флаг.
+    // По завершении (успех или ошибка) — снимаем флаг ТОЛЬКО если это
+    // ответ на последний выпущенный запрос (по seq), иначе ранние
+    // ответы стирали бы pending-state ещё-в-пути запросов.
     if (Env.hasPocketbase) {
       try {
         final pb = ref.read(pocketbaseProvider);
-        if (pb != null &&
-            pb.authStore.isValid &&
-            pb.authStore.record != null) {
+        final me = pb?.authStore.record;
+        if (pb != null && pb.authStore.isValid && me != null) {
+          final mySeq = ++_citySyncSeq;
           _pendingCitySync = id;
+          void clearIfLatest() {
+            if (_citySyncSeq == mySeq) _pendingCitySync = null;
+          }
           pb
               .collection('users')
-              .update(pb.authStore.record!.id, body: {'city': id})
-              .then((_) {
-            if (_pendingCitySync == id) _pendingCitySync = null;
-          })
+              .update(me.id, body: {'city': id})
+              .then((_) => clearIfLatest())
               // ignore: body_might_complete_normally_catch_error
-              .catchError((_) {
-            if (_pendingCitySync == id) _pendingCitySync = null;
-          });
+              .catchError((_) => clearIfLatest());
         }
       } catch (_) {
         // ref.read may throw in tests without PB override — игнор.
@@ -215,7 +253,7 @@ class AppController extends Notifier<AppState> {
     final u = state.user;
     if (u == null) return;
     final updated = u.copyWith(
-      name: name.trim().isEmpty ? 'Пользователь' : name,
+      name: name.trim().isEmpty ? 'Без имени' : name,
       photoPath: photoPath,
       hasTools: hasTools,
       hasTransport: hasTransport,
@@ -243,8 +281,17 @@ class AppController extends Notifier<AppState> {
   /// запрашивает текущие координаты через geolocator (без блокировки UI),
   /// и шлёт их вместе с флагом.
   void _syncExecutorStatus(bool isActive) {
-    final pb = ref.read(pocketbaseProvider);
-    if (pb == null) return;
+    final PocketBase pb;
+    try {
+      final maybe = ref.read(pocketbaseProvider);
+      if (maybe == null) return;
+      pb = maybe;
+    } catch (_) {
+      // `pocketbaseProvider` бросает UnimplementedError, если контейнер
+      // не переопределил его (unit-тесты). В этом случае sync некуда
+      // отсылать — просто ничего не делаем.
+      return;
+    }
     () async {
       double? lat;
       double? lng;
@@ -264,21 +311,33 @@ class AppController extends Notifier<AppState> {
           }
         } catch (_) {/* нет permission или таймаут — шлём без координат */}
       }
+      // Пока ловили GPS, юзер мог сделать logout — токен уже пуст и сервер
+      // ответит 401, засоряя логи. Перепроверяем `isValid` прямо перед
+      // запросом, а не только при входе в функцию.
+      if (!pb.authStore.isValid || pb.authStore.token.isEmpty) return;
       try {
-        await sharedHttpClient.post(
-          Uri.parse('${pb.baseURL}/api/me/executor-status'),
-          headers: {
-            'Authorization': pb.authStore.token,
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({
-            'is_active': isActive,
-            // ignore: use_null_aware_elements
-            if (lat != null) 'lat': lat,
-            // ignore: use_null_aware_elements
-            if (lng != null) 'lng': lng,
-          }),
-        );
+        await sharedHttpClient
+            .post(
+              Uri.parse('${pb.baseURL}/api/me/executor-status'),
+              headers: {
+                // Bearer-префикс обязателен: без него PB 0.22+ трактует
+                // запрос как анонимный, флаг is_active_executor никогда
+                // не апдейтится. Симметрично исправлено в auth_repository.
+                'Authorization': 'Bearer ${pb.authStore.token}',
+                'Content-Type': 'application/json',
+              },
+              body: jsonEncode({
+                'is_active': isActive,
+                // ignore: use_null_aware_elements
+                if (lat != null) 'lat': lat,
+                // ignore: use_null_aware_elements
+                if (lng != null) 'lng': lng,
+              }),
+            )
+            // Без таймаута запрос на медленной сети висит до системного
+            // таймаута сокета (60+ сек). При быстром переключении роли
+            // в фоне копились зависшие запросы, забивающие HTTP-клиент.
+            .timeout(const Duration(seconds: 10));
       } catch (e) {
         debugPrint('[executor-status] sync failed: $e');
       }
@@ -294,28 +353,44 @@ class AppController extends Notifier<AppState> {
   }
 
   void cancelOrder(String id) {
-    // Удалить (= отменить «без следа») можно ТОЛЬКО размещённый заказ.
-    // После того как заказчик принял исполнителя, заказ остаётся в системе
-    // до завершения цикла FSM (markWorkDone → confirmPayment → completed)
-    // или до автоматического закрытия по no-show через cron.
+    // Отмена заказа заказчиком = полное удаление записи. По ТЗ-схеме:
+    // «Заказчик может отказаться → Заказ исчезает» (без оговорок про
+    // статус — и до accept, и после). На live это `delete` на бэке;
+    // соответствующее правило `deleteRule` должно покрывать `open` +
+    // `accepted` (пока стороны не отметили свою часть).
     final target = state.myOrders.where((o) => o.id == id).toList();
     if (target.isEmpty) return;
-    if (target.first.status != OrderStatus.open) return;
+    final o = target.first;
+    final canDelete = o.status == OrderStatus.open ||
+        (o.status == OrderStatus.accepted && o.canCancelByCustomer());
+    if (!canDelete) return;
     state = state.copyWith(
-      myOrders: state.myOrders.where((o) => o.id != id).toList(),
+      myOrders: state.myOrders.where((x) => x.id != id).toList(),
     );
   }
 
   void acceptResponse(String orderId, String executorId) {
     state = state.copyWith(
       myOrders: state.myOrders
-          .map((o) => o.id == orderId
-              ? o.copyWith(
-                  executorId: executorId,
-                  status: OrderStatus.accepted,
-                  responses: [executorId],
-                )
-              : o)
+          .map((o) {
+            if (o.id != orderId) return o;
+            // Сохраняем ВСЕ отклики, не схлопываем в [executorId]: если
+            // принятый исполнитель потом откажется (`releaseOrderAsExecutor`),
+            // мы возвращаем заказ в open с прежними кандидатами. На бэке
+            // это отдельная коллекция order_responses со статусами — она
+            // не теряется. До этого мок отбрасывал чужие отклики, и
+            // поведение mock vs live расходилось.
+            //
+            // Гарантируем, что executorId есть в списке: вдруг его там
+            // не было (например, на старте теста). Дубль исключаем через
+            // toSet → list (порядок не важен — UI сортирует/группирует).
+            final newResponses = {...o.responses, executorId}.toList();
+            return o.copyWith(
+              executorId: executorId,
+              status: OrderStatus.accepted,
+              responses: newResponses,
+            );
+          })
           .toList(),
     );
   }
@@ -354,14 +429,28 @@ class AppController extends Notifier<AppState> {
   }
 
   /// Исполнитель отказывается от принятого заказа — заказ возвращается в
-  /// ленту со статусом open и сброшенным executor. На моках сценарий почти
-  /// гипотетический (моковая лента не показывает accepted чужих заказов),
-  /// но логика симметрична `takeOrderAsExecutor` ради консистентности
-  /// FSM в офлайн-демо.
+  /// ленту со статусом open и сброшенным executor. Чужие отклики
+  /// сохраняются (теперь acceptResponse не схлопывает список); удаляем
+  /// только свой ('me'), чтобы при возврате в ленту его карточка не
+  /// показывала «уже откликнулся».
+  ///
+  /// На бэке этим занимается hook accepted→open в main.pb.js: он
+  /// возвращает declined-отклики в pending и ставит relisted_at = now
+  /// (миграция 028) — сбрасывает 30-дневный счётчик авто-удаления.
+  /// На моках relistedAt не выставляем — нет таймера, который от него
+  /// зависит, а тесты не покрывают цикл «accept → release → автоудаление».
   void releaseOrderAsExecutor(String orderId) {
     state = state.copyWith(
       orders: state.orders.map((o) {
         if (o.id != orderId) return o;
+        // Guard: только `accepted` без отметок — иначе ничего не делаем.
+        // UI скрывает кнопку через `Order.canCancelByExecutor()`, но
+        // защитный гард не повредит против гонок / тестов.
+        if (o.status != OrderStatus.accepted ||
+            o.workConfirmedAt != null ||
+            o.paymentReceivedAt != null) {
+          return o;
+        }
         return o.copyWith(
           status: OrderStatus.open,
           executorId: null,
@@ -371,20 +460,64 @@ class AppController extends Notifier<AppState> {
     );
   }
 
-  void markWorkDone(String orderId, {required bool inMyOrders}) {
-    if (inMyOrders) {
-      state = state.copyWith(
-        myOrders: state.myOrders
-            .map((o) => o.id == orderId ? o.copyWith(status: OrderStatus.awaitingPayment) : o)
-            .toList(),
-      );
-    } else {
-      state = state.copyWith(
-        orders: state.orders
-            .map((o) => o.id == orderId ? o.copyWith(status: OrderStatus.awaitingPayment) : o)
-            .toList(),
+  /// Заказчик отмечает «работа выполнена». На моках ставим
+  /// `workConfirmedAt = now`. Если исполнитель уже отметил свою часть
+  /// (`paymentReceivedAt != null`) — заказ переходит в `completed`.
+  /// Реализует левую ветвь правой части схемы ТЗ («Заказчик может
+  /// отметить, что работа выполнена → в историю заказчика»).
+  ///
+  /// На live этим занимается серверный hook (по факту трёх timestamps).
+  void markCustomerCompleted(String orderId) =>
+      _applyCompletionMark(orderId, isCustomer: true);
+
+  /// Исполнитель отмечает «оплата получена». Симметрично
+  /// [markCustomerCompleted]: если заказчик уже отметил свою часть —
+  /// заказ переходит в `completed`.
+  void markExecutorCompleted(String orderId) =>
+      _applyCompletionMark(orderId, isCustomer: false);
+
+  /// Общая реализация для обеих сторон. Раньше была копипаста на 60 строк
+  /// с одинаковой логикой; разница только в том, какой timestamp ставится
+  /// и каким сравнением проверяется «другая сторона уже отметила».
+  /// Обновляем И `myOrders`, И `orders` — один и тот же заказ ID
+  /// присутствует ровно в одной коллекции (по реальной схеме), но
+  /// прохождение по обеим коллекциям дешевле, чем гадать, в какой он.
+  ///
+  /// Guard'ы:
+  ///   1. Только `accepted` — отметить уже завершённый / отменённый /
+  ///      открытый заказ нельзя.
+  ///   2. Время заказа уже наступило (`isTimeArrived`). По ТЗ — кнопки
+  ///      «Отметить ...» доступны только ПОСЛЕ scheduledAt. UI это
+  ///      уже скрывает, но контроллер не должен полагаться на UI:
+  ///      прямой вызов из теста / в гонке должен отвалиться.
+  void _applyCompletionMark(String orderId, {required bool isCustomer}) {
+    final now = DateTime.now();
+    Order patch(Order o) {
+      if (o.id != orderId) return o;
+      if (o.status != OrderStatus.accepted) return o;
+      if (!o.isTimeArrived) return o;
+      // Уже отмечено этой стороной — идемпотентный no-op, не перетираем
+      // первоначальный timestamp.
+      final mySideAlready = isCustomer
+          ? o.workConfirmedAt != null
+          : o.paymentReceivedAt != null;
+      if (mySideAlready) return o;
+      final otherSideAt =
+          isCustomer ? o.paymentReceivedAt : o.workConfirmedAt;
+      final bothDone = otherSideAt != null;
+      return o.copyWith(
+        workConfirmedAt: isCustomer ? now : o.workConfirmedAt,
+        paymentReceivedAt: isCustomer ? o.paymentReceivedAt : now,
+        workDoneAt: o.workDoneAt ?? now,
+        status: bothDone ? OrderStatus.completed : o.status,
+        completedAt: bothDone ? now : o.completedAt,
       );
     }
+
+    state = state.copyWith(
+      myOrders: state.myOrders.map(patch).toList(),
+      orders: state.orders.map(patch).toList(),
+    );
   }
 
   /// Сохранить отзыв «от меня» о другом участнике заказа.
@@ -396,7 +529,7 @@ class AppController extends Notifier<AppState> {
     required List<String> tags,
   }) {
     final review = Review(
-      id: 'r_${DateTime.now().microsecondsSinceEpoch}',
+      id: _generateMockId('r'),
       fromUserId: 'me',
       toUserId: toUserId,
       orderId: orderId,
@@ -408,21 +541,17 @@ class AppController extends Notifier<AppState> {
     state = state.copyWith(reviews: [review, ...state.reviews]);
   }
 
-  void confirmPayment(String orderId, {required bool inMyOrders}) {
-    if (inMyOrders) {
-      state = state.copyWith(
-        myOrders: state.myOrders
-            .map((o) => o.id == orderId ? o.copyWith(status: OrderStatus.completed) : o)
-            .toList(),
-      );
-    } else {
-      state = state.copyWith(
-        orders: state.orders
-            .map((o) => o.id == orderId ? o.copyWith(status: OrderStatus.completed) : o)
-            .toList(),
-      );
-    }
+  /// Генерация ID для мок-сущности: epoch-микросекунды + 32 бита random.
+  /// Раньше использовался только `microsecondsSinceEpoch` — теоретически
+  /// два события в одной микросекунде давали бы одинаковый id (особенно
+  /// в автотестах с быстрыми тапами или Future.wait).
+  String _generateMockId(String prefix) {
+    final ts = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final rnd = _idRandom.nextInt(1 << 32).toRadixString(36);
+    return '${prefix}_${ts}_$rnd';
   }
+
+  static final Random _idRandom = Random();
 
   void logout() {
     // При logout сохраняем cityId и onboardingSeen — это устройство-локальные
@@ -451,6 +580,16 @@ class AppController extends Notifier<AppState> {
     );
     _prefs?.clearUser();
     _prefs?.setRole(UserRole.customer);
+    // Чистим черновик создания заказа: иначе адрес/категория/фото из
+    // прошлой сессии (потенциально с PII — для-кого телефон, фото)
+    // подтянутся в новом юзере на этом устройстве. AuthRepository.logout()
+    // делает то же самое для live-режима через провайдер — мы дублируем
+    // для мок-режима, где auth_repository.logout не вызывается.
+    try {
+      ref.read(orderDraftProvider.notifier).reset();
+    } catch (_) {
+      // ok если provider не зарегистрирован в текущем scope (юнит-тесты).
+    }
   }
 }
 

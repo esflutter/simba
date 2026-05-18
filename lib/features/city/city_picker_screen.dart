@@ -16,7 +16,6 @@ import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/cities_repository.dart';
 import '../../data/remote/pocketbase_client.dart';
-import '../create_order/order_draft.dart';
 
 // Города-миллионники России по убыванию населения.
 // TODO(P2): после миграции переехать на флаг `is_million_plus` в коллекции
@@ -255,17 +254,11 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                         null;
                                     // Режим смены города (юзер уже создан) —
                                     // сохраняем выбор и сразу возвращаемся.
-                                    // Адресные поля draft'а (адрес, координаты,
-                                    // FIAS) сбрасываем — они привязаны к старому
-                                    // городу. Иначе при следующем заходе в
-                                    // /create заказчик упрётся в гард «адрес не
-                                    // в вашем городе» только на summary, уже
-                                    // заполнив форму.
+                                    // `setCity` сам сбрасывает адресные поля
+                                    // draft'а через `orderDraftProvider.notifier.clearAddress()`
+                                    // — здесь повторный вызов не нужен.
                                     if (hasUser) {
                                       ctrl.setCity(c.id);
-                                      ref
-                                          .read(orderDraftProvider.notifier)
-                                          .clearAddress();
                                       context.pop();
                                       return;
                                     }
@@ -416,7 +409,7 @@ class _NoCityFound extends StatelessWidget {
             'Города пока нет в списке',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: Colors.black,
+              color: AppColors.textPrimary,
               fontSize: 20.sp,
               fontWeight: FontWeight.w600,
               height: 1.25,

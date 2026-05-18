@@ -9,6 +9,30 @@ class MockData {
 
   static final Random _rng = Random();
 
+  /// Возвращает город из [cities], в чьём радиусе [City.boundsRadiusKm]
+  /// лежит точка [position]. Если позиция попадает сразу в несколько
+  /// городов (агломерация, перекрытие радиусов) — возвращается ближайший.
+  /// Если ни один не подходит — `null` (пользователь не в одном из
+  /// поддерживаемых миллионников).
+  ///
+  /// Используется для авто-смены города по фактическим координатам:
+  /// например, юзер в Москве переключается в режим исполнителя — мы
+  /// предлагаем сменить выбранный город, если он сейчас другой.
+  static City? nearestCityFor(LatLng position) {
+    const distance = Distance();
+    City? best;
+    double? bestKm;
+    for (final c in cities) {
+      final km = distance.as(LengthUnit.Kilometer, position, c.center);
+      if (km > c.boundsRadiusKm) continue;
+      if (bestKm == null || km < bestKm) {
+        best = c;
+        bestKm = km;
+      }
+    }
+    return best;
+  }
+
   /// Уникальный ID заказа на стороне клиента до подключения бэкенда.
   /// epoch + 64-битный random — коллизии практически невозможны даже
   /// при одновременных публикациях из тестовой автоматизации.
@@ -188,6 +212,26 @@ class MockData {
         asap: false,
         executorId: 'u1',
       ),
+      // Accepted-заказ, у которого время УЖЕ наступило, но ни одна сторона
+      // ещё не отметилась. В этой фазе:
+      //   - заказчик НЕ может отменить (`canCancelByCustomer` → false);
+      //   - обе стороны могут «Отметить ...» (контроллер пускает только
+      //     если isTimeArrived). Покрывает full-flow тест в app_state_test.
+      Order(
+        id: 'm2b',
+        customerId: 'me',
+        categoryId: 'delivery',
+        title: 'Передать ключи',
+        description: 'Курьер заберёт от консьержа.',
+        address: 'ул. Подгорная, 4',
+        location: LatLng(cityCenter.latitude - 0.003, cityCenter.longitude + 0.006),
+        priceRub: 500,
+        status: OrderStatus.accepted,
+        createdAt: now.subtract(const Duration(hours: 4)),
+        scheduledAt: now.subtract(const Duration(hours: 1)),
+        asap: false,
+        executorId: 'u1',
+      ),
       Order(
         id: 'm3',
         customerId: 'me',
@@ -231,6 +275,24 @@ class MockData {
         scheduledAt: DateTime(now.year, now.month, now.day, 14, 0)
             .add(const Duration(days: 7)),
         asap: false,
+      ),
+      // Заказ, который висит без откликов 65 дней — по продукту такие
+      // удаляются полностью (на бэке — крон delete-stale-open-orders).
+      // На клиенте порог 60 дней (защитная сетка относительно
+      // серверного дефолта 30); seed взят с запасом, чтобы тест
+      // фильтра `isStaleOpenWithoutExecutor` срабатывал стабильно даже
+      // если в будущем клиентский порог чуть подвинется.
+      Order(
+        id: 'm_stale',
+        customerId: 'me',
+        categoryId: 'snow',
+        title: 'Старый заказ без откликов',
+        description: 'Никто не откликнулся, должен исчезнуть.',
+        address: 'ул. Пушкина, 1',
+        location: LatLng(cityCenter.latitude + 0.020, cityCenter.longitude + 0.020),
+        priceRub: 1500,
+        status: OrderStatus.open,
+        createdAt: now.subtract(const Duration(days: 65)),
       ),
       Order(
         id: 'm6',

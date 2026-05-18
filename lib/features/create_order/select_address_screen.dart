@@ -53,6 +53,12 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
   // Растущий счётчик: каждый новый запрос увеличивает _suggestSeq, и колбэк
   // ответа сравнивает свой mySeq с текущим — устаревшие ответы отбрасываются.
   int _suggestSeq = 0;
+
+  /// Аналогичный счётчик для reverse-geocode в [_onMapTap]. При быстрых
+  /// двух тапах по карте ответы DaData могут прийти в произвольном порядке —
+  /// поздний ответ затирал результат раннего и UI показывал адрес другой
+  /// точки. Поздний обработчик игнорируется, если `mySeq != _mapTapSeq`.
+  int _mapTapSeq = 0;
   final Map<String, List<AddressSuggestion>> _suggestCache = {};
   final List<String> _suggestCacheOrder = []; // LRU-порядок (head = oldest)
   static const int _kMaxCacheEntries = 50;
@@ -80,12 +86,13 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
           _ctrl.text = draft.address;
           _selectedSuggestion = null; // ранее сохранённый адрес — без свежей подсказки
         });
-      } else if (_ctrl.text.isEmpty && _selectedPoint == null) {
-        // UX-совместимость с HEAD: стартовая подпись поля.
-        setState(() {
-          _ctrl.text = 'Местоположение пользователя';
-        });
       }
+      // Раньше при пустом поле автоматически проставлялся литерал
+      // «Местоположение пользователя» — это выглядит как настоящий
+      // адрес, если юзер не очистит, в драфт уходила эта строка как
+      // адрес и в публикации висело «Местоположение пользователя».
+      // Теперь оставляем поле пустым, hint «Введите адрес или выберите
+      // на карте» сам по себе достаточно понятен.
     });
     // В приоритете — фактическое местоположение пользователя. Берём только
     // уже закэшированный fix, без запроса разрешения: если permission
@@ -256,6 +263,11 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     final prevSuggestion = _selectedSuggestion;
     final prevText = _ctrl.text;
 
+    // Race-protection. До seq-счётчика при двух быстрых тапах поздний
+    // ответ DaData затирал точку, выбранную вторым тапом, координатами
+    // первого. Теперь устаревший ответ просто отбрасывается.
+    final mySeq = ++_mapTapSeq;
+
     setState(() {
       _selectedPoint = point;
       _selectedAddress = 'Точка на карте';
@@ -267,7 +279,9 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     // Phase 2 — DaData reverse-geocode для точной FIAS-сверки.
     // Параллельно даёт красивый текст адреса для UI.
     final result = await ref.read(dadataClientProvider).geolocate(point);
-    if (!mounted) return;
+    // Опоздавший ответ для уже отменённого тапа — игнорируем целиком,
+    // даже если бы он был успешным: позже его перепишет актуальный.
+    if (mySeq != _mapTapSeq || !mounted) return;
 
     // Fail-closed: НЕТ FIAS → нет адреса. DaData не вернула ничего (сеть/лес/
     // пустырь) или вернула без cityFiasId — откатываем выбор маркера и просим
@@ -664,7 +678,7 @@ class _SearchFieldState extends State<_SearchField> {
         child: Row(
           children: [
             Icon(IconsaxPlusLinear.search_normal_1,
-                size: 24.r, color: Colors.black),
+                size: 24.r, color: AppColors.textPrimary),
             SizedBox(width: 16.w),
             Expanded(
               child: TextField(

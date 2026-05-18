@@ -65,7 +65,47 @@ String _mapBackendMessage(String msg) {
     case 'rate_limit_day':
       return 'Слишком частые запросы. Попробуйте позже';
   }
-  // Уже на русском — возвращаем как есть. На бэке кастомные ошибки FSM/лимитов
-  // (например «Лимит активных откликов: 10 исчерпан») рисуются по-русски.
+  // Стандартные английские сообщения PocketBase — переводим.
+  // PB шлёт их как `data.message` в строго определённой форме, тех же
+  // строк ждут и пользовательские сценарии в админке.
+  final lower = msg.toLowerCase();
+  if (lower.startsWith('failed to update record') ||
+      lower.startsWith('failed to update the record')) {
+    return 'Не удалось сохранить изменения';
+  }
+  if (lower.startsWith('failed to create record')) {
+    return 'Не удалось создать запись';
+  }
+  if (lower.startsWith('failed to delete record')) {
+    return 'Не удалось удалить запись';
+  }
+  if (lower.contains('failed to upload') || lower.contains('upload all files')) {
+    return 'Не удалось загрузить файл';
+  }
+  if (lower.contains('invalid mime type') ||
+      lower.contains('the submitted file is invalid') ||
+      lower.contains('unsupported file type')) {
+    return 'Формат файла не поддерживается';
+  }
+  if (lower.contains('exceeds the maximum allowed file size') ||
+      lower.contains('file size is too large') ||
+      lower.contains('size limit')) {
+    return 'Файл слишком большой';
+  }
+  if (lower.contains('the request requires valid record authorization') ||
+      lower.contains('admin authorization required') ||
+      lower.contains('not authenticated') ||
+      lower == 'missing or invalid auth') {
+    return 'Сессия истекла, войдите заново';
+  }
+  if (lower.contains("you are not allowed") ||
+      lower.contains('forbidden') ||
+      lower.contains('action is forbidden')) {
+    return 'Действие недоступно';
+  }
+  // Уже на русском (наши кастомные FSM/лимиты «Лимит активных откликов:
+  // 10 исчерпан» и т.п.) — возвращаем как есть. Английский без перевода
+  // тоже возвращаем, но это исключительный кейс — лучше неаккуратный
+  // текст, чем глухой «Ошибка».
   return msg;
 }

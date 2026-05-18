@@ -84,26 +84,38 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
             (asyncExec.isLoading && !asyncExec.hasValue);
     final myId = myUserId ?? 'me';
     final myOrders = remoteOrders ?? mockMyOrders;
-    // mine — заказы, где Я ЗАКАЗЧИК (customerId == myId). Раньше фильтр был
-    // только по статусу, а myOrdersStreamProvider в live-режиме возвращает
-    // заказы и customer-, и executor-стороны (один запрос с OR). Без явной
-    // проверки customer'а заказы попадали в обе вкладки одновременно.
+    // mine — заказы, где Я ЗАКАЗЧИК (customerId == myId). По новой схеме
+    // (без awaitingPayment как отдельной ветки) заказ остаётся в «активных»
+    // у заказчика, пока он сам не отметил «работа выполнена» и заказ не
+    // отменён. Симметрично для исполнителя — по isCompletedByExecutor.
+    //
+    // Раньше фильтр был только по статусу. myOrdersStreamProvider в
+    // live-режиме возвращает заказы и customer-, и executor-стороны (один
+    // запрос с OR). Без явной проверки customer'а заказы попадали в обе
+    // вкладки одновременно.
     final mine = myOrders
         .where((o) =>
             o.customerId == myId &&
             !o.isExpiredOpen &&
-            (o.status == OrderStatus.open ||
-                o.status == OrderStatus.accepted ||
-                o.status == OrderStatus.awaitingPayment))
+            // Заказы, провисевшие 30 дней без исполнителя, по продукту
+            // удаляются полностью — прячем их и в «Моих заказах», чтобы
+            // заказчик не видел призрак протухшего заказа.
+            !o.isStaleOpenWithoutExecutor &&
+            o.status != OrderStatus.cancelled &&
+            !o.isCompletedByCustomer)
         .toList();
-    // asExecutor — заказы, в которых я исполнитель (accepted/awaitingPayment).
+    // asExecutor — заказы, в которых я исполнитель и я ещё не отметил
+    // оплату полученной.
     final asExecutor = (remoteExecutor ??
             mockOrders
                 .where((o) =>
                     o.executorId == myId &&
+                    o.status != OrderStatus.cancelled &&
+                    !o.isCompletedByExecutor &&
                     (o.status == OrderStatus.accepted ||
                         o.status == OrderStatus.awaitingPayment))
                 .toList())
+        .where((o) => !o.isCompletedByExecutor)
         .toList();
 
     // _tab кэшируется на StatefulWidget, но _defaultTab выбирает по
@@ -262,7 +274,7 @@ class _Segment extends StatelessWidget {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         decoration: BoxDecoration(
-          color: active ? Colors.white : Colors.transparent,
+          color: active ? AppColors.surface : Colors.transparent,
           borderRadius: BorderRadius.circular(7.r),
           border: active
               ? Border.all(
@@ -289,7 +301,7 @@ class _Segment extends StatelessWidget {
           child: Text(
             label,
             style: TextStyle(
-              color: active ? AppColors.primary : Colors.black,
+              color: active ? AppColors.primary : AppColors.textPrimary,
               fontSize: 13.sp,
               fontWeight: active ? FontWeight.w600 : FontWeight.w400,
               height: 1.38,

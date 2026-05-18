@@ -64,5 +64,26 @@
             <action android:name="android.intent.action.DIAL"/>
             <data android:scheme="tel"/>
         </intent>
+        <!-- Deeplinks мессенджеров: нужны для canLaunchUrl/launchUrl
+             через url_launcher. Без них на Android 11+ canLaunchUrl
+             вернёт false, и наш fallback на https-ссылку не сработает. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="whatsapp"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="tg"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="max"/>
+        </intent>
+        <!-- Известные package-имена клиентов — для visibility в Android 11+. -->
+        <package android:name="com.whatsapp"/>
+        <package android:name="com.whatsapp.w4b"/>
+        <package android:name="org.telegram.messenger"/>
+        <package android:name="org.telegram.messenger.web"/>
+        <package android:name="ru.oneme.app"/>
     </queries>
 </manifest>

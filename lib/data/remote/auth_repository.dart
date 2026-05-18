@@ -399,7 +399,13 @@ class AuthRepository {
           await sharedHttpClient.post(
             Uri.parse('${pb.baseURL}/api/me/executor-status'),
             headers: {
-              'Authorization': pb.authStore.token,
+              // Bearer-префикс обязателен: PB 0.22+ строго парсит схему
+              // авторизации, без `Bearer ` запрос приходит на сервер как
+              // анонимный (e.auth=null). В executor-status это значило, что
+              // флаг is_active_executor никогда не сбрасывался в false при
+              // logout — пуш-сегмент держал юзера активным до естественного
+              // истечения TTL координат.
+              'Authorization': 'Bearer ${pb.authStore.token}',
               'Content-Type': 'application/json',
             },
             body: '{"is_active": false}',

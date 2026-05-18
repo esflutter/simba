@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -86,9 +86,14 @@ class OrderDraft {
     final lng = j['lng'];
     final scheduled = j['scheduledAt'];
     // Файлы из image_picker лежат в кэше — после рестарта могут быть стёрты.
-    // Отфильтровываем несуществующие, чтобы Image.file не показывал пустые тайлы.
-    final rawPhotos = (j['photoPaths'] as List?)?.cast<String>() ?? const [];
-    final photos = rawPhotos.where((p) => File(p).existsSync()).toList();
+    // Раньше мы фильтровали список через `File(p).existsSync()` прямо в
+    // `fromJson`, который вызывается синхронно из `Notifier.build()` на
+    // холодном старте — это давало 1-3 sync-stat() на UI-isolate.
+    // Теперь сохраняем все пути как есть; вид `Image.file(...)` сам
+    // покажет errorBuilder для отсутствующих файлов, а реальный фильтр
+    // делается лениво на этапе публикации (`order_summary_screen._publish`
+    // → `File(p).existsSync()` уже на async-стадии).
+    final photos = (j['photoPaths'] as List?)?.cast<String>() ?? const [];
     return OrderDraft(
       categoryId: j['categoryId'] as String?,
       title: (j['title'] as String?) ?? '',
@@ -188,8 +193,26 @@ class OrderDraftController extends Notifier<OrderDraft> {
     }
   }
 
+  /// Debounce-таймер записи в SharedPreferences. Раньше каждое `update()`
+  /// (= каждый keystroke в форме создания заказа) делало `prefs.setString`.
+  /// При вводе названия 50 символов это 50 sync-flush на диск.
+  /// Теперь записываем не чаще, чем раз в [_persistDebounce] после
+  /// последнего изменения.
+  Timer? _persistTimer;
+  static const Duration _persistDebounce = Duration(milliseconds: 300);
+
   @override
   OrderDraft build() {
+    // Когда provider утилизируется (например, при logout через invalidate),
+    // дожимаем pending-запись синхронно — иначе несохранённый черновик
+    // потеряется при следующем cold-start. На моках провайдер «вечный».
+    ref.onDispose(() {
+      if (_persistTimer?.isActive == true) {
+        _persistTimer?.cancel();
+        _persistNow(state);
+      }
+    });
+
     final raw = _prefs?.draftJson;
     if (raw == null || raw.isEmpty) return const OrderDraft();
     try {
@@ -200,13 +223,30 @@ class OrderDraftController extends Notifier<OrderDraft> {
     }
   }
 
+  /// Запланировать persist с дебаунсом. Любой новый `update` сбрасывает
+  /// предыдущий таймер; запись произойдёт, когда юзер «успокоится».
   void _persist(OrderDraft d) {
+    _persistTimer?.cancel();
+    _persistTimer = Timer(_persistDebounce, () => _persistNow(d));
+  }
+
+  /// Немедленная запись в prefs. Используется как fallback при dispose и
+  /// при reset() — там debounce неуместен (сразу очищаем, чтобы при
+  /// перезапуске черновик не «воскрес»).
+  Future<void> _persistNow(OrderDraft d) async {
     final p = _prefs;
     if (p == null) return;
-    if (d.isEmpty) {
-      p.clearDraft();
-    } else {
-      p.saveDraftJson(jsonEncode(d.toJson()));
+    try {
+      if (d.isEmpty) {
+        await p.clearDraft();
+      } else {
+        await p.saveDraftJson(jsonEncode(d.toJson()));
+      }
+    } catch (e) {
+      // prefs не записался: на следующий cold-start черновик потеряется.
+      // Это терпимо, но в логах должно быть видно — иначе тихая регрессия
+      // (особенно при тестах с заполненным emulator-storage).
+      debugPrint('[OrderDraft] persist failed: $e');
     }
   }
 
@@ -230,6 +270,7 @@ class OrderDraftController extends Notifier<OrderDraft> {
     bool clearScheduled = false,
     bool clearForOther = false,
     bool clearAddressMeta = false,
+    bool clearLocation = false,
   }) {
     state = state.copyWith(
       categoryId: categoryId,
@@ -251,13 +292,19 @@ class OrderDraftController extends Notifier<OrderDraft> {
       clearScheduled: clearScheduled,
       clearForOther: clearForOther,
       clearAddressMeta: clearAddressMeta,
+      clearLocation: clearLocation,
     );
     _persist(state);
   }
 
   void reset() {
+    _persistTimer?.cancel();
     state = const OrderDraft();
-    _prefs?.clearDraft();
+    // reset = немедленная очистка, без debounce. Иначе если приложение
+    // закроется через <300мс после reset (например, юзер свайпнул из
+    // тасков), pending-debounce не сработает, и при перезапуске
+    // выскочит «воскресший» черновик.
+    _persistNow(state);
   }
 
   /// Сброс адресных полей draft'а при смене города. Категория, название,

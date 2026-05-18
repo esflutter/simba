@@ -18,6 +18,7 @@ import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
+import '../../data/remote/users_repository.dart' show publicUserProvider;
 import 'order_details_screen.dart' show orderByIdProvider;
 
 /// Future-провайдер: список id исполнителей с pending-откликом на заказ.
@@ -48,12 +49,37 @@ AppUser _userForResponder(String id) {
   );
 }
 
-class ResponsesScreen extends ConsumerWidget {
+class ResponsesScreen extends ConsumerStatefulWidget {
   const ResponsesScreen({super.key, required this.orderId});
   final String orderId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ResponsesScreen> createState() => _ResponsesScreenState();
+}
+
+class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
+  /// Screen-level лок: пока одна карточка обрабатывает accept/decline,
+  /// все остальные кнопки на экране заблокированы. Без этого юзер,
+  /// пока крутится «Принять» на одной карточке, мог тапнуть «Отклонить»
+  /// на другой — и реально отклонить того, кого только что приняли,
+  /// потому что второй PATCH успешно проходит до того, как первый
+  /// инвалидирует providers.
+  bool _busy = false;
+
+  Future<void> _withLock(Future<void> Function() op) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await op();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String get orderId => widget.orderId;
+
+  @override
+  Widget build(BuildContext context) {
     final asyncIds = ref.watch(pendingExecutorIdsProvider(orderId));
 
     return Scaffold(
@@ -120,9 +146,15 @@ class ResponsesScreen extends ConsumerWidget {
                       final u = users[i];
                       return _ResponseCard(
                         user: u,
+                        // Если на экране уже крутится accept/decline другой
+                        // карточки — все остальные кнопки заблокированы.
+                        // Без этого юзер мог отклонить только что принятого
+                        // исполнителя за полсекунды до того, как accept
+                        // успеет вернуться.
+                        screenBusy: _busy,
                         onTap: () =>
                             context.push('/order/$orderId/user/${u.id}'),
-                        onDecline: () async {
+                        onDecline: () => _withLock(() async {
                           final isLast = users.length == 1;
                           try {
                             await ref
@@ -151,8 +183,8 @@ class ResponsesScreen extends ConsumerWidget {
                               'Ошибка. Попробуйте позже',
                             );
                           }
-                        },
-                        onAccept: () async {
+                        }),
+                        onAccept: () => _withLock(() async {
                           try {
                             await ref
                                 .read(orderResponsesRepositoryProvider)
@@ -211,7 +243,7 @@ class ResponsesScreen extends ConsumerWidget {
                               'Ошибка. Попробуйте позже',
                             );
                           }
-                        },
+                        }),
                       );
                     },
                     ),
@@ -235,24 +267,34 @@ class ResponsesScreen extends ConsumerWidget {
   }
 }
 
-class _ResponseCard extends StatefulWidget {
+class _ResponseCard extends ConsumerStatefulWidget {
   const _ResponseCard({
     required this.user,
     required this.onTap,
     required this.onDecline,
     required this.onAccept,
+    this.screenBusy = false,
   });
 
+  /// Базовый AppUser (placeholder с id-шортом для PB-юзеров без
+  /// подгруженного публичного профиля). Реальные имя/фото/рейтинг
+  /// подтягиваются через `publicUserProvider` в build — fallback
+  /// на `user` пока запрос грузится / при ошибке.
   final AppUser user;
   final VoidCallback onTap;
   final Future<void> Function() onDecline;
   final Future<void> Function() onAccept;
+  /// Экран-уровневый лок: другая карточка сейчас обрабатывает
+  /// accept/decline. Все кнопки на этой тоже дизейблятся, чтобы юзер
+  /// не отклонил только что принятого исполнителя на параллельной
+  /// карточке быстрым тапом.
+  final bool screenBusy;
 
   @override
-  State<_ResponseCard> createState() => _ResponseCardState();
+  ConsumerState<_ResponseCard> createState() => _ResponseCardState();
 }
 
-class _ResponseCardState extends State<_ResponseCard> {
+class _ResponseCardState extends ConsumerState<_ResponseCard> {
   bool _busy = false;
 
   Future<void> _handleAccept() async {
@@ -277,7 +319,15 @@ class _ResponseCardState extends State<_ResponseCard> {
 
   @override
   Widget build(BuildContext context) {
-    final user = widget.user;
+    // Подтягиваем публичный профиль из PB. Пока запрос грузится / при
+    // ошибке — fallback на переданного `widget.user` (placeholder
+    // «Исполнитель xxxxxx», ★ 0,0). Это устраняет «нулевую» карточку
+    // отклика, которую заказчик видел до фикса.
+    final publicAsync = ref.watch(publicUserProvider(widget.user.id));
+    final user = publicAsync.maybeWhen(
+      data: (u) => u ?? widget.user,
+      orElse: () => widget.user,
+    );
     return AppCard(
       padding: EdgeInsets.zero,
       child: Column(
@@ -310,11 +360,20 @@ class _ResponseCardState extends State<_ResponseCard> {
                       final p = user.photoPath;
                       if (p == null) return fallback;
                       if (p.startsWith('http')) {
-                        return AppNetworkImage(url: p, fallback: fallback);
+                        return AppNetworkImage(
+                          url: p,
+                          width: 56.r,
+                          height: 56.r,
+                          fallback: fallback,
+                        );
                       }
                       return Image.file(
                         File(p),
                         fit: BoxFit.cover,
+                        // 56r-кружок ≈ 168px; полный 1024-аватар бы декодился
+                        // в RAM (~4МБ × 50 откликов = 200МБ на пустом месте).
+                        cacheWidth: 168,
+                        cacheHeight: 168,
                         errorBuilder: (_, _, _) => fallback,
                       );
                     }),
@@ -327,7 +386,7 @@ class _ResponseCardState extends State<_ResponseCard> {
                         Text(
                           user.name,
                           style: TextStyle(
-                            color: Colors.black,
+                            color: AppColors.textPrimary,
                             fontSize: 16.sp,
                             fontWeight: FontWeight.w600,
                             height: 1.50,
@@ -348,7 +407,7 @@ class _ResponseCardState extends State<_ResponseCard> {
                                   .toStringAsFixed(1)
                                   .replaceAll('.', ','),
                               style: TextStyle(
-                                color: Colors.black,
+                                color: AppColors.textPrimary,
                                 fontSize: 16.sp,
                                 fontWeight: FontWeight.w400,
                                 height: 1.50,
@@ -383,7 +442,9 @@ class _ResponseCardState extends State<_ResponseCard> {
                     label: 'Отклонить',
                     background: AppColors.surfaceVariant,
                     color: AppColors.error,
-                    onTap: _busy ? null : _handleDecline,
+                    onTap: (_busy || widget.screenBusy)
+                        ? null
+                        : _handleDecline,
                   ),
                 ),
                 SizedBox(width: 8.w),
@@ -391,8 +452,12 @@ class _ResponseCardState extends State<_ResponseCard> {
                   child: _ResponseAction(
                     label: 'Принять',
                     background: AppColors.primary,
-                    color: const Color(0xFFF5F5F5),
-                    onTap: _busy ? null : _handleAccept,
+                    // Белый текст на синем — нормальный контраст.
+                    // Раньше был серый F5F5F5 на синем, плохо читался.
+                    color: AppColors.surface,
+                    onTap: (_busy || widget.screenBusy)
+                        ? null
+                        : _handleAccept,
                   ),
                 ),
               ],
@@ -427,7 +492,9 @@ class _ResponseAction extends StatelessWidget {
         borderRadius: BorderRadius.circular(10.r),
         onTap: onTap,
         child: SizedBox(
-          height: 36.h,
+          // 48dp — Material/Android минимум touch-target. Раньше было
+          // 36, пальцем на iPhone было сложно попасть.
+          height: 48.h,
           child: Center(
             child: Text(
               label,

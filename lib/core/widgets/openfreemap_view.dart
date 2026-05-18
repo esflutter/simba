@@ -222,7 +222,7 @@ class OpenFreeMapView extends StatefulWidget {
 }
 
 class _OpenFreeMapViewState extends State<OpenFreeMapView>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late Future<Style> _styleFuture;
   late final MapController _internalController;
 
@@ -231,6 +231,12 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
   /// fix или если разрешение не выдано.
   LatLng? _myLocation;
   StreamSubscription<Position>? _positionSub;
+
+  /// Запоминаем, был ли стрим активен ДО ухода в background — чтобы
+  /// при возврате (`resumed`) пересоздать его, не дожидаясь действия
+  /// пользователя. Раньше подписка жила всё время, что съедало батарею
+  /// у активных исполнителей, оставивших приложение свёрнутым.
+  bool _wasStreamingBeforePause = false;
 
   MapController get _controller =>
       widget.mapController ?? _internalController;
@@ -268,10 +274,34 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _internalController = MapController();
     _styleFuture = _loadLocalizedStyle();
     if (widget.showMyLocation) {
       _bootstrapMyLocation();
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Когда приложение свёрнуто, держать GPS-стрим не имеет смысла:
+    // никто не видит карту, а батарея течёт. Останавливаем поток на
+    // paused/inactive и пересоздаём при возврате в resumed — но только
+    // если он работал до сворачивания (нет лишней инициализации, если
+    // юзер ни разу не нажимал «моё местоположение»).
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      if (_positionSub != null) {
+        _wasStreamingBeforePause = true;
+        _positionSub?.cancel();
+        _positionSub = null;
+      }
+    } else if (state == AppLifecycleState.resumed) {
+      if (_wasStreamingBeforePause && widget.showMyLocation && mounted) {
+        _wasStreamingBeforePause = false;
+        _bootstrapMyLocation();
+      }
     }
   }
 
@@ -319,7 +349,13 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _positionSub?.cancel();
+    // Внутренний MapController нужно явно диспозить — иначе flutter_map
+    // держит ссылки на стримы движений камеры, и каждое открытие
+    // карты (feed, выбор адреса, детали) утекает в RAM. Внешний
+    // контроллер не трогаем — за него отвечает родитель.
+    _internalController.dispose();
     super.dispose();
   }
 
@@ -586,7 +622,7 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
 ///   - Тонкая светло-серая обводка White 95 — даёт чёткий контур
 ///     белой кнопки на фоне белесых участков карты (облака, дороги).
 BoxDecoration _mapBtnDecoration(BorderRadius radius) => BoxDecoration(
-      color: Colors.white,
+      color: AppColors.surface,
       borderRadius: radius,
       border: Border.all(color: const Color(0xFFF2F2F2), width: 1),
       boxShadow: const <BoxShadow>[
@@ -729,7 +765,7 @@ class _MyLocationDot extends StatelessWidget {
           height: 16.r,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            color: Colors.white,
+            color: AppColors.surface,
             boxShadow: <BoxShadow>[
               BoxShadow(
                 color: Colors.black.withValues(alpha: 0.25),

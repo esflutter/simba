@@ -14,7 +14,9 @@ import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/city_pill.dart';
 import '../../core/widgets/openfreemap_view.dart';
 import '../../data/mock/app_state.dart';
+import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/auth_repository.dart';
 import '../../data/remote/orders_repository.dart';
 import 'order_card.dart';
 
@@ -25,8 +27,87 @@ class FeedScreen extends ConsumerStatefulWidget {
   ConsumerState<FeedScreen> createState() => _FeedScreenState();
 }
 
-class _FeedScreenState extends ConsumerState<FeedScreen> {
+class _FeedScreenState extends ConsumerState<FeedScreen>
+    with WidgetsBindingObserver {
   bool _mapMode = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // Освежаем ленту: пока юзер был свёрнут, могли появиться новые
+    // заказы / отмениться старые. Раньше показывался ровно тот же
+    // снапшот, что и при сворачивании. Также инвалидируем
+    // myOrders/Executor — на «Готов помочь» актуальный список нужен.
+    ref.invalidate(feedOrdersProvider);
+    ref.invalidate(myOrdersStreamProvider);
+    ref.invalidate(myExecutorOrdersProvider);
+    // Проактивно дёргаем refresh-токен: если он истёк пока юзер был
+    // в фоне, без этого первый запрос упирался бы в 401 и юзера
+    // выкидывало на /auth/phone уже после действия. Теперь — сразу
+    // пробуем обновить; если refresh не получилось, tryRefreshAuth
+    // внутри сам вызывает logout (state.user → null). После этого
+    // явно отправляем на /auth/phone, иначе redirect-guard сработает
+    // только при следующей навигации, и юзер сидит на Feed с пустым
+    // именем до своего следующего действия.
+    final auth = ref.read(authRepositoryProvider);
+    if (auth.isLive) {
+      auth.tryRefreshAuth().then((ok) {
+        if (!mounted || ok) return;
+        final user = ref.read(appControllerProvider).user;
+        if (user == null) {
+          context.go('/auth/phone');
+        }
+      });
+    }
+  }
+
+  /// Кэш отфильтрованной и отсортированной ленты. На каждую перерисовку
+  /// (например, при тапе по табу или вводе в city-pill) фильтр+сортировка
+  /// заново — на 500+ заказах заметно. Ключ собран из identity-хэша
+  /// исходного списка плюс фильтрующих полей: если хоть одно изменилось,
+  /// пересчитываем; иначе отдаём прошлый результат.
+  List<Order>? _cachedOrders;
+  int? _cachedKey;
+
+  List<Order> _buildFilteredOrders({
+    required List<Order> source,
+    required String? selectedCityId,
+    required String? myId,
+  }) {
+    final key = Object.hash(
+      identityHashCode(source),
+      source.length,
+      selectedCityId,
+      myId,
+    );
+    if (_cachedKey == key && _cachedOrders != null) return _cachedOrders!;
+    final filtered = source
+        .where((o) =>
+            o.status == OrderStatus.open &&
+            !o.isExpiredOpen &&
+            !o.isStaleOpenWithoutExecutor &&
+            (selectedCityId == null ||
+                o.cityId == null ||
+                o.cityId == selectedCityId) &&
+            (myId == null || o.customerId != myId))
+        .toList()
+      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    _cachedKey = key;
+    _cachedOrders = filtered;
+    return filtered;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -54,25 +135,16 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
           orElse: () => null,
         );
     final source = remoteFeed ?? mockOrders;
-    // Фильтры в ленте:
-    //   - status = open (не показываем уже принятые/завершённые)
-    //   - не expired (открытый заказ с прошедшей датой)
-    //   - cityId совпадает с выбранным городом (SimbA-правило)
-    //   - НЕ мои собственные заказы как заказчика (даже если я переключился
-    //     в режим исполнителя — свои заказы из ленты убираем). Бэк уже
-    //     отсекает, но клиентская защита на случай: моки + старый кэш.
-    //
+    // Фильтры в ленте: open, не expired, не stale-30d, мой город, не свой.
     // Сортировка — от новых к старым (бизнес-требование).
-    final orders = source
-        .where((o) =>
-            o.status == OrderStatus.open &&
-            !o.isExpiredOpen &&
-            (selectedCityId == null ||
-                o.cityId == null ||
-                o.cityId == selectedCityId) &&
-            (myId == null || o.customerId != myId))
-        .toList()
-      ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    // Сама фильтрация инкапсулирована в _buildFilteredOrders с кэшем —
+    // на каждый ребилд при том же source/city/myId возвращается готовый
+    // список без повторного прохода. На 500+ заказах разница ощутима.
+    final orders = _buildFilteredOrders(
+      source: source,
+      selectedCityId: selectedCityId,
+      myId: myId,
+    );
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -92,12 +164,23 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
               // приходить. Показываем тост, чтобы юзер понимал и сам открыл
               // настройки приложения.
               if (goingActive) {
-                final perm = await Geolocator.checkPermission();
+                final initialPerm = await Geolocator.checkPermission();
+                LocationPermission perm = initialPerm;
+                // Флаг «попап с запросом разрешения был только что показан
+                // и юзер выдал доступ». Только в этом моменте мы вправе
+                // сами поменять выбранный город по реальному
+                // местоположению — иначе авто-переключение перетёрло бы
+                // вручную выбранный город каждый раз при включении
+                // режима «Готов помочь».
+                bool permissionJustGranted = false;
                 if (perm == LocationPermission.denied) {
-                  final req = await Geolocator.requestPermission();
+                  perm = await Geolocator.requestPermission();
                   if (!context.mounted) return;
-                  if (req != LocationPermission.always &&
-                      req != LocationPermission.whileInUse) {
+                  final granted = perm == LocationPermission.always ||
+                      perm == LocationPermission.whileInUse;
+                  if (granted) {
+                    permissionJustGranted = true;
+                  } else {
                     AppToast.show(
                       context,
                       'Без доступа к геолокации мы не сможем '
@@ -112,6 +195,39 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                     'заказы рядом приходить не будут',
                   );
                 }
+                // Авто-смена города ТОЛЬКО если попап только что показали
+                // и юзер выдал доступ. Если разрешение было выдано раньше
+                // — не трогаем город (юзер мог выбрать вручную не тот, в
+                // котором физически находится; уважаем его выбор).
+                if (permissionJustGranted) {
+                  try {
+                    final pos = await Geolocator.getCurrentPosition(
+                      locationSettings: const LocationSettings(
+                        accuracy: LocationAccuracy.medium,
+                        timeLimit: Duration(seconds: 8),
+                      ),
+                    );
+                    if (!context.mounted) return;
+                    final detected = MockData.nearestCityFor(
+                      LatLng(pos.latitude, pos.longitude),
+                    );
+                    final currentId =
+                        ref.read(appControllerProvider).selectedCityId;
+                    if (detected != null && detected.id != currentId) {
+                      ref
+                          .read(appControllerProvider.notifier)
+                          .setCity(detected.id);
+                      AppToast.show(
+                        context,
+                        'Город изменён на «${detected.name}» по геолокации',
+                      );
+                    }
+                  } catch (_) {
+                    // Таймаут GPS, отсутствие сигнала и т.п. — молча
+                    // пропускаем. Юзер увидит прежний город и сможет
+                    // поменять его вручную через picker.
+                  }
+                }
               }
             },
             roleCta: isExecutor ? 'Готов помочь' : 'Не готов помочь',
@@ -124,15 +240,30 @@ class _FeedScreenState extends ConsumerState<FeedScreen> {
                   ? const _PausedState()
                   : Stack(
                       children: [
-                        if (!_mapMode)
-                          _ListView(orders: orders, categoryNameOf: categoryNameOf)
-                        else
-                          _MapView(
-                            orders: orders,
-                            center: selectedCity.center,
-                            onMarkerTap: (id) =>
-                                context.push('/order/$id?mode=feed'),
-                          ),
+                        // IndexedStack вместо if/else: оба виджета остаются
+                        // смонтированными, скрытый — просто off-stage. При
+                        // переключении «Список ↔ Карта» карта НЕ
+                        // пересоздаётся и не перезагружает векторные тайлы;
+                        // переключение становится моментальным. До этого
+                        // условный рендеринг каждый раз убивал _MapView и
+                        // строил новый — отсюда индикатор загрузки на 2–3
+                        // секунды при каждом возврате.
+                        IndexedStack(
+                          index: _mapMode ? 1 : 0,
+                          sizing: StackFit.expand,
+                          children: [
+                            _ListView(
+                              orders: orders,
+                              categoryNameOf: categoryNameOf,
+                            ),
+                            _MapView(
+                              orders: orders,
+                              center: selectedCity.center,
+                              onMarkerTap: (id) =>
+                                  context.push('/order/$id?mode=feed'),
+                            ),
+                          ],
+                        ),
                         // Переключатель «Карта/Список» показываем всегда:
                         // это control режима просмотра, а не «открыть заказы».
                         // Если в городе пусто — у списка есть своё empty-state
@@ -325,7 +456,7 @@ class _ListView extends ConsumerWidget {
                         'Пока нет открытых заказов',
                         textAlign: TextAlign.center,
                         style: TextStyle(
-                          color: Colors.black,
+                          color: AppColors.textPrimary,
                           fontSize: 20.sp,
                           fontWeight: FontWeight.w600,
                           height: 1.25,
@@ -385,7 +516,7 @@ class _ListView extends ConsumerWidget {
   }
 }
 
-class _MapView extends StatefulWidget {
+class _MapView extends ConsumerStatefulWidget {
   const _MapView({
     required this.orders,
     required this.center,
@@ -396,14 +527,20 @@ class _MapView extends StatefulWidget {
   final ValueChanged<String>? onMarkerTap;
 
   @override
-  State<_MapView> createState() => _MapViewState();
+  ConsumerState<_MapView> createState() => _MapViewState();
 }
 
-class _MapViewState extends State<_MapView> {
+class _MapViewState extends ConsumerState<_MapView> {
   /// Последнее известное местоположение пользователя. Используем как
   /// стартовый центр карты, если permission уже выдан. Если нет —
   /// остаёмся на центре выбранного города (см. widget.center).
   LatLng? _myLocation;
+
+  /// Bootstrap делаем один раз за жизненный цикл виджета: иначе при
+  /// каждом ребилде (а карта ребилдится на любой мутации AppState)
+  /// мы бы дёргали Geolocator повторно и заново предлагали авто-смену
+  /// города, перезатирая ручной выбор пользователя.
+  bool _bootstrapped = false;
 
   @override
   void initState() {
@@ -411,7 +548,24 @@ class _MapViewState extends State<_MapView> {
     _bootstrapMyLocation();
   }
 
+  @override
+  void didUpdateWidget(_MapView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Юзер вручную переключил город (через city-pill в шапке) →
+    // widget.center сменился. Стираем cached _myLocation, чтобы карта
+    // переехала к центру нового города и не висела на старой точке.
+    // OpenFreeMapView внутри сам анимирует переход (см. didUpdateWidget
+    // там) — нам достаточно отдать ему новый initialCenter.
+    if (oldWidget.center != widget.center) {
+      if (_myLocation != null) {
+        setState(() => _myLocation = null);
+      }
+    }
+  }
+
   Future<void> _bootstrapMyLocation() async {
+    if (_bootstrapped) return;
+    _bootstrapped = true;
     try {
       if (!await Geolocator.isLocationServiceEnabled()) return;
       final perm = await Geolocator.checkPermission();
@@ -421,7 +575,21 @@ class _MapViewState extends State<_MapView> {
       }
       final pos = await Geolocator.getLastKnownPosition();
       if (pos == null || !mounted) return;
-      setState(() => _myLocation = LatLng(pos.latitude, pos.longitude));
+      // Если фактическое местоположение принадлежит другому
+      // миллионнику (юзер выбрал Новосибирск в city-picker, но
+      // физически в Москве) — переключаем город. Карта тогда
+      // переедет к центру Москвы через didUpdateWidget выше.
+      // Делается только при первом открытии карты в сессии —
+      // повторно не дёргаем, чтобы не перетирать ручной выбор.
+      final here = LatLng(pos.latitude, pos.longitude);
+      final detected = MockData.nearestCityFor(here);
+      final currentId =
+          ref.read(appControllerProvider).selectedCityId;
+      if (detected != null && detected.id != currentId) {
+        ref.read(appControllerProvider.notifier).setCity(detected.id);
+        return;
+      }
+      setState(() => _myLocation = here);
     } catch (_) {/* нет GPS / сервис выключен — оставляем центр города */}
   }
 
@@ -453,14 +621,20 @@ class _MapViewState extends State<_MapView> {
 }
 
 Color _markerColorByStatus(OrderStatus s) {
+  // В ленту попадают только OrderStatus.open (см. фильтр выше), поэтому
+  // тут практически всегда возвращается markerRed. Остальные статусы
+  // оставлены ради full coverage enum — если когда-нибудь добавим
+  // показ accepted/completed на карте, цвета уже здесь. До этого
+  // использовались Material.orange/green (несовпадение с палитрой),
+  // теперь — фирменные AppColors.markerOrange / markerGreen.
   switch (s) {
     case OrderStatus.open:
       return AppColors.markerRed;
     case OrderStatus.accepted:
     case OrderStatus.awaitingPayment:
-      return Colors.orange;
+      return AppColors.markerOrange;
     case OrderStatus.completed:
-      return Colors.green;
+      return AppColors.markerGreen;
     case OrderStatus.cancelled:
       return AppColors.textTertiary;
   }
@@ -546,7 +720,7 @@ class _PausedState extends StatelessWidget {
               'Поиск заказов отключён',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Colors.black,
+                color: AppColors.textPrimary,
                 fontSize: 20.sp,
                 fontWeight: FontWeight.w600,
                 height: 1.25,

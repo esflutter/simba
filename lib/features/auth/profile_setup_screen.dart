@@ -74,7 +74,14 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
       await source.copy(dst.path);
       if (!mounted) return;
       setState(() => _photoPath = dst.path);
-    } catch (_) {}
+    } catch (e) {
+      // Любая ошибка: permission denied на iOS, OOM на больших RAW,
+      // повреждённый файл. Раньше глотали молча — юзер не понимал, почему
+      // ничего не происходит. Показываем тост + лог для диагностики.
+      debugPrint('[profile_setup] pickPhoto failed: $e');
+      if (!mounted) return;
+      AppToast.show(context, 'Не удалось добавить фото');
+    }
   }
 
   Future<void> _onContinue() async {
@@ -95,9 +102,16 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
           if (photoPath != null) {
             final file = File(photoPath);
             if (await file.exists()) {
+              // Грузим через bytes-буфер, не stream: PB SDK 0.22 с
+              // потоком даёт ошибку сохранения (stream consumed при
+              // ре-финализации запроса). Для аватара 4 МБ буфер
+              // безопасен по памяти; тяжёлые случаи (несколько фото
+              // заказа) обрабатываются в orders_repository, где есть
+              // полноценный _withAuthRetry-обработчик.
+              final bytes = await file.readAsBytes();
               files.add(http.MultipartFile.fromBytes(
                 'photo',
-                await file.readAsBytes(),
+                bytes,
                 filename: photoPath.split(Platform.pathSeparator).last,
               ));
             }
@@ -127,7 +141,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
           if (mounted) {
             AppToast.show(
               context,
-              'Профиль сохранён локально. Синхронизируем позже.',
+              'Не удалось связаться с сервером. Попробуйте позже.',
             );
           }
         }
@@ -192,6 +206,12 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                                       ? Image.file(
                                           File(_photoPath!),
                                           fit: BoxFit.cover,
+                                          // cacheWidth — декодим в ~300px
+                                          // (3×100r), не в полные 1024×1024
+                                          // оригинала. Без этого один аватар
+                                          // в RAM ≈ 4МБ растрового bitmap.
+                                          cacheWidth: 300,
+                                          cacheHeight: 300,
                                           // Файл может пропасть, если
                                           // OS очистила кэш до того, как мы
                                           // успели скопировать в documents
@@ -270,7 +290,7 @@ class _ContinueButton extends StatelessWidget {
               width: 22.r,
               height: 22.r,
               child: const CircularProgressIndicator(
-                color: Colors.white,
+                color: AppColors.surface,
                 strokeWidth: 2.5,
               ),
             ),
