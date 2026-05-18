@@ -155,7 +155,7 @@ class AuthRepository {
       // Если есть token+record — это финальный verified-ответ (бэк уже
       // сделал siteverify + recordAuthResponse).
       if (json['token'] != null && json['record'] != null) {
-        return _consumeAuthEnvelope(json);
+        return _consumeAuthEnvelope(json, isFreshLogin: true);
       }
       final status = json['status']?.toString() ?? 'pending';
       return AuthResult(ok: true, status: status, sessionId: sessionId);
@@ -247,12 +247,22 @@ class AuthRepository {
     if (json == null) {
       return const AuthResult(ok: false, errorCode: 'unknown');
     }
-    return _consumeAuthEnvelope(json);
+    return _consumeAuthEnvelope(json, isFreshLogin: true);
   }
 
   /// Парсит стандартный PB auth-envelope `{token, record, meta}`, сохраняет
   /// токен в authStore, зеркалит в AppController, возвращает AuthResult.
-  AuthResult _consumeAuthEnvelope(Map<String, dynamic> json) {
+  ///
+  /// `isFreshLogin` = `true` для путей verifyOtpDetailed / pollMidStatus —
+  /// юзер ТОЛЬКО ЧТО ввёл код. В этом случае локально выбранный город
+  /// приоритетнее серверного: его перенесём в users.city PATCH-ом.
+  /// `false` (по умолчанию) — для silent tryRefreshAuth на старте: тут
+  /// сервер источник правды, локальный город не пушим, чтобы не
+  /// перетирать многодевайсные изменения.
+  AuthResult _consumeAuthEnvelope(
+    Map<String, dynamic> json, {
+    bool isFreshLogin = false,
+  }) {
     if (_pb == null) {
       return const AuthResult(ok: false, errorCode: 'no_backend');
     }
@@ -288,19 +298,38 @@ class AuthRepository {
       if (existing != null && existing.isNotEmpty) phone = existing;
     }
 
-    // Город — источник правды на бэке (users.city). При логине переносим
-    // в локальный selectedCityId, чтобы лента/feed сразу подтянулась под
-    // правильный город без редиректа на /city (если поле непустое).
-    // Если в record `city` пусто — оставляем AppController как есть; роутер
-    // отправит на /city как часть onboarding.
+    // Город: на свежем логине приоритет у того, который юзер выбрал
+    // локально на /city ПЕРЕД авторизацией. Если он выбрал Казань и
+    // логинится в аккаунт, где на сервере была Москва — оставляем
+    // Казань и тихо обновляем серверную запись. На silent refresh
+    // (tryRefreshAuth) наоборот — сервер источник правды, чтобы
+    // изменения с другого устройства подхватывались.
     //
-    // НО: если у клиента в полёте PATCH `users.city` (юзер только что
-    // выбрал новый город локально), не перезатираем его старым значением
-    // с сервера. Без этой проверки authRefresh, прилетевший до PATCH,
-    // откатывал выбор юзера.
+    // Защита: если pendingCitySync не null, в полёте PATCH /city от
+    // setCity — вообще не трогаем.
     final ctrl = _ref.read(appControllerProvider.notifier);
-    if (cityId.isNotEmpty && ctrl.pendingCitySync == null) {
-      ctrl.setCity(cityId);
+    final localCityId = _ref.read(appControllerProvider).selectedCityId;
+    final hasLocal = localCityId != null && localCityId.isNotEmpty;
+    if (ctrl.pendingCitySync == null) {
+      if (!hasLocal && cityId.isNotEmpty) {
+        ctrl.setCity(cityId);
+      } else if (isFreshLogin &&
+          hasLocal &&
+          localCityId != cityId) {
+        // Свежий логин: пушим локальный выбор на сервер
+        // fire-and-forget. Ошибки не критичны — следующий setCity
+        // повторит попытку.
+        try {
+          pb
+              .collection('users')
+              .update(record.id, body: {'city': localCityId})
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {/* не блокируем auth */}
+      } else if (!isFreshLogin && cityId.isNotEmpty && cityId != localCityId) {
+        // Silent refresh: сервер обновился (другой девайс?). Принимаем
+        // серверное значение, чтобы оба девайса показывали одно и то же.
+        ctrl.setCity(cityId);
+      }
     }
 
     final user = AppUser(
