@@ -98,9 +98,19 @@ class UserProfileScreen extends ConsumerWidget {
     final isPendingCandidate = order != null &&
         order.status == OrderStatus.open &&
         order.responses.contains(userId);
+    // Контакты доступны от момента match'а и до полной отмены.
+    // Это включает все промежуточные состояния (accepted, awaitingPayment,
+    // completed) — у заказа уже есть исполнитель, обе стороны должны
+    // видеть телефоны и иметь возможность связаться. До этого
+    // completed-фаза скрывала кнопки, и юзер не мог дозвониться, если,
+    // например, исполнитель отметил оплату, а в физическом мире
+    // оказались проблемы.
+    //
+    // Скрывается ТОЛЬКО когда заказ ещё не принят (open) или отменён
+    // полностью (cancelled) — связываться не с кем или нечем.
     final canContact = order != null &&
-        (order.status == OrderStatus.accepted ||
-            order.status == OrderStatus.awaitingPayment) &&
+        order.status != OrderStatus.open &&
+        order.status != OrderStatus.cancelled &&
         (order.customerId == userId || order.executorId == userId);
 
     final ratingDistribution = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};

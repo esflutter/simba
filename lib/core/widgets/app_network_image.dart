@@ -23,6 +23,12 @@ class AppNetworkImage extends StatelessWidget {
 
   final String url;
   final BoxFit fit;
+
+  /// Виджет для случая, когда картинка не загрузилась или url пустой.
+  /// Используется ТОЛЬКО как errorWidget; во время загрузки показывается
+  /// прозрачный контейнер размером с виджет — чтобы не было «мигания»
+  /// силуэтом аватара до подгрузки. Раньше placeholder тоже был
+  /// fallback'ом, и юзер на доли секунды видел силуэт пустой аватарки.
   final Widget? fallback;
   final double? width;
   final double? height;
@@ -37,7 +43,6 @@ class AppNetworkImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final placeholder = fallback ?? const SizedBox.shrink();
     final dpr = MediaQuery.maybeOf(context)?.devicePixelRatio ?? 1.0;
     int? capDim(double? lp, int? explicit) {
       if (explicit != null) return explicit;
@@ -49,6 +54,7 @@ class AppNetworkImage extends StatelessWidget {
       if (px <= 0) return 1;
       return px > 512 ? 512 : px;
     }
+    final errorView = fallback ?? const SizedBox.shrink();
     return CachedNetworkImage(
       imageUrl: url,
       fit: fit,
@@ -56,8 +62,16 @@ class AppNetworkImage extends StatelessWidget {
       height: height,
       memCacheWidth: capDim(width, memCacheWidth),
       memCacheHeight: capDim(height, memCacheHeight),
-      placeholder: (_, _) => placeholder,
-      errorWidget: (_, _, _) => placeholder,
+      // Загрузка: прозрачный SizedBox размером с виджет. Силуэт-fallback
+      // показывается только при ошибке/пустом url. Иначе на доли секунды
+      // юзер видит «дефолтный» силуэт до подгрузки своей аватарки —
+      // выглядит как глитч.
+      placeholder: (_, _) => SizedBox(width: width, height: height),
+      // Лёгкий fade-in без агрессивной плейсхолдер-анимации: 150мс
+      // делает появление картинки плавным, но не «прыгающим».
+      fadeInDuration: const Duration(milliseconds: 150),
+      fadeOutDuration: Duration.zero,
+      errorWidget: (_, _, _) => errorView,
     );
   }
 }

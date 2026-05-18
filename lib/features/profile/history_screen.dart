@@ -14,8 +14,6 @@ import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/orders_repository.dart';
 import '../orders/order_card.dart';
-import '../reviews/leave_review_screen.dart' show showLeaveReviewSheet;
-import '../reviews/reviews_providers.dart' show myReviewedOrderIdsProvider;
 
 enum _Tab { posted, executed }
 
@@ -259,20 +257,11 @@ class _DateGroup {
   final List<Order> orders;
 }
 
-/// Карточка заказа в истории + (если уместно) CTA «Оставить отзыв» под ней.
-///
-/// CTA рисуем, когда:
-///   - заказ не отменён (для cancelled-заказов отзыв смысла не имеет);
-///   - я ещё не оставлял отзыв по этому заказу
-///     (проверяется через [myReviewedOrderIdsProvider] одним запросом
-///     на весь список истории, а не одним запросом на карточку);
-///   - дедлайн оставления отзыва не истёк — это проверяет уже
-///     `showLeaveReviewSheet` внутри (она открывает шторку «срок истёк»,
-///     если дни прошли).
-///
-/// `showLeaveReviewSheet` принимает `BuildContext` и `orderId`; внутри сам
-/// инвалидирует нужные провайдеры после успешной отправки, в т.ч.
-/// `myReviewedOrderIdsProvider` — кнопка пропадёт без ручного refresh.
+/// Карточка заказа в истории. Раньше под ней висела CTA-строка
+/// «Оставить отзыв» с собственной иконкой звезды — она дублировала
+/// функционал, который доступен в деталях заказа. По продуктовому
+/// решению эту строку убрали из истории: единственный путь — открыть
+/// карточку заказа и нажать кнопку там.
 class _HistoryOrderTile extends ConsumerWidget {
   const _HistoryOrderTile({
     required this.order,
@@ -284,60 +273,11 @@ class _HistoryOrderTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final reviewedAsync = ref.watch(myReviewedOrderIdsProvider);
-    // Пока запрос не пришёл — считаем, что отзыв уже есть (кнопка скрыта).
-    // Так CTA не мигнёт «пустым» состоянием при первом открытии экрана.
-    final hasMyReview = reviewedAsync.maybeWhen(
-      data: (ids) => ids.contains(order.id),
-      orElse: () => true,
-    );
-    final isCancelled = order.status == OrderStatus.cancelled;
-    final showLeaveReview = !isCancelled && !hasMyReview;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        OrderCard(
-          order: order,
-          categoryName: categoryName,
-          showTime: false,
-          onTap: () => context.push('/order/${order.id}?mode=mine'),
-        ),
-        if (showLeaveReview) ...[
-          SizedBox(height: 8.h),
-          Material(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(10.r),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(10.r),
-              onTap: () => showLeaveReviewSheet(context, order.id),
-              child: SizedBox(
-                height: 44.h,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(
-                      IconsaxPlusLinear.star_1,
-                      size: 18.r,
-                      color: AppColors.primary,
-                    ),
-                    SizedBox(width: 8.w),
-                    Text(
-                      'Оставить отзыв',
-                      style: TextStyle(
-                        color: AppColors.primary,
-                        fontSize: 15.sp,
-                        fontWeight: FontWeight.w600,
-                        height: 1.33,
-                        letterSpacing: -0.23,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ],
+    return OrderCard(
+      order: order,
+      categoryName: categoryName,
+      showTime: false,
+      onTap: () => context.push('/order/${order.id}?mode=mine'),
     );
   }
 }

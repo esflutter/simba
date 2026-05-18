@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android 12+ (API 31+) splash screen API в ТЁМНОЙ теме.
+
+  Без этой папки на тёмном Android 12+ ресурс-матчер выбирал
+  `values-night/styles.xml` (там никаких windowSplash* атрибутов),
+  и система рисовала default-сплэш с launcher-иконкой по центру —
+  юзер видел «иконку с обрамлением» вместо однородного синего фона.
+
+  Заливаем все splash-атрибуты тем же синим, что и в светлой v31:
+  фирменный цвет — не зависит от темы, и pre-splash должен совпадать
+  с Dart-сплэшем (он тоже синий в обеих темах).
+-->
+<resources>
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowSplashScreenBackground">@color/splash_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/splash_background</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+        <item name="android:navigationBarColor">@color/app_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
+</resources>

@@ -56,27 +56,92 @@ final _hasMyResponseProvider = FutureProvider.autoDispose
   }
 });
 
-class OrderDetailsScreen extends ConsumerWidget {
+class OrderDetailsScreen extends ConsumerStatefulWidget {
   const OrderDetailsScreen({super.key, required this.orderId, required this.mode});
 
   final String orderId;
   final String mode;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final asyncOrder = ref.watch(orderByIdProvider(orderId));
+  ConsumerState<OrderDetailsScreen> createState() => _OrderDetailsScreenState();
+}
+
+class _OrderDetailsScreenState extends ConsumerState<OrderDetailsScreen> {
+  /// PocketBase realtime-подписка на запись заказа. Когда другая сторона
+  /// меняет состояние (заказчик принял отклик, исполнитель отметил
+  /// «оплата получена» и т.п.) сервер шлёт push по WebSocket, клиент
+  /// инвалидирует провайдер и UI перерисовывается без ручного refresh.
+  ///
+  /// Хранится как функция-отписчик, которую возвращает `pb.collection.subscribe`.
+  /// Вызываем её в dispose, иначе соединение остаётся открытым до GC.
+  Future<void> Function()? _unsubscribe;
+
+  @override
+  void initState() {
+    super.initState();
+    // Подписку поднимаем в postFrame, чтобы `ref.read(pocketbaseProvider)`
+    // не дёргался до полной готовности дерева провайдеров. На моках pb=null,
+    // подписки не будет — это нормально.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _subscribe());
+  }
+
+  Future<void> _subscribe() async {
+    if (!mounted) return;
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    try {
+      final unsub = await pb.collection('orders').subscribe(
+        widget.orderId,
+        (_) {
+          if (!mounted) return;
+          // Сервер сообщил об изменении этого заказа — перечитываем
+          // основной провайдер + смежные (отклики, моя лента).
+          ref.invalidate(orderByIdProvider(widget.orderId));
+          ref.invalidate(myOrdersStreamProvider);
+          ref.invalidate(myExecutorOrdersProvider);
+        },
+      );
+      if (!mounted) {
+        await unsub();
+        return;
+      }
+      _unsubscribe = unsub;
+    } catch (_) {
+      // Сеть/WebSocket не поднялся — это не критика, экран продолжит
+      // работать с явным refresh. Просто не получим realtime-апдейтов.
+    }
+  }
+
+  @override
+  void dispose() {
+    final unsub = _unsubscribe;
+    _unsubscribe = null;
+    if (unsub != null) {
+      // ignore: discarded_futures
+      unsub();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final asyncOrder = ref.watch(orderByIdProvider(widget.orderId));
     return asyncOrder.when(
       data: (order) {
         if (order == null) {
           return _NotFoundScreen(
-            onRetry: () => ref.invalidate(orderByIdProvider(orderId)),
+            onRetry: () => ref.invalidate(orderByIdProvider(widget.orderId)),
           );
         }
-        return _OrderDetailsBody(orderId: orderId, mode: mode, order: order);
+        return _OrderDetailsBody(
+          orderId: widget.orderId,
+          mode: widget.mode,
+          order: order,
+        );
       },
       loading: () => const _LoadingScreen(),
       error: (_, _) => _LoadFailedScreen(
-        onRetry: () => ref.invalidate(orderByIdProvider(orderId)),
+        onRetry: () => ref.invalidate(orderByIdProvider(widget.orderId)),
       ),
     );
   }
@@ -1151,84 +1216,36 @@ class _AddressBlock extends StatelessWidget {
       children: [
         const _FieldLabel('Адрес'),
         SizedBox(height: 12.h),
-        // Карта-превью: позволяем крутить (interactive: true), а по
-        // тапу разворачиваем во весь экран. Жесты pan/zoom не вызывают
-        // onMapTap — он срабатывает только на короткое касание без
-        // перемещения, так что юзер может и подвинуть карту, и нажать
-        // для разворота, без конфликта.
-        // Карта-превью: interactive: false, чтобы flutter_map гарантированно
-        // не съедал тап жестом pan. Поверх карты лежит видимая «развернуть»-
-        // кнопка справа сверху, и весь блок обёрнут в InkWell, который
-        // открывает полноэкранную карту по тапу куда угодно. Раньше карта
-        // была interactive + onMapTap, и тап непредсказуемо терялся в
-        // gesture-detector flutter_map.
+        // Карта-превью прямо в карточке: pan/zoom доступны пальцами,
+        // отдельной кнопки «развернуть» нет. Раньше карта была
+        // некликабельна и сверху лежала иконка-кнопка — она часто не
+        // прожималась из-за конфликта жестов в flutter_map. Теперь
+        // ровно один сценарий: щипком приближаешь, пальцем двигаешь.
+        // Полноэкранный режим оставлен через тап по строке адреса
+        // ниже — для тех, кому нужно больше места.
         ClipRRect(
           borderRadius: BorderRadius.circular(10.r),
           child: SizedBox(
             width: double.infinity,
             height: 170.h,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: OpenFreeMapView(
-                      initialCenter: location,
-                      initialZoom: 15,
-                      interactive: false,
-                      markers: [
-                        OpenFreeMapMarker(
-                          id: 'order',
-                          point: location,
-                          color: AppColors.markerRed,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                Positioned.fill(
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: () => _openFullscreenMap(context),
-                      child: const SizedBox.expand(),
-                    ),
-                  ),
-                ),
-                // Иконка «развернуть» — даёт визуальную подсказку, что
-                // карта кликабельна. Без неё юзер может думать, что
-                // это просто иллюстрация.
-                Positioned(
-                  right: 8.r,
-                  top: 8.r,
-                  child: Container(
-                    width: 32.r,
-                    height: 32.r,
-                    decoration: BoxDecoration(
-                      color: AppColors.surface,
-                      borderRadius: BorderRadius.circular(8.r),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.10),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Icon(
-                      IconsaxPlusLinear.maximize_4,
-                      color: AppColors.primary,
-                      size: 18.r,
-                    ),
-                  ),
+            child: OpenFreeMapView(
+              initialCenter: location,
+              initialZoom: 15,
+              interactive: true,
+              markers: [
+                OpenFreeMapMarker(
+                  id: 'order',
+                  point: location,
+                  color: AppColors.markerRed,
                 ),
               ],
             ),
           ),
         ),
         SizedBox(height: 12.h),
-        // Адрес-строка тоже кликабельна — тап открывает ту же
-        // полноэкранную карту. Это страховка для пользователей, которые
-        // тапнут именно по тексту, не по карте.
+        // Адрес-строка кликабельна — тап открывает полноэкранную карту.
+        // Это запасной путь к фуллскрину, поскольку на самой карте
+        // pan/zoom съедают тап.
         InkWell(
           onTap: () => _openFullscreenMap(context),
           borderRadius: BorderRadius.circular(6.r),
