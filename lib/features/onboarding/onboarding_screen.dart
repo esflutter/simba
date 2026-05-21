@@ -1,6 +1,5 @@
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,6 +9,18 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/system_bar_style.dart';
+
+// Флаг показа debug-тогглеров поверх онбординга. По умолчанию выключен:
+// в обычном release-билде (тот, что идёт в Google Play) переключателей нет
+// — они физически не попадают в дерево виджетов. Чтобы собрать APK для
+// дизайн-ревью с заказчиком, добавить в команду сборки:
+//   flutter build apk --release --dart-define=SHOW_DESIGN_TOGGLES=true
+// Тогда оба переключателя (Старая ⇄ Новая версия и 32 ⇄ 36 sp) включаются.
+// После согласования собираем production без флага — переключатели исчезают.
+const bool _kShowDesignToggles = bool.fromEnvironment(
+  'SHOW_DESIGN_TOGGLES',
+  defaultValue: false,
+);
 
 // ─── Допустимые размеры заголовка ───────────────────────────────────────
 //
@@ -196,14 +207,16 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
               ),
 
               // ── Debug-тогглеры дизайна ──
-              // Видны ТОЛЬКО в debug-сборке, рисуются поверх PageView и
-              // кнопки-стрелки. В release не попадают в дерево виджетов.
+              // Видны, когда сборка идёт с --dart-define=SHOW_DESIGN_TOGGLES=true
+              // (используется для APK на дизайн-ревью с заказчиком).
+              // В обычном production-релизе флаг false → блок не попадает
+              // в дерево виджетов вообще, переключателей у пользователей нет.
               //   Справа сверху — переключатель макета (Старая ⇄ Новая
               //   версия), есть на всех страницах.
               //   Слева сверху — переключатель размера заголовка
               //   (32 ⇄ 36 sp), есть только на первой странице.
-              //   На 2–5 заголовки длинные, размер фиксированный 24sp.
-              if (kDebugMode) ...[
+              //   На 2–5 заголовки длинные, размер фиксированный 20sp.
+              if (_kShowDesignToggles) ...[
                 Positioned(
                   right: 16.w,
                   top: 16.h,
@@ -524,8 +537,9 @@ class _ArcPainter extends CustomPainter {
   bool shouldRepaint(_ArcPainter old) => old.progress != progress;
 }
 
-/// Debug-кнопка переключения варианта дизайна. Видна ТОЛЬКО в
-/// debug-сборке: в release родительский `if (kDebugMode)` отбрасывает
+/// Debug-кнопка переключения варианта дизайна. Видна, только когда
+/// сборка собрана с --dart-define=SHOW_DESIGN_TOGGLES=true. В обычном
+/// production-релизе родительский `if (_kShowDesignToggles)` отбрасывает
 /// её из дерева виджетов, продакшн чистый.
 ///
 /// Универсальная — назначение задаётся иконкой и onTap из родителя:
