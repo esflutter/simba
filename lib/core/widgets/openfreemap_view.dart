@@ -408,10 +408,13 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
 
   /// Ждём первый fix до 4 секунд. Используется при первом тапе кнопки,
   /// когда стрим только что запустился и `_myLocation` ещё пуст.
+  /// Проверка `mounted` в цикле обязательна: если виджет ушёл с экрана
+  /// за эти 4 секунды, без неё цикл продолжал крутиться и держать
+  /// ссылку на State.
   Future<LatLng?> _waitForFix() async {
     final DateTime deadline =
         DateTime.now().add(const Duration(seconds: 4));
-    while (DateTime.now().isBefore(deadline)) {
+    while (mounted && DateTime.now().isBefore(deadline)) {
       if (_myLocation != null) return _myLocation;
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
@@ -624,7 +627,7 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
 BoxDecoration _mapBtnDecoration(BorderRadius radius) => BoxDecoration(
       color: AppColors.surface,
       borderRadius: radius,
-      border: Border.all(color: const Color(0xFFF2F2F2), width: 1),
+      border: Border.all(color: AppColors.divider, width: 1),
       boxShadow: const <BoxShadow>[
         BoxShadow(
           color: Color(0x290C0C0D),
@@ -660,7 +663,7 @@ class _MapZoomColumn extends StatelessWidget {
                 onTap: onZoomIn,
               ),
             ),
-            Container(height: 1, color: const Color(0xFFF2F2F2)),
+            Container(height: 1, color: AppColors.divider),
             Expanded(
               child: _MapTapCell(
                 asset: 'assets/images/icon_map_zoom_out.webp',

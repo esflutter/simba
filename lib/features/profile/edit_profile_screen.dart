@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -19,6 +20,7 @@ import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/remote/pocketbase_client.dart';
+import '../../data/remote/users_repository.dart' show publicUserProvider;
 
 class EditProfileScreen extends ConsumerStatefulWidget {
   const EditProfileScreen({super.key});
@@ -53,13 +55,14 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     super.dispose();
   }
 
-  /// Максимальный размер аватара (МБ). 1024×1024 источника + JPEG-85 обычно
-  /// дают <1 МБ; 4 МБ — потолок для пограничных PNG/HEIC случаев.
-  static const double _kMaxPhotoMb = 4.0;
-
   Future<void> _pickFromGallery() async {
     try {
       final picker = ImagePicker();
+      // Источник можем брать любой — даже 12+ МБ HEIC из галереи iPhone.
+      // image_picker делает первый проход на 1024×1024 чисто чтобы не
+      // загружать в память оригинал; финальное сжатие до 512×512 JPEG
+      // делает наш `compressAvatar` ниже. Без этого первого шага
+      // device picker на дешёвых Android уходил в OOM на больших RAW.
       final f = await picker.pickImage(
         source: ImageSource.gallery,
         imageQuality: 85,
@@ -67,8 +70,10 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
         maxHeight: 1024,
       );
       if (f == null) return;
-      // image_picker уже жал; для пограничных PNG/HEIC дожимаем нативно.
-      final source = await ensurePhotoUnderLimit(f.path, _kMaxPhotoMb);
+      // Сжатие до 512×512 JPEG — для кружка профиля больше не нужно,
+      // итоговый файл обычно 80–200 КБ. Бэк хранит/раздаёт меньше,
+      // приложение не тратит трафик пользователя.
+      final source = await compressAvatar(f.path);
       if (!mounted) return;
       if (source == null) {
         AppToast.show(context, 'Не удалось обработать фото. Попробуйте другое.');
@@ -78,18 +83,41 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       // временную папку, которая может быть очищена OS, и Image.file
       // потом крэшится на cold-start. См. profile_setup_screen для
       // подробностей.
+      //
+      // Расширение принудительно `.jpg` — `compressAvatar` всегда отдаёт
+      // JPEG (см. CompressFormat.jpeg). Если бы мы взяли расширение от
+      // `source.path`, на iPhone могло пройти `.heic` от исходника при
+      // совпадении путей — Image.file Flutter не декодирует HEIC, и
+      // аватарка не отрисовалась бы, хотя файл реально JPEG.
       final docs = await getApplicationDocumentsDirectory();
-      final ext = source.path.contains('.') ? source.path.split('.').last : 'jpg';
       final dst = File(
-        '${docs.path}${Platform.pathSeparator}profile_${DateTime.now().millisecondsSinceEpoch}.$ext',
+        '${docs.path}${Platform.pathSeparator}profile_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
       await source.copy(dst.path);
+      // Удаляем предыдущую локальную аватарку из documents — иначе при
+      // каждой смене фото в этом каталоге остаётся новый файл, а старый
+      // навсегда. За год активной смены аватара набегает сотни МБ
+      // мусора в постоянном хранилище приложения.
+      final prev = _photoPath;
+      if (prev != null &&
+          !prev.startsWith('http') &&
+          prev != dst.path &&
+          prev.startsWith(docs.path)) {
+        try {
+          final f = File(prev);
+          if (await f.exists()) await f.delete();
+        } catch (_) {/* не критично, пусть остаётся */}
+      }
       if (!mounted) return;
       setState(() => _photoPath = dst.path);
     } catch (e) {
       // Не глушим исключение молча — раньше пользователь не понимал,
       // почему «Выбрать фото» ничего не открывает. Показываем тост.
-      debugPrint('[edit_profile] pickPhoto failed: $e');
+      // В release-сборку текст $e не пишем — он может содержать путь
+      // к файлу или системное сообщение, которое утечёт в logcat.
+      if (kDebugMode) {
+        debugPrint('[edit_profile] pickPhoto failed: $e');
+      }
       if (!mounted) return;
       AppToast.show(context, 'Не удалось добавить фото');
     }
@@ -110,6 +138,22 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       case _AvatarAction.change:
         await _pickFromGallery();
       case _AvatarAction.remove:
+        // Удаляем локальный файл аватара, если он лежит в documents.
+        // Без этого «Удалить фото» только обнуляло путь в state, а
+        // файл на диске оставался навсегда. Для серверного URL ничего
+        // не удаляем — PATCH ниже скажет серверу очистить поле, файл
+        // снимет сам сервер.
+        final prev = _photoPath;
+        if (prev != null && !prev.startsWith('http')) {
+          try {
+            final docs = await getApplicationDocumentsDirectory();
+            if (prev.startsWith(docs.path)) {
+              final f = File(prev);
+              if (await f.exists()) await f.delete();
+            }
+          } catch (_) {/* не критично */}
+        }
+        if (!mounted) return;
         setState(() => _photoPath = null);
     }
   }
@@ -154,6 +198,10 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
         // потом отказывается записать строку в BOOLEAN-поле. Поэтому в
         // отсутствии нового фото шлём чистый JSON, а multipart используем
         // только когда реально аплоадим аватар (там bool кодируем как 1/0).
+        // withAuthRetry на оба варианта PATCH — если токен истёк
+        // во время редактирования профиля, обёртка молча обновит и
+        // повторит. Без неё было «не удалось сохранить», и юзеру
+        // приходилось выходить и заходить заново.
         if (hasNewPhoto) {
           // Грузим через bytes-буфер, не stream. Поток `openRead()` в
           // паре с PB SDK 0.22 даёт PATCH-ошибку «не удалось сохранить»:
@@ -176,27 +224,29 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
             _ => MediaType('image', 'jpeg'),
           };
           final fname = 'avatar.${ext == 'jpg' ? 'jpg' : ext}';
-          await pb
-              .collection('users')
-              .update(
-                me.id,
-                body: {
-                  'name': _name.text.trim(),
-                  // В multipart булевы поля пишем как "1"/"0" — иначе SDK
-                  // отправит "true"/"false" и PB бракует тип.
-                  'has_tools': _hasTools ? '1' : '0',
-                  'has_transport': _hasTransport ? '1' : '0',
-                },
-                files: [
-                  http.MultipartFile.fromBytes(
-                    'photo',
-                    bytes,
-                    filename: fname,
-                    contentType: mime,
-                  ),
-                ],
-              )
-              .timeout(const Duration(seconds: 30));
+          await pb.withAuthRetry(
+            () => pb
+                .collection('users')
+                .update(
+                  me.id,
+                  body: {
+                    'name': _name.text.trim(),
+                    // В multipart булевы поля пишем как "1"/"0" — иначе SDK
+                    // отправит "true"/"false" и PB бракует тип.
+                    'has_tools': _hasTools ? '1' : '0',
+                    'has_transport': _hasTransport ? '1' : '0',
+                  },
+                  files: [
+                    http.MultipartFile.fromBytes(
+                      'photo',
+                      bytes,
+                      filename: fname,
+                      contentType: mime,
+                    ),
+                  ],
+                )
+                .timeout(const Duration(seconds: 30)),
+          );
         } else {
           // PB-документация: чтобы очистить single-file-поле, шлём
           // его значение как пустую строку (поведение проверено на
@@ -209,18 +259,32 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
             'has_transport': _hasTransport,
             if (photoCleared) 'photo': '',
           };
-          await pb
-              .collection('users')
-              .update(me.id, body: body)
-              .timeout(const Duration(seconds: 30));
+          await pb.withAuthRetry(
+            () => pb
+                .collection('users')
+                .update(me.id, body: body)
+                .timeout(const Duration(seconds: 30)),
+          );
         }
       }
+      // trim() симметрично с тем, что уходит в БД — иначе локальное
+      // имя «  Иван » остаётся с пробелами, а на сервере «Иван». При
+      // следующем заходе «Сохранить» считает форму грязной из-за расходящегося
+      // _name.text.trim() != user.name → лишний PATCH ни о чём.
       ref.read(appControllerProvider.notifier).completeProfile(
-            name: _name.text,
+            name: _name.text.trim(),
             photoPath: _photoPath,
             hasTools: _hasTools,
             hasTransport: _hasTransport,
           );
+      // Сбрасываем кэш «публичного профиля» по своему id: другие места
+      // (карточки откликов, профиль глазами контрагента) тянут моё имя/
+      // фото/иконки через publicUserProvider. Без инвалидации они
+      // показывают старые данные до autodispose-перезагрузки.
+      final myId = ref.read(appControllerProvider).user?.id;
+      if (myId != null && myId.isNotEmpty) {
+        ref.invalidate(publicUserProvider(myId));
+      }
       if (!mounted) return;
       context.pop();
     } catch (e, st) {
@@ -228,7 +292,13 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
       // humanizeBackendError: лимиты, 401 (сессия истекла), 5xx,
       // mime/размер фото — всё переводится в дружелюбный русский текст.
       // До этого был просто «Не удалось сохранить» без подсказки.
-      debugPrint('[edit_profile] save failed: $e\n$st');
+      //
+      // Полный текст $e от PB SDK содержит payload запроса (имя, флаги,
+      // в multipart-варианте — байты картинки). В release-сборку его не
+      // пишем, чтобы он не утёк в logcat сторонним приложениям.
+      if (kDebugMode) {
+        debugPrint('[edit_profile] save failed: $e\n$st');
+      }
       if (!mounted) return;
       AppToast.show(context, humanizeBackendError(e));
     } finally {

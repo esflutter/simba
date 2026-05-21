@@ -95,6 +95,12 @@ class ReviewsRepository {
 
   /// Создать отзыв. Возвращает созданный `RecordModel` (или `null` в моке /
   /// при отсутствии auth) — удобно для invalidate выше по стеку.
+  ///
+  /// Идемпотентность через серверный уникальный индекс `idx_reviews_unique`
+  /// `(order_ref, from_user)`. При сетевом флапе после успешного INSERT
+  /// повторный create вернёт 400/409 на unique-constraint; ловим и
+  /// возвращаем уже существующую запись — для UI это idempotent-успех,
+  /// тост «отзыв мог отправиться» больше не нужен.
   Future<RecordModel?> create({
     required String orderId,
     required String toUserId,
@@ -115,14 +121,36 @@ class ReviewsRepository {
     final pb = _pb!;
     final me = pb.authStore.record;
     if (me == null) return null;
-    return withPbAuthRetry(_ref,() => pb.collection('reviews').create(body: {
-      'order_ref': orderId,
-      'from_user': me.id,
-      'to_user': toUserId,
-      'rating': rating,
-      'comment': comment,
-      'tags': tags,
-    }).timeout(const Duration(seconds: 15)));
+    try {
+      return await withPbAuthRetry(
+          _ref,
+          () => pb.collection('reviews').create(body: {
+                'order_ref': orderId,
+                'from_user': me.id,
+                'to_user': toUserId,
+                'rating': rating,
+                'comment': comment,
+                'tags': tags,
+              }).timeout(const Duration(seconds: 15)));
+    } on ClientException catch (e) {
+      if (e.statusCode == 400 || e.statusCode == 409) {
+        try {
+          final existing = await withPbAuthRetry(
+              _ref,
+              () => pb
+                  .collection('reviews')
+                  .getFirstListItem(
+                    pb.filter(
+                      'order_ref = {:oid} && from_user = {:uid}',
+                      {'oid': orderId, 'uid': me.id},
+                    ),
+                  )
+                  .timeout(const Duration(seconds: 10)));
+          return existing; // запись уже была — idempotent-успех
+        } catch (_) {/* реальная ошибка валидации — пробрасываем */}
+      }
+      rethrow;
+    }
   }
 
   Review _fromRecord(RecordModel r) {

@@ -31,7 +31,6 @@ class AppState {
     required this.reviews,
     required this.selectedCityId,
     required this.executorActive,
-    required this.searchRadiusKm,
     required this.onboardingSeen,
   });
 
@@ -42,7 +41,6 @@ class AppState {
   final List<Review> reviews;
   final String? selectedCityId;
   final bool executorActive;
-  final double searchRadiusKm;
   /// «Пользователь устройства уже видел онбординг». После первого
   /// прохождения остаётся true до полного wipe приложения — повторно
   /// онбординг не показывается даже после logout.
@@ -61,7 +59,6 @@ class AppState {
     List<Review>? reviews,
     Object? selectedCityId = _appStateSentinel,
     bool? executorActive,
-    double? searchRadiusKm,
     bool? onboardingSeen,
   }) =>
       AppState(
@@ -76,7 +73,6 @@ class AppState {
             ? this.selectedCityId
             : selectedCityId as String?,
         executorActive: executorActive ?? this.executorActive,
-        searchRadiusKm: searchRadiusKm ?? this.searchRadiusKm,
         onboardingSeen: onboardingSeen ?? this.onboardingSeen,
       );
 }
@@ -108,7 +104,6 @@ class AppController extends Notifier<AppState> {
       reviews: Env.hasPocketbase ? const [] : MockData.seedReviews(),
       selectedCityId: cityId,
       executorActive: false,
-      searchRadiusKm: 5,
       onboardingSeen: p?.onboardingSeen ?? false,
     );
   }
@@ -271,6 +266,27 @@ class AppController extends Notifier<AppState> {
     _syncExecutorStatus(role == UserRole.executor);
   }
 
+  /// То же, что `setRole`, но БЕЗ обратного пуша на сервер. Нужно когда
+  /// мы только что прочитали серверное значение и хотим зафиксировать
+  /// его локально — пушить тот же флаг обратно бессмысленно и может
+  /// поймать гонку с параллельным изменением на другом устройстве.
+  void adoptRoleFromServer(UserRole role) {
+    if (state.role == role) return;
+    state = state.copyWith(role: role);
+    _prefs?.setRole(role);
+  }
+
+  /// Локально установить `executorActive` БЕЗ пуша на сервер. Используется
+  /// при бутстрапе: на cold-start state.executorActive всегда = false (не
+  /// сохраняется в prefs), но на сервере флаг мог остаться true — если
+  /// юзер закрыл приложение в режиме «Готов помочь». Без этой подтяжки
+  /// тумблер в UI показывал OFF, а push-сегмент на бэке продолжал
+  /// считать юзера активным и рассылать ему `new_order_nearby`.
+  void adoptExecutorActiveFromServer(bool active) {
+    if (state.executorActive == active) return;
+    state = state.copyWith(executorActive: active);
+  }
+
   void setExecutorActive(bool active) {
     state = state.copyWith(executorActive: active);
     _syncExecutorStatus(active);
@@ -339,13 +355,13 @@ class AppController extends Notifier<AppState> {
             // в фоне копились зависшие запросы, забивающие HTTP-клиент.
             .timeout(const Duration(seconds: 10));
       } catch (e) {
-        debugPrint('[executor-status] sync failed: $e');
+        // $e может содержать body запроса: lat/lng координаты пользователя.
+        // В release не пишем — иначе они утекают в logcat.
+        if (kDebugMode) {
+          debugPrint('[executor-status] sync failed: $e');
+        }
       }
     }();
-  }
-
-  void setSearchRadius(double km) {
-    state = state.copyWith(searchRadiusKm: km);
   }
 
   void createOrder(Order order) {
@@ -575,7 +591,6 @@ class AppController extends Notifier<AppState> {
       reviews: Env.hasPocketbase ? const [] : MockData.seedReviews(),
       selectedCityId: keepCityId,
       executorActive: false,
-      searchRadiusKm: state.searchRadiusKm,
       onboardingSeen: state.onboardingSeen,
     );
     _prefs?.clearUser();

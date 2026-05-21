@@ -18,6 +18,7 @@ import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/auth_repository.dart';
 import '../../data/remote/orders_repository.dart';
+import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
 import 'order_card.dart';
 
 class FeedScreen extends ConsumerStatefulWidget {
@@ -31,15 +32,50 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     with WidgetsBindingObserver {
   bool _mapMode = false;
 
+  /// PB realtime-подписка на всю коллекцию orders. Когда любой заказ
+  /// меняется (другой заказчик принял исполнителя, заказ отменили,
+  /// статус ушёл из open), сервер шлёт событие — мы инвалидируем фид
+  /// и список перерисовывается без принятого/отменённого заказа.
+  /// Без этого исполнители видели уже-принятые заказы в ленте/на
+  /// карте до swipe-down.
+  Future<void> Function()? _ordersUnsub;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeOrders());
+  }
+
+  Future<void> _subscribeOrders() async {
+    if (!mounted) return;
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    try {
+      final unsub = await pb.collection('orders').subscribe('*', (_) {
+        if (!mounted) return;
+        // Любое изменение заказа — освежаем ленту. Сам фильтр на
+        // клиенте отбросит accepted/cancelled, сервер заодно вернёт
+        // актуальный набор. Дешевле, чем фильтровать события вручную.
+        ref.invalidate(feedOrdersProvider);
+      });
+      if (!mounted) {
+        await unsub();
+        return;
+      }
+      _ordersUnsub = unsub;
+    } catch (_) {/* WebSocket недоступен — ок, лента ручную обновится */}
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    final unsub = _ordersUnsub;
+    _ordersUnsub = null;
+    if (unsub != null) {
+      // ignore: discarded_futures
+      unsub();
+    }
     super.dispose();
   }
 
@@ -347,9 +383,14 @@ class _Header extends StatelessWidget {
                   child: InkWell(
                     borderRadius: BorderRadius.circular(8.r),
                     onTap: onSwitchRole,
-                    child: Padding(
+                    // 44dp по высоте — это основной тумблер исполнителя
+                    // в шапке ленты, в него тяжело попадать большим
+                    // пальцем при ширине бордюра 6dp.
+                    child: Container(
+                      constraints: BoxConstraints(minHeight: 44.h),
+                      alignment: Alignment.center,
                       padding:
-                          EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+                          EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
                       child: Text(
                         roleCta,
                         style: TextStyle(
@@ -381,15 +422,23 @@ class _Header extends StatelessWidget {
                     ),
                   ),
                   if (roleActive && showSearch)
-                    GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => context.push('/search'),
-                      child: Padding(
-                        padding: EdgeInsets.all(4.r),
-                        child: Icon(
-                          IconsaxPlusLinear.search_normal_1,
-                          size: 26.r,
-                          color: AppColors.primary,
+                    // 48×48 — Material/Android минимум touch-target. Сама
+                    // иконка остаётся 26dp, но прозрачная область вокруг
+                    // расширена до 48 — пальцем попадать стало проще.
+                    SizedBox(
+                      width: 48.r,
+                      height: 48.r,
+                      child: Material(
+                        color: Colors.transparent,
+                        shape: const CircleBorder(),
+                        child: InkWell(
+                          customBorder: const CircleBorder(),
+                          onTap: () => context.push('/search'),
+                          child: Icon(
+                            IconsaxPlusLinear.search_normal_1,
+                            size: 26.r,
+                            color: AppColors.primary,
+                          ),
                         ),
                       ),
                     ),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
@@ -23,6 +25,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   final _ctrl = TextEditingController();
   final _focus = FocusNode();
   String _query = '';
+  Timer? _debounce;
 
   /// Кэш отфильтрованного результата для текущего запроса. Без него
   /// каждое нажатие клавиши прогоняло where+sort по всему списку даже
@@ -32,12 +35,23 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   List<Order>? _cachedResults;
   int? _cachedKey;
 
+  void _onQueryChanged() {
+    // 250 мс — стандартная задержка для поиска: не дёргает фильтр на
+    // каждую букву, но реагирует ощутимо. На медленных Android фильтр
+    // по сотням заказов до debounce'а заметно тормозил ввод.
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 250), () {
+      if (!mounted) return;
+      final next = _ctrl.text.trim();
+      if (next == _query) return;
+      setState(() => _query = next);
+    });
+  }
+
   @override
   void initState() {
     super.initState();
-    _ctrl.addListener(() {
-      setState(() => _query = _ctrl.text.trim());
-    });
+    _ctrl.addListener(_onQueryChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) _focus.requestFocus();
     });
@@ -45,6 +59,8 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
 
   @override
   void dispose() {
+    _debounce?.cancel();
+    _ctrl.removeListener(_onQueryChanged);
     _ctrl.dispose();
     _focus.dispose();
     super.dispose();
@@ -152,7 +168,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
           // ── Body ──
           Expanded(
             child: !hasQuery
-                ? const SizedBox.shrink()
+                ? const _SearchHint()
                 : results.isEmpty
                     ? const _NoResults()
                     : ListView.separated(
@@ -228,7 +244,77 @@ class _SearchField extends StatelessWidget {
               ),
             ),
           ),
+          // Кнопка очистки запроса — без неё чтобы переписать поиск,
+          // надо было стирать всё вручную backspace'ом.
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: controller,
+            builder: (_, value, _) {
+              if (value.text.isEmpty) return const SizedBox.shrink();
+              return GestureDetector(
+                onTap: () => controller.clear(),
+                behavior: HitTestBehavior.opaque,
+                child: SizedBox(
+                  width: 36.r,
+                  height: 36.r,
+                  child: Icon(
+                    IconsaxPlusLinear.close_circle,
+                    size: 20.r,
+                    color: Colors.black.withValues(alpha: 0.60),
+                  ),
+                ),
+              );
+            },
+          ),
         ],
+      ),
+    );
+  }
+}
+
+/// Подсказка для пустого запроса. Раньше при пустом поле был пустой
+/// экран — пользователь не понимал, чего ждёт приложение.
+class _SearchHint extends StatelessWidget {
+  const _SearchHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: 32.w),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              IconsaxPlusLinear.search_normal_1,
+              size: 80.r,
+              color: AppColors.primary.withValues(alpha: 0.40),
+            ),
+            SizedBox(height: 24.h),
+            Text(
+              'Что вы ищете?',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 20.sp,
+                fontWeight: FontWeight.w600,
+                height: 1.25,
+                letterSpacing: -0.45,
+              ),
+            ),
+            SizedBox(height: 4.h),
+            Text(
+              'Введите название заказа, категорию или адрес',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.black.withValues(alpha: 0.60),
+                fontSize: 15.sp,
+                fontWeight: FontWeight.w400,
+                height: 1.33,
+                letterSpacing: -0.30,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

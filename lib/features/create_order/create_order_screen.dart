@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -105,7 +106,11 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     } catch (e) {
       // Не глотаем молча — раньше тап на «Добавить фото» не давал
       // обратной связи при ошибке (OOM/permission), и юзер тыкал ещё.
-      debugPrint('[create_order] addPhoto failed: $e');
+      // В release $e не пишем: текст ошибки от image_picker может
+      // содержать путь к выбранному файлу, который попадёт в logcat.
+      if (kDebugMode) {
+        debugPrint('[create_order] addPhoto failed: $e');
+      }
       if (!mounted) return;
       AppToast.show(context, 'Не удалось добавить фото');
     }
@@ -173,6 +178,22 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
   @override
   Widget build(BuildContext context) {
     final draft = ref.watch(orderDraftProvider);
+    // Синхронизация контроллера адреса с черновиком. Адрес меняется
+    // снаружи в двух сценариях:
+    //   1. Юзер сменил город (clearAddress в setCity) — поле обнуляется.
+    //   2. Юзер вернулся с экрана выбора адреса/карты — там адрес
+    //      пишется в draft, а наш экран не пересоздаётся.
+    // Без этой синхронизации поле в форме продолжает показывать старый
+    // адрес, валидация по `_addressCtrl.text` считает экран заполненным,
+    // и юзер упирается в city-guard уже на summary.
+    ref.listen<String>(
+      orderDraftProvider.select((d) => d.address),
+      (prev, next) {
+        if (next != _addressCtrl.text) {
+          _addressCtrl.text = next;
+        }
+      },
+    );
     final phoneDigits = _phoneCtrl.text.replaceAll(RegExp(r'\D'), '');
     // Принимаем только мобильные RU (79xxxxxxxxx); городские/8-800 — нет.
     final phoneOk = !widget.forOther ||
@@ -245,7 +266,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                           borderRadius:
                               BorderRadius.vertical(top: Radius.circular(20.r)),
                           child: SizedBox(
-                            height: MediaQuery.of(context).size.height * 0.92,
+                            height: MediaQuery.sizeOf(context).height * 0.92,
                             child: const SelectCategoryScreen(),
                           ),
                         ),
@@ -309,7 +330,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                           borderRadius:
                               BorderRadius.vertical(top: Radius.circular(20.r)),
                           child: SizedBox(
-                            height: MediaQuery.of(context).size.height * 0.92,
+                            height: MediaQuery.sizeOf(context).height * 0.92,
                             child: const SelectAddressScreen(),
                           ),
                         ),
@@ -568,17 +589,33 @@ class _PhotoTile extends StatelessWidget {
               ),
             ),
           ),
+          // Кружок-крестик визуально 16×16, но тап-зона расширена до
+          // ~36×36 (с учётом отрицательного смещения), чтобы попасть с
+          // первого раза при удалении второго-третьего фото подряд.
           Positioned(
-            right: 4.r,
-            top: 4.r,
+            right: -6.r,
+            top: -6.r,
             child: GestureDetector(
               onTap: onRemove,
               behavior: HitTestBehavior.opaque,
-              child: Container(
-                width: 16.r,
-                height: 16.r,
-                decoration: const BoxDecoration(color: AppColors.primary, shape: BoxShape.circle),
-                child: Icon(Icons.close_rounded, size: 12.r, color: AppColors.surface),
+              child: SizedBox(
+                width: 36.r,
+                height: 36.r,
+                child: Center(
+                  child: Container(
+                    width: 16.r,
+                    height: 16.r,
+                    decoration: const BoxDecoration(
+                      color: AppColors.primary,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.close_rounded,
+                      size: 12.r,
+                      color: AppColors.surface,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),

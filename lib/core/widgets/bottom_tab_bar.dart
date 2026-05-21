@@ -20,7 +20,9 @@ class BottomTabBar extends StatelessWidget {
       decoration: const BoxDecoration(
         color: AppColors.surface,
         border: Border(
-          top: BorderSide(width: 1, color: Color(0xFFEFEFF0)),
+          // Тот же цвет, что и `surfaceVariant`, но через токен — чтобы
+          // случайно не разъехался с системой при правке палитры.
+          top: BorderSide(width: 1, color: AppColors.surfaceVariant),
         ),
       ),
       child: SafeArea(

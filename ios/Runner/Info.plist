@@ -79,6 +79,22 @@
 		<string>whatsapp</string>
 		<string>tg</string>
 		<string>max</string>
+		<!-- Карты для кнопки «Построить маршрут». На Android уже задекларированы
+		     в AndroidManifest.xml; без аналога здесь iPhone-юзер при выборе
+		     Яндекс/2ГИС/Google/Apple всегда падал на веб-версию. -->
+		<string>yandexmaps</string>
+		<string>dgis</string>
+		<string>comgooglemaps</string>
+		<!-- Apple Maps deeplink (maps://?q=...). Без `maps` в списке
+		     canLaunchUrl на iOS возвращал false, и кнопка «Apple Карты»
+		     в bottom-sheet выбора маршрута молча падала в веб-фолбэк. -->
+		<string>maps</string>
 	</array>
+	<!-- Бэк никакого пользовательского шифрования сверх системного TLS не
+	     использует — приложение делает только обычные HTTPS-запросы. Без
+	     этого ключа загрузка в App Store Connect задаёт вопрос про
+	     экспортное шифрование и держит билд в ревью дольше. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>

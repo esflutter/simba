@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/date_time_formatters.dart';
 import '../../core/utils/messenger_launcher.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
@@ -18,18 +19,110 @@ import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
+import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
 import '../../data/remote/users_repository.dart';
 import '../reviews/reviews_providers.dart' show reviewsForUserProvider;
 import 'order_details_screen.dart' show orderByIdProvider;
 import 'responses_screen.dart' show pendingExecutorIdsProvider;
 
-class UserProfileScreen extends ConsumerWidget {
+class UserProfileScreen extends ConsumerStatefulWidget {
   const UserProfileScreen({super.key, required this.userId, this.orderId});
   final String userId;
   final String? orderId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<UserProfileScreen> createState() => _UserProfileScreenState();
+}
+
+class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
+  /// PB realtime-подписка на конкретный заказ (если открыли профиль из
+  /// контекста заказа). Без неё: смотришь карточку исполнителя, заказ
+  /// в это время отменяется или принимается — кнопки «Позвонить»/«Написать»
+  /// остаются как ни в чём не бывало.
+  Future<void> Function()? _orderUnsub;
+
+  /// PB realtime-подписка на коллекцию reviews для отображаемого юзера.
+  /// Без неё рейтинг и список отзывов не освежаются, если кто-то третий
+  /// в этот момент оставляет отзыв этому юзеру.
+  Future<void> Function()? _reviewsUnsub;
+
+  @override
+  void initState() {
+    super.initState();
+    final orderId = widget.orderId;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (orderId != null) _subscribeOrder(orderId);
+      _subscribeReviews();
+    });
+  }
+
+  Future<void> _subscribeOrder(String orderId) async {
+    if (!mounted) return;
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    try {
+      final unsub = await pb.collection('orders').subscribe(orderId, (_) {
+        if (!mounted) return;
+        ref.invalidate(orderByIdProvider(orderId));
+        ref.invalidate(pendingExecutorIdsProvider(orderId));
+      });
+      if (!mounted) {
+        await unsub();
+        return;
+      }
+      _orderUnsub = unsub;
+    } catch (_) {/* WebSocket недоступен — не критично */}
+  }
+
+  Future<void> _subscribeReviews() async {
+    if (!mounted) return;
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    final targetUserId = widget.userId;
+    try {
+      final unsub = await pb.collection('reviews').subscribe('*', (e) {
+        if (!mounted) return;
+        final rec = e.record;
+        if (rec == null) {
+          ref.invalidate(reviewsForUserProvider(targetUserId));
+          // И публичный профиль тоже — рейтинг пересчитывается бэк-хуком.
+          ref.invalidate(publicUserProvider(targetUserId));
+          return;
+        }
+        if (rec.getStringValue('to_user') == targetUserId) {
+          ref.invalidate(reviewsForUserProvider(targetUserId));
+          ref.invalidate(publicUserProvider(targetUserId));
+        }
+      });
+      if (!mounted) {
+        await unsub();
+        return;
+      }
+      _reviewsUnsub = unsub;
+    } catch (_) {/* WS недоступен — норм */}
+  }
+
+  @override
+  void dispose() {
+    final unsubOrder = _orderUnsub;
+    _orderUnsub = null;
+    if (unsubOrder != null) {
+      // ignore: discarded_futures
+      unsubOrder();
+    }
+    final unsubReviews = _reviewsUnsub;
+    _reviewsUnsub = null;
+    if (unsubReviews != null) {
+      // ignore: discarded_futures
+      unsubReviews();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final userId = widget.userId;
+    final orderId = widget.orderId;
     // .select — иначе любой setRole/createOrder ребилдит профиль контрагента.
     final mockReviews = ref.watch(
       appControllerProvider.select((s) => s.reviews),
@@ -54,11 +147,27 @@ class UserProfileScreen extends ConsumerWidget {
           mockReviews.where((r) => r.toUserId == userId).toList(),
     );
     final reviews = reviewsOrNull ?? const <Review>[];
-    final order = orderId == null
+    // Заказ берём из orderByIdProvider — это «живой» запрос к PB, который
+    // подписан на realtime (см. _subscribeOrder выше). Раньше тут была
+    // только локальная выборка из mockMyOrders/mockOrders, и в live-режиме
+    // после принятия исполнителя order оказывался null — из-за этого
+    // canContact считался false и кнопки «Позвонить / Написать» не
+    // показывались, хотя статус заказа уже сменился на accepted.
+    //
+    // Mock-списки оставляем как fallback для мок-режима и на время загрузки
+    // (asyncOrder.isLoading) — иначе экран мигает пустыми кнопками.
+    final asyncOrder = orderId == null
+        ? const AsyncValue<Order?>.data(null)
+        : ref.watch(orderByIdProvider(orderId));
+    final orderFromMock = orderId == null
         ? null
         : [...mockMyOrders, ...mockOrders]
             .cast<Order?>()
             .firstWhere((o) => o?.id == orderId, orElse: () => null);
+    final order = asyncOrder.maybeWhen(
+      data: (o) => o ?? orderFromMock,
+      orElse: () => orderFromMock,
+    );
     // Имя/фото берём в первую очередь из expand'а Order (PB live-mode), и
     // только fall-back на справочник моков. До фикса userById возвращал
     // demoCurrentUser («Иван Иванов») для любого незнакомого PB-id, что в
@@ -95,9 +204,22 @@ class UserProfileScreen extends ConsumerWidget {
         ? nameFromOrder
         : user.name;
     final displayPhoto = photoFromOrder ?? user.photoPath;
+    // Источник правды по «является ли этот юзер кандидатом на мой заказ» —
+    // pendingExecutorIdsProvider (живой запрос к order_responses). В live
+    // маппер не наполняет `order.responses` (избегаем N+1), и проверка через
+    // него всегда давала false → кнопки «Принять/Отклонить» не появлялись
+    // на профиле исполнителя, когда заказчик заходил из экрана откликов.
+    // Тот же шаблон бага, что мы починили в счётчике откликов.
+    final pendingIdsAsync = orderId == null
+        ? const AsyncValue<List<String>>.data(<String>[])
+        : ref.watch(pendingExecutorIdsProvider(orderId));
+    final isInPendingFromServer = pendingIdsAsync.maybeWhen(
+      data: (ids) => ids.contains(userId),
+      orElse: () => false,
+    );
     final isPendingCandidate = order != null &&
         order.status == OrderStatus.open &&
-        order.responses.contains(userId);
+        (isInPendingFromServer || order.responses.contains(userId));
     // Контакты доступны от момента match'а и до полной отмены.
     // Это включает все промежуточные состояния (accepted, awaitingPayment,
     // completed) — у заказа уже есть исполнитель, обе стороны должны
@@ -146,7 +268,7 @@ class UserProfileScreen extends ConsumerWidget {
                   16.w,
                   isPendingCandidate
                       ? 0
-                      : 16.h + MediaQuery.of(context).viewPadding.bottom,
+                      : 16.h + MediaQuery.viewPaddingOf(context).bottom,
                 ),
                 children: [
                   AppCard(
@@ -319,29 +441,53 @@ class UserProfileScreen extends ConsumerWidget {
                       ),
                     )
                   else if (reviews.isEmpty)
-                    Padding(
-                      padding: EdgeInsets.symmetric(vertical: 64.h),
-                      child: Column(
-                        children: [
-                          Icon(
-                            IconsaxPlusLinear.star_1,
-                            size: 80.r,
-                            color: AppColors.star,
-                          ),
-                          SizedBox(height: 24.h),
-                          Text(
-                            'Нет отзывов',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: AppColors.textPrimary,
-                              fontSize: 20.sp,
-                              fontWeight: FontWeight.w600,
-                              height: 1.25,
-                              letterSpacing: -0.45,
+                    // Empty-state центрируем по оставшейся высоте экрана,
+                    // а не приклеиваем к заголовку «Отзывы» сверху. Раньше
+                    // звезда висела сразу под заголовком, а ниже зияла
+                    // большая пустая полоса — выглядело так, будто
+                    // подсказка случайно «улетела вверх».
+                    LayoutBuilder(
+                      builder: (ctx, constraints) {
+                        // Высота от низа заголовка «Отзывы» до края
+                        // экрана: ListView отдаёт нам maxHeight=∞ (он
+                        // вертикально-скроллящийся), поэтому считаем
+                        // через MediaQuery.
+                        final media = MediaQuery.of(ctx);
+                        final available = media.size.height -
+                            media.viewPadding.top -
+                            // Запас на шапку, карточку контакта и
+                            // заголовок «Отзывы». Подобрано визуально
+                            // под дизайн 360×800.
+                            340.h;
+                        final minHeight = available > 240.h ? available : 240.h;
+                        return SizedBox(
+                          height: minHeight,
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  IconsaxPlusLinear.star_1,
+                                  size: 80.r,
+                                  color: AppColors.star,
+                                ),
+                                SizedBox(height: 24.h),
+                                Text(
+                                  'Нет отзывов',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: AppColors.textPrimary,
+                                    fontSize: 20.sp,
+                                    fontWeight: FontWeight.w600,
+                                    height: 1.25,
+                                    letterSpacing: -0.45,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     )
                   else ...[
                     AppCard(
@@ -364,67 +510,93 @@ class UserProfileScreen extends ConsumerWidget {
               ),
             ),
           if (isPendingCandidate)
-            _CandidateActionBar(
-              onAccept: () async {
-                try {
-                  await ref
-                      .read(orderResponsesRepositoryProvider)
-                      .accept(orderId!, userId);
-                  if (!context.mounted) return;
-                  ref.invalidate(myOrdersStreamProvider);
-                  ref.invalidate(myExecutorOrdersProvider);
-                  ref.invalidate(feedOrdersProvider);
-                  ref.invalidate(pendingExecutorIdsProvider(orderId!));
-                  ref.invalidate(orderByIdProvider(orderId!));
-                  AppToast.show(context, 'Исполнитель принят');
-                  // После принятия остальные отклики автоматически отклонены —
-                  // экран откликов под нами теперь пустой. Убираем его из
-                  // стека (go_router-native): сначала pop профиля, потом
-                  // pushReplacement на тот же профиль — экран откликов
-                  // заменяется и в стеке остаётся [order → profile]. Back
-                  // теперь корректно ведёт на детали заказа.
-                  context.pop();
-                  context.pushReplacement(
-                    '/order/$orderId/user/$userId',
-                  );
-                } on OrderResponseGoneException {
-                  // Исполнитель отозвал отклик параллельно — не показывать
-                  // ложный «принят». Перерисуем экран, чтобы скрыть кнопку.
-                  if (!context.mounted) return;
-                  ref.invalidate(pendingExecutorIdsProvider(orderId!));
-                  ref.invalidate(orderByIdProvider(orderId!));
-                  AppToast.show(context, 'Этот отклик уже недоступен');
-                } catch (_) {
-                  if (!context.mounted) return;
-                  AppToast.show(context, 'Ошибка. Попробуйте позже');
-                }
-              },
-              onDecline: () async {
-                final wasLast = order.responses.length == 1;
-                try {
-                  await ref
-                      .read(orderResponsesRepositoryProvider)
-                      .decline(orderId!, userId);
-                  if (!context.mounted) return;
-                  ref.invalidate(myOrdersStreamProvider);
-                  ref.invalidate(myExecutorOrdersProvider);
-                  ref.invalidate(feedOrdersProvider);
-                  ref.invalidate(pendingExecutorIdsProvider(orderId!));
-                  ref.invalidate(orderByIdProvider(orderId!));
-                  AppToast.show(context, 'Исполнитель отклонён');
-                  context.pop();
-                  if (wasLast) context.pop();
-                } on OrderResponseGoneException {
-                  if (!context.mounted) return;
-                  ref.invalidate(pendingExecutorIdsProvider(orderId!));
-                  ref.invalidate(orderByIdProvider(orderId!));
-                  AppToast.show(context, 'Этот отклик уже недоступен');
-                } catch (_) {
-                  if (!context.mounted) return;
-                  AppToast.show(context, 'Ошибка. Попробуйте позже');
-                }
-              },
-            ),
+            // isPendingCandidate ⇒ orderId != null (см. выше), фиксируем это
+            // в локальную не-nullable переменную, чтобы closure'ам не нужно
+            // было дописывать `!` к orderId — анализатор иначе ругается на
+            // лишние non-null assertions.
+            Builder(builder: (_) {
+              final safeOrderId = orderId!;
+              return _CandidateActionBar(
+                onAccept: () async {
+                  try {
+                    await ref
+                        .read(orderResponsesRepositoryProvider)
+                        .accept(safeOrderId, userId);
+                    if (!context.mounted) return;
+                    ref.invalidate(myOrdersStreamProvider);
+                    ref.invalidate(myExecutorOrdersProvider);
+                    ref.invalidate(feedOrdersProvider);
+                    ref.invalidate(pendingExecutorIdsProvider(safeOrderId));
+                    ref.invalidate(orderByIdProvider(safeOrderId));
+                    AppToast.show(context, 'Исполнитель принят');
+                    // После принятия остальные отклики автоматически отклонены —
+                    // экран откликов под нами теперь пустой. Чистим стек,
+                    // чтобы back с профиля вёл на детали заказа, а не на
+                    // пустой экран откликов.
+                    //
+                    // Раньше pop + pushReplacement шли подряд в одном
+                    // кадре: pop уже анимировал уход профиля, а
+                    // pushReplacement пытался заменить уже снимающийся
+                    // top — на медленных устройствах ловилось «голое»
+                    // состояние навигатора. Откладываем второй вызов
+                    // через postFrame, чтобы он отработал ПОСЛЕ того,
+                    // как pop успел снять верхний слой.
+                    if (context.canPop()) context.pop();
+                    final navTarget = '/order/$safeOrderId/user/$userId';
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!context.mounted) return;
+                      context.pushReplacement(navTarget);
+                    });
+                  } on OrderResponseGoneException {
+                    // Исполнитель отозвал отклик параллельно — не показывать
+                    // ложный «принят». Перерисуем экран, чтобы скрыть кнопку.
+                    if (!context.mounted) return;
+                    ref.invalidate(pendingExecutorIdsProvider(safeOrderId));
+                    ref.invalidate(orderByIdProvider(safeOrderId));
+                    AppToast.show(context, 'Этот отклик уже недоступен');
+                  } catch (_) {
+                    if (!context.mounted) return;
+                    AppToast.show(context, 'Ошибка. Попробуйте позже');
+                  }
+                },
+                onDecline: () async {
+                  // Источник правды по живым откликам — pendingExecutorIdsProvider
+                  // (отдельный запрос к order_responses). `order.responses` от
+                  // маппера в live-режиме всегда пуст: responses не expand'ятся
+                  // в основном запросе заказа. Из-за этого `wasLast` всегда был
+                  // false → после отклонения последнего исполнителя через карточку
+                  // профиля экран откликов под нами оставался открытым с пустым
+                  // списком, юзеру приходилось жать «назад» ещё раз вручную.
+                  final pendingBefore = await ref
+                      .read(pendingExecutorIdsProvider(safeOrderId).future)
+                      .catchError((_) => const <String>[]);
+                  final wasLast = pendingBefore.length == 1 &&
+                      pendingBefore.contains(userId);
+                  try {
+                    await ref
+                        .read(orderResponsesRepositoryProvider)
+                        .decline(safeOrderId, userId);
+                    if (!context.mounted) return;
+                    ref.invalidate(myOrdersStreamProvider);
+                    ref.invalidate(myExecutorOrdersProvider);
+                    ref.invalidate(feedOrdersProvider);
+                    ref.invalidate(pendingExecutorIdsProvider(safeOrderId));
+                    ref.invalidate(orderByIdProvider(safeOrderId));
+                    AppToast.show(context, 'Исполнитель отклонён');
+                    if (context.canPop()) context.pop();
+                    if (wasLast && context.canPop()) context.pop();
+                  } on OrderResponseGoneException {
+                    if (!context.mounted) return;
+                    ref.invalidate(pendingExecutorIdsProvider(safeOrderId));
+                    ref.invalidate(orderByIdProvider(safeOrderId));
+                    AppToast.show(context, 'Этот отклик уже недоступен');
+                  } catch (_) {
+                    if (!context.mounted) return;
+                    AppToast.show(context, 'Ошибка. Попробуйте позже');
+                  }
+                },
+              );
+            }),
         ],
       ),
     );
@@ -443,8 +615,23 @@ class UserProfileScreen extends ConsumerWidget {
     if (sanitized.isEmpty) return;
     final uri = Uri.parse('tel:$sanitized');
     try {
-      await launchUrl(uri);
-    } catch (_) {}
+      // canLaunchUrl + проверка результата launchUrl — без них на
+      // устройствах без SIM (планшеты, эмуляторы) тап «Позвонить»
+      // молча ничего не делал, пользователь не понимал, что не работает.
+      final can = await canLaunchUrl(uri);
+      if (!can) {
+        if (!mounted) return;
+        AppToast.show(context, 'На устройстве нет приложения для звонков');
+        return;
+      }
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && mounted) {
+        AppToast.show(context, 'Не удалось открыть набор номера');
+      }
+    } catch (_) {
+      if (!mounted) return;
+      AppToast.show(context, 'Не удалось открыть набор номера');
+    }
   }
 }
 
@@ -658,15 +845,21 @@ class _ContactSheet extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => Navigator.of(context).pop(),
-                    child: Padding(
-                      padding: EdgeInsets.all(6.r),
-                      child: Icon(
-                        Icons.close_rounded,
-                        color: AppColors.primary,
-                        size: 20.r,
+                  // 44×44 — минимум touch-target для крестика sheet'а.
+                  SizedBox(
+                    width: 44.r,
+                    height: 44.r,
+                    child: Material(
+                      color: Colors.transparent,
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: () => Navigator.of(context).pop(),
+                        child: Icon(
+                          Icons.close_rounded,
+                          color: AppColors.primary,
+                          size: 20.r,
+                        ),
                       ),
                     ),
                   ),
@@ -786,7 +979,7 @@ class _RatingSummary extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.center,
           children: [
             Text(
-              average.toStringAsFixed(1),
+              formatRating(average),
               style: TextStyle(
                 color: AppColors.textPrimary,
                 fontSize: 20.sp,

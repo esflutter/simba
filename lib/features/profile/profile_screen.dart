@@ -5,11 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
-import 'package:http/http.dart' as http;
 import 'package:iconsax_plus/iconsax_plus.dart';
 
 import '../../core/config/env.dart';
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/date_time_formatters.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/messenger_launcher.dart';
 import '../../core/widgets/app_card.dart';
@@ -21,16 +21,94 @@ import '../../data/remote/auth_repository.dart';
 import '../../data/remote/pocketbase_client.dart';
 import '../reviews/reviews_providers.dart' show reviewsForUserProvider;
 
-class ProfileScreen extends ConsumerWidget {
+class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
+}
+
+class _ProfileScreenState extends ConsumerState<ProfileScreen> {
+  /// PB realtime-подписка на коллекцию reviews. Без неё, когда другая
+  /// сторона завершённого заказа ставит мне отзыв пока я смотрю свой
+  /// профиль, рейтинг и счётчик отзывов не сдвигаются до выхода с
+  /// экрана и повторного входа.
+  Future<void> Function()? _reviewsUnsub;
+  String? _subscribedForUserId;
+
+  // initState не нужен: первая подписка вешается из build при первом
+  // появлении user.id (см. условие `_subscribedForUserId != user.id`).
+  // Так первая и последующие подписки идут через один и тот же путь.
+
+  Future<void> _subscribeReviews(String myId) async {
+    if (!mounted) return;
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    if (myId.isEmpty) return;
+    try {
+      final unsub = await pb.collection('reviews').subscribe('*', (e) {
+        if (!mounted) return;
+        final rec = e.record;
+        if (rec == null) {
+          ref.invalidate(reviewsForUserProvider(myId));
+          return;
+        }
+        if (rec.getStringValue('to_user') == myId) {
+          ref.invalidate(reviewsForUserProvider(myId));
+        }
+      });
+      if (!mounted || _subscribedForUserId != myId) {
+        // За время await юзер сменился (logout/login другим аккаунтом)
+        // или экран демаунтнулся — отписываемся, чтобы не получать чужие
+        // события.
+        await unsub();
+        return;
+      }
+      _reviewsUnsub = unsub;
+    } catch (_) {/* WS недоступен — не критично */}
+  }
+
+  Future<void> _cancelSubscription() async {
+    final unsub = _reviewsUnsub;
+    _reviewsUnsub = null;
+    if (unsub != null) await unsub();
+  }
+
+  @override
+  void dispose() {
+    // ignore: discarded_futures
+    _cancelSubscription();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // Подписываемся отдельно на user — иначе ConsumerWidget может пропустить
     // ребилд из-за const-канонизации screens в HomeShell.
     final user = ref.watch(appControllerProvider.select((s) => s.user));
     if (user == null) {
+      // Юзер вышел из аккаунта — закрываем подписку, иначе она держит
+      // соединение для прошлого id и при следующем визите придут
+      // события не того пользователя.
+      if (_subscribedForUserId != null) {
+        _subscribedForUserId = null;
+        // ignore: discarded_futures
+        _cancelSubscription();
+      }
       return const Scaffold(body: SizedBox.shrink());
+    }
+    // Если юзер сменился (logout → login другим аккаунтом, IndexedStack
+    // в HomeShell не пересоздаёт ProfileScreen) — переподписываемся на
+    // новый id. ВАЖНО: _subscribedForUserId фиксируем синхронно прямо
+    // здесь, до postFrame — иначе два подряд build (например, во время
+    // загрузки данных) запустят два параллельных subscribe.
+    if (_subscribedForUserId != user.id) {
+      _subscribedForUserId = user.id;
+      // ignore: discarded_futures
+      _cancelSubscription();
+      final targetId = user.id;
+      WidgetsBinding.instance
+          .addPostFrameCallback((_) => _subscribeReviews(targetId));
     }
     // Считаем рейтинг из реальных отзывов на текущего юзера, а не из
     // user.rating (он у новых пользователей 0). В live тянем отзывы через
@@ -152,7 +230,7 @@ class ProfileScreen extends ConsumerWidget {
               Text(
                 'Вы уверены, что хотите выйти из аккаунта?',
                 textAlign: TextAlign.center,
-                style: AppText.h3(color: const Color(0xFF111827))
+                style: AppText.h3(color: AppColors.textPrimary)
                     .copyWith(height: 1.40),
               ),
               SizedBox(height: 16.h),
@@ -181,7 +259,7 @@ class ProfileScreen extends ConsumerWidget {
                     _LogoutDialogButton(
                       label: 'Отмена',
                       background: AppColors.surfaceVariant,
-                      textColor: const Color(0xFF111827),
+                      textColor: AppColors.textPrimary,
                       onTap: () => Navigator.of(dialogCtx).pop(),
                     ),
                   ],
@@ -210,15 +288,21 @@ class ProfileScreen extends ConsumerWidget {
       final pb = ref.read(pocketbaseProvider);
       if (pb != null && pb.authStore.isValid) {
         try {
-          await http
-              .post(
-                Uri.parse('${pb.baseURL}/api/profile/delete'),
-                headers: {
-                  'Authorization': 'Bearer ${pb.authStore.token}',
-                  'Content-Type': 'application/json',
-                },
-              )
-              .timeout(const Duration(seconds: 10));
+          // sendWithSharedClient — если сокет shared-клиента закрылся
+          // после долгого сна устройства, обёртка пересоздаст клиент.
+          // Сам запрос идёт через общий http-клиент, как остальные
+          // прямые ручки.
+          await sendWithSharedClient(
+            (c) => c
+                .post(
+                  Uri.parse('${pb.baseURL}/api/profile/delete'),
+                  headers: {
+                    'Authorization': 'Bearer ${pb.authStore.token}',
+                    'Content-Type': 'application/json',
+                  },
+                )
+                .timeout(const Duration(seconds: 10)),
+          );
         } catch (_) {
           // Даже при сетевой ошибке — продолжаем logout (UX-soft).
           // Запрос можно повторить при следующем логине (есть аудит).
@@ -252,7 +336,7 @@ class ProfileScreen extends ConsumerWidget {
               Text(
                 'Удалить аккаунт?',
                 textAlign: TextAlign.center,
-                style: AppText.h3(color: const Color(0xFF111827))
+                style: AppText.h3(color: AppColors.textPrimary)
                     .copyWith(height: 1.40),
               ),
               SizedBox(height: 8.h),
@@ -292,7 +376,7 @@ class ProfileScreen extends ConsumerWidget {
                     _LogoutDialogButton(
                       label: 'Отмена',
                       background: AppColors.surfaceVariant,
-                      textColor: const Color(0xFF111827),
+                      textColor: AppColors.textPrimary,
                       onTap: () => Navigator.of(dialogCtx).pop(),
                     ),
                   ],
@@ -326,83 +410,96 @@ class _ProfileCard extends StatelessWidget {
       padding: EdgeInsets.symmetric(vertical: 16.h),
       child: Stack(
         children: [
-          Column(
-            children: [
-              _Avatar(photoPath: user.photoPath),
-              SizedBox(height: 16.h),
-              Text(
-                user.name.isEmpty ? 'Без имени' : user.name,
-                textAlign: TextAlign.center,
-                style: AppText.h3().copyWith(height: 1.10),
-              ),
-              if (user.phone.isNotEmpty) ...[
-                SizedBox(height: 4.h),
+          // width: double.infinity на Column — иначе Stack (loose,
+          // alignment=topStart) ужимает колонку до ширины самого широкого
+          // ребёнка (обычно это кружок аватарки 100r), и весь блок
+          // «аватар + имя + телефон» прижимается к левому краю карточки.
+          // На коротких именах («Эльвира») это выглядит как смещение
+          // влево от центра — тестировщик так и заметил.
+          SizedBox(
+            width: double.infinity,
+            child: Column(
+              children: [
+                _Avatar(photoPath: user.photoPath),
+                SizedBox(height: 16.h),
                 Text(
-                  user.phone,
+                  user.name.isEmpty ? 'Без имени' : user.name,
                   textAlign: TextAlign.center,
-                  style: AppText.bodySmall().copyWith(
-                    color: Colors.black.withValues(alpha: 0.60),
-                    height: 1.57,
-                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppText.h3().copyWith(height: 1.10),
                 ),
-              ],
-              Builder(builder: (_) {
-                // Собираем только видимые блоки и вставляем 24.w spacer ТОЛЬКО
-                // между ними. Trailing-spacer после tools/transport смещал
-                // одиночную иконку влево от центра, когда нет рейтинга.
-                final blocks = <Widget>[];
-                if (hasTools) {
-                  blocks.add(Image.asset(
-                    'assets/images/icon_tools.png',
-                    width: 16.r,
-                    height: 16.r,
-                  ));
-                }
-                if (hasTransport) {
-                  blocks.add(Image.asset(
-                    'assets/images/icon_transport.png',
-                    width: 20.r,
-                    height: 16.r,
-                  ));
-                }
-                if (reviewsCount > 0) {
-                  blocks.add(Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Image.asset(
-                        'assets/images/icon_ranking.webp',
-                        width: 16.r,
-                        height: 16.r,
-                      ),
-                      SizedBox(width: 8.w),
-                      Text(
-                        rating.toStringAsFixed(1),
-                        textAlign: TextAlign.center,
-                        style: AppText.bodySmall(weight: FontWeight.w500),
-                      ),
-                    ],
-                  ));
-                }
-                // Если ни инструмента/транспорта, ни рейтинга — вообще не
-                // добавляем ни spacer'а, ни Row. Иначе остаётся «висячий»
-                // 4.h перед пустой строкой, и нижний отступ карточки
-                // оказывается больше верхнего на эти 4.h.
-                if (blocks.isEmpty) return const SizedBox.shrink();
-                final children = <Widget>[];
-                for (var i = 0; i < blocks.length; i++) {
-                  if (i > 0) children.add(SizedBox(width: 24.w));
-                  children.add(blocks[i]);
-                }
-                return Padding(
-                  padding: EdgeInsets.only(top: 4.h),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: children,
+                if (user.phone.isNotEmpty) ...[
+                  SizedBox(height: 4.h),
+                  Text(
+                    user.phone,
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: AppText.bodySmall().copyWith(
+                      color: Colors.black.withValues(alpha: 0.60),
+                      height: 1.57,
+                    ),
                   ),
-                );
-              }),
-            ],
+                ],
+                Builder(builder: (_) {
+                  // Собираем только видимые блоки и вставляем 24.w spacer ТОЛЬКО
+                  // между ними. Trailing-spacer после tools/transport смещал
+                  // одиночную иконку влево от центра, когда нет рейтинга.
+                  final blocks = <Widget>[];
+                  if (hasTools) {
+                    blocks.add(Image.asset(
+                      'assets/images/icon_tools.png',
+                      width: 16.r,
+                      height: 16.r,
+                    ));
+                  }
+                  if (hasTransport) {
+                    blocks.add(Image.asset(
+                      'assets/images/icon_transport.png',
+                      width: 20.r,
+                      height: 16.r,
+                    ));
+                  }
+                  if (reviewsCount > 0) {
+                    blocks.add(Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Image.asset(
+                          'assets/images/icon_ranking.webp',
+                          width: 16.r,
+                          height: 16.r,
+                        ),
+                        SizedBox(width: 8.w),
+                        Text(
+                          formatRating(rating),
+                          textAlign: TextAlign.center,
+                          style: AppText.bodySmall(weight: FontWeight.w500),
+                        ),
+                      ],
+                    ));
+                  }
+                  // Если ни инструмента/транспорта, ни рейтинга — вообще не
+                  // добавляем ни spacer'а, ни Row. Иначе остаётся «висячий»
+                  // 4.h перед пустой строкой, и нижний отступ карточки
+                  // оказывается больше верхнего на эти 4.h.
+                  if (blocks.isEmpty) return const SizedBox.shrink();
+                  final children = <Widget>[];
+                  for (var i = 0; i < blocks.length; i++) {
+                    if (i > 0) children.add(SizedBox(width: 24.w));
+                    children.add(blocks[i]);
+                  }
+                  return Padding(
+                    padding: EdgeInsets.only(top: 4.h),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: children,
+                    ),
+                  );
+                }),
+              ],
+            ),
           ),
           Positioned(
             right: 4.w,
@@ -668,15 +765,21 @@ class _SupportSheet extends StatelessWidget {
                     ),
                   ),
                   const Spacer(),
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => Navigator.of(context).pop(),
-                    child: Padding(
-                      padding: EdgeInsets.all(6.r),
-                      child: Icon(
-                        Icons.close_rounded,
-                        color: AppColors.primary,
-                        size: 20.r,
+                  // 44×44 — минимум touch-target для крестика sheet'а.
+                  SizedBox(
+                    width: 44.r,
+                    height: 44.r,
+                    child: Material(
+                      color: Colors.transparent,
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: () => Navigator.of(context).pop(),
+                        child: Icon(
+                          Icons.close_rounded,
+                          color: AppColors.primary,
+                          size: 20.r,
+                        ),
                       ),
                     ),
                   ),

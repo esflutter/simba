@@ -88,7 +88,11 @@ class MessengerLauncher {
             await launchUrl(uri, mode: LaunchMode.externalApplication);
         if (ok) return true;
       } catch (e) {
-        debugPrint('[MessengerLauncher] $url failed: $e');
+        // В release не пишем — URL содержит номер телефона (wa.me/79xxx,
+        // tg://resolve?phone=…), любое приложение с READ_LOGS его увидит.
+        if (kDebugMode) {
+          debugPrint('[MessengerLauncher] launch failed: $e');
+        }
       }
     }
     return false;

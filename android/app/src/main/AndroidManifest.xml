@@ -64,6 +64,13 @@
             <action android:name="android.intent.action.DIAL"/>
             <data android:scheme="tel"/>
         </intent>
+        <!-- url_launcher по умолчанию шлёт ACTION_VIEW для tel:.
+             Только DIAL без VIEW на части Android 11+ устройств приводит
+             к canLaunchUrl == false → кнопка «Позвонить» не работает. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="tel"/>
+        </intent>
         <!-- Deeplinks мессенджеров: нужны для canLaunchUrl/launchUrl
              через url_launcher. Без них на Android 11+ canLaunchUrl
              вернёт false, и наш fallback на https-ссылку не сработает. -->
@@ -79,11 +86,31 @@
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="max"/>
         </intent>
+        <!-- Deeplinks карт: чтобы кнопка «Построить маршрут» открывала
+             выбранное приложение (Яндекс/2ГИС/Google), а не дефолтное.
+             Без queries Android 11+ блокирует видимость других приложений,
+             и launchUrl бросает PlatformException вместо false — наш
+             try/catch ловит, но затем web-fallback тоже может уйти не туда. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="yandexmaps"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="dgis"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="comgooglemaps"/>
+        </intent>
         <!-- Известные package-имена клиентов — для visibility в Android 11+. -->
         <package android:name="com.whatsapp"/>
         <package android:name="com.whatsapp.w4b"/>
         <package android:name="org.telegram.messenger"/>
         <package android:name="org.telegram.messenger.web"/>
         <package android:name="ru.oneme.app"/>
+        <package android:name="ru.yandex.yandexmaps"/>
+        <package android:name="ru.dublgis.dgismobile"/>
+        <package android:name="com.google.android.apps.maps"/>
     </queries>
 </manifest>

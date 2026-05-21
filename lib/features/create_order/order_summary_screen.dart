@@ -11,6 +11,7 @@ import 'package:latlong2/latlong.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/backend_error.dart';
+import '../../core/utils/client_uid.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/utils/plural_ru.dart' show pluralRubles;
 import '../../core/widgets/app_back_button.dart';
@@ -229,7 +230,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
                               borderRadius:
                                   BorderRadius.vertical(top: Radius.circular(20.r)),
                               child: SizedBox(
-                                height: MediaQuery.of(context).size.height * 0.92,
+                                height: MediaQuery.sizeOf(context).height * 0.92,
                                 child: const SelectPaymentMethodScreen(),
                               ),
                             ),
@@ -280,7 +281,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       return;
     }
     if (price > kPriceMax) {
-      AppToast.show(context, 'Максимальная цена 99 999 999 ₽');
+      AppToast.show(context, 'Максимальная цена ${formatRub(kPriceMax)}');
       return;
     }
     // Финальный city-guard: даже если в _onMapTap прошли Phase 1+2, тут
@@ -360,9 +361,23 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       // Создаём заказ; при ошибке НЕ показываем «Заказ создан!» — иначе
       // у пользователя складывается ложное впечатление успеха, а заказ
       // в фид к исполнителям так и не попал.
+      //
+      // UUID для идемпотентности хранится в самом черновике — это
+      // переживает уход с экрана. Если юзер тапнул «Опубликовать»,
+      // получил timeout, нажал назад, вернулся через минуту и тапнул
+      // снова — UUID тот же, сервер вернёт уже созданный заказ (или
+      // отобьёт constraint violation, и репозиторий найдёт его в БД).
+      // После успешной публикации reset() черновика обнулит UUID
+      // вместе со всем остальным.
+      final draftCtrl = ref.read(orderDraftProvider.notifier);
+      var uid = ref.read(orderDraftProvider).clientUid;
+      if (uid == null || uid.isEmpty) {
+        uid = generateClientUid();
+        draftCtrl.update(clientUid: uid);
+      }
       await ref
           .read(ordersRepositoryProvider)
-          .create(draft: order, photoFiles: photoFiles);
+          .create(draft: order, photoFiles: photoFiles, clientUid: uid);
       // Успех — обновляем мои заказы и ленту исполнителей, чистим черновик.
       ref.invalidate(myOrdersStreamProvider);
       ref.invalidate(myExecutorOrdersProvider);
@@ -382,8 +397,23 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       // размер фото, нет сети — всё переводится в дружелюбный русский.
       // До этого тут был обычный «Не удалось создать заказ» без
       // подсказки, что именно сломалось.
+      //
+      // Отдельный случай — таймаут / обрыв соединения. Multipart-тело
+      // могло уйти на сервер до того, как клиент потерял связь, и
+      // заказ уже создан. Если юзер просто увидит «не получилось» и
+      // тапнет ещё раз — получит дубль в БД. Подсказываем зайти в
+      // «Мои заказы» прежде чем повторять.
       if (!context.mounted) return;
-      AppToast.show(context, humanizeBackendError(e));
+      final s = e.toString();
+      final maybeCreated = s.contains('TimeoutException') ||
+          s.contains('SocketException') ||
+          s.contains('Failed host lookup');
+      AppToast.show(
+        context,
+        maybeCreated
+            ? 'Сервер не ответил вовремя. Заказ мог создаться — проверьте «Мои заказы» перед повтором.'
+            : humanizeBackendError(e),
+      );
     } finally {
       if (mounted) setState(() => _isPublishing = false);
     }

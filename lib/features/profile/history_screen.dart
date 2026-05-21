@@ -13,6 +13,7 @@ import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/orders_repository.dart';
+import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
 import '../orders/order_card.dart';
 
 enum _Tab { posted, executed }
@@ -26,17 +27,51 @@ class HistoryScreen extends ConsumerStatefulWidget {
 
 class _HistoryScreenState extends ConsumerState<HistoryScreen>
     with WidgetsBindingObserver {
-  _Tab _tab = _Tab.posted;
+  /// Выбранная вкладка. Nullable до первого build — там вычислится
+  /// дефолтная по текущей роли (по тому же правилу, что и в «Моих заказах»:
+  /// если включено «Готов помочь», открываем «Я исполнитель» сразу).
+  _Tab? _tab;
+  // Юзер сам тапнул по табу — больше не пересчитываем дефолт при ребилдах.
+  bool _userPickedTab = false;
+
+  /// PB realtime-подписка на коллекцию orders. Когда какой-то заказ
+  /// переходит в completed/cancelled — он должен мгновенно появиться
+  /// в Истории, без pull-to-refresh.
+  Future<void> Function()? _ordersUnsub;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeOrders());
+  }
+
+  Future<void> _subscribeOrders() async {
+    if (!mounted) return;
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    try {
+      final unsub = await pb.collection('orders').subscribe('*', (_) {
+        if (!mounted) return;
+        ref.invalidate(myOrdersStreamProvider);
+      });
+      if (!mounted) {
+        await unsub();
+        return;
+      }
+      _ordersUnsub = unsub;
+    } catch (_) {/* нет WebSocket — История продолжит работать без realtime */}
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    final unsub = _ordersUnsub;
+    _ordersUnsub = null;
+    if (unsub != null) {
+      // ignore: discarded_futures
+      unsub();
+    }
     super.dispose();
   }
 
@@ -50,12 +85,36 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
     }
   }
 
+  /// Дефолтная вкладка при первом открытии Истории.
+  ///
+  /// Та же логика, что и в «Моих заказах»: текущая роль важнее, чем
+  /// просто «открыть посты». Если юзер включил «Готов помочь», ему
+  /// логичнее видеть свою исполнительскую историю сразу. Если в роли
+  /// пусто, но в другой что-то есть — открываем непустую.
+  _Tab _defaultTab({
+    required Iterable<Order> posted,
+    required Iterable<Order> executed,
+    required UserRole role,
+  }) {
+    final preferred =
+        role == UserRole.executor ? _Tab.executed : _Tab.posted;
+    final preferredList =
+        preferred == _Tab.executed ? executed : posted;
+    if (preferredList.isNotEmpty) return preferred;
+    final fallbackList = preferred == _Tab.executed ? posted : executed;
+    if (fallbackList.isNotEmpty) {
+      return preferred == _Tab.executed ? _Tab.posted : _Tab.executed;
+    }
+    return preferred;
+  }
+
   @override
   Widget build(BuildContext context) {
     // .select — иначе любая мутация AppState ребилдит весь экран истории.
     final myUserId = ref.watch(
       appControllerProvider.select((s) => s.user?.id),
     );
+    final myRole = ref.watch(appControllerProvider.select((s) => s.role));
     final mockMyOrders = ref.watch(
       appControllerProvider.select((s) => s.myOrders),
     );
@@ -105,7 +164,23 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
       error: (_, _) => mockExecuted(),
     );
 
-    final list = _tab == _Tab.posted ? posted : executed;
+    // _tab пересчитывается из роли и непустых списков, пока юзер сам не
+    // тапнул по табу. После первого тапа фиксируется. Это та же логика,
+    // что и в «Моих заказах».
+    if (!_userPickedTab) {
+      _tab = _defaultTab(
+        posted: posted ?? const <Order>[],
+        executed: executed ?? const <Order>[],
+        role: myRole,
+      );
+    }
+    final tab = _tab ??= _defaultTab(
+      posted: posted ?? const <Order>[],
+      executed: executed ?? const <Order>[],
+      role: myRole,
+    );
+
+    final list = tab == _Tab.posted ? posted : executed;
     final groups = _groupByDate(list ?? const <Order>[]);
 
     return Scaffold(
@@ -149,8 +224,11 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
           Padding(
             padding: EdgeInsets.fromLTRB(16.w, 12.h, 16.w, 0),
             child: _SegmentedTabs(
-              value: _tab,
-              onChanged: (t) => setState(() => _tab = t),
+              value: tab,
+              onChanged: (t) => setState(() {
+                _tab = t;
+                _userPickedTab = true;
+              }),
             ),
           ),
           // ── Body ──
@@ -165,7 +243,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
                   )
                 : (list == null || list.isEmpty)
                 ? _EmptyHistory(
-                    subtitle: _tab == _Tab.posted
+                    subtitle: tab == _Tab.posted
                         ? 'Здесь будет отображаться история заказов, размещённых вами в качестве заказчика'
                         : 'Здесь будет отображаться история заказов, выполненных вами в качестве исполнителя',
                   )
@@ -174,7 +252,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
                       16.w,
                       16.h,
                       16.w,
-                      MediaQuery.of(context).viewPadding.bottom,
+                      MediaQuery.viewPaddingOf(context).bottom,
                     ),
                     itemCount: groups.length,
                     itemBuilder: (_, gi) {

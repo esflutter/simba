@@ -1,10 +1,12 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart' show MediaType;
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -35,14 +37,12 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     super.dispose();
   }
 
-  /// Максимальный размер аватара (МБ). Аватарка показывается ~100×100 px, так
-  /// что 1024×1024 на источнике хватит с запасом. 4 МБ — потолок для пограничных
-  /// случаев; бэк-схема users.photo синхронизирована.
-  static const double _kMaxPhotoMb = 4.0;
-
   Future<void> _pickPhoto() async {
     try {
       final picker = ImagePicker();
+      // image_picker — первый проход чтобы не держать оригинал в памяти
+      // (HEIC/RAW из галереи легко 12+ МБ). Финальное сжатие до 512×512
+      // JPEG делает compressAvatar.
       final f = await picker.pickImage(
         source: ImageSource.gallery,
         imageQuality: 85,
@@ -50,9 +50,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
         maxHeight: 1024,
       );
       if (f == null) return;
-      // 1) image_picker нативно сжал. 2) Если всё ещё >4 МБ — дожимаем
-      // циклом через flutter_image_compress (PNG/HEIC случаи).
-      final source = await ensurePhotoUnderLimit(f.path, _kMaxPhotoMb);
+      final source = await compressAvatar(f.path);
       if (!mounted) return;
       if (source == null) {
         AppToast.show(context, 'Не удалось обработать фото. Попробуйте другое.');
@@ -63,22 +61,38 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
       // очистки кэша системой файл пропадает, и Image.file крэшится при
       // следующем cold-start. Копируем в documents directory — она
       // persistent для приложения.
+      //
+      // Расширение принудительно `.jpg` — compressAvatar всегда отдаёт
+      // JPEG; брать ext от исходного пути небезопасно (HEIC с iPhone
+      // мог бы случайно унаследоваться, и Image.file его не покажет).
       final docs = await getApplicationDocumentsDirectory();
-      // source.path может быть оригиналом (.png/.heic) или сжатым (.jpg).
-      // Берём расширение из реального пути, чтобы Image.file правильно
-      // декодировал файл.
-      final ext = source.path.contains('.') ? source.path.split('.').last : 'jpg';
       final dst = File(
-        '${docs.path}${Platform.pathSeparator}profile_${DateTime.now().millisecondsSinceEpoch}.$ext',
+        '${docs.path}${Platform.pathSeparator}profile_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
       await source.copy(dst.path);
+      // Удаляем предыдущую локальную аватарку, если она была — иначе
+      // повторный пик до сабмита плодит файлы в documents.
+      final prev = _photoPath;
+      if (prev != null &&
+          !prev.startsWith('http') &&
+          prev != dst.path &&
+          prev.startsWith(docs.path)) {
+        try {
+          final f = File(prev);
+          if (await f.exists()) await f.delete();
+        } catch (_) {/* не критично */}
+      }
       if (!mounted) return;
       setState(() => _photoPath = dst.path);
     } catch (e) {
       // Любая ошибка: permission denied на iOS, OOM на больших RAW,
       // повреждённый файл. Раньше глотали молча — юзер не понимал, почему
       // ничего не происходит. Показываем тост + лог для диагностики.
-      debugPrint('[profile_setup] pickPhoto failed: $e');
+      // $e не пишем в release — путь к файлу/системное сообщение могут
+      // утечь в logcat.
+      if (kDebugMode) {
+        debugPrint('[profile_setup] pickPhoto failed: $e');
+      }
       if (!mounted) return;
       AppToast.show(context, 'Не удалось добавить фото');
     }
@@ -109,10 +123,17 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
               // заказа) обрабатываются в orders_repository, где есть
               // полноценный _withAuthRetry-обработчик.
               final bytes = await file.readAsBytes();
+              // Явный content-type обязателен. По умолчанию http_parser
+              // ставит application/octet-stream, PB не угадывает по
+              // содержимому и возвращает «invalid mime type». В
+              // edit_profile_screen это уже починено, здесь забыли.
+              // Расширение принудительно .jpg в `compressAvatar`, тип
+              // ставим image/jpeg.
               files.add(http.MultipartFile.fromBytes(
                 'photo',
                 bytes,
-                filename: photoPath.split(Platform.pathSeparator).last,
+                filename: 'avatar.jpg',
+                contentType: MediaType('image', 'jpeg'),
               ));
             }
           }
@@ -127,23 +148,32 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
             if (selectedCityId != null && selectedCityId.isNotEmpty)
               'city': selectedCityId,
           };
-          await pb
-              .collection('users')
-              .update(
-                pb.authStore.record!.id,
-                body: patchBody,
-                files: files,
-              )
-              .timeout(const Duration(seconds: 10));
+          // withAuthRetry — на случай, если токен истёк ровно между
+          // verify и переходом на этот экран (юзер промедлил пару минут
+          // на ввод имени).
+          await pb.withAuthRetry(
+            () => pb
+                .collection('users')
+                .update(
+                  pb.authStore.record!.id,
+                  body: patchBody,
+                  files: files,
+                )
+                .timeout(const Duration(seconds: 10)),
+          );
         } catch (_) {
-          // Сеть/таймаут/серверная ошибка — показываем тост, но flow
-          // продолжаем: имя/фото уже лежат в AppController, sync позже.
-          if (mounted) {
-            AppToast.show(
-              context,
-              'Не удалось связаться с сервером. Попробуйте позже.',
-            );
-          }
+          // Сеть/таймаут/серверная ошибка — НЕ переходим дальше, иначе
+          // имя сохранится только локально, на бэке останется пустым,
+          // и следующий silent refresh снова отправит юзера сюда —
+          // получится петля «заполнил → главный → перезапуск → опять
+          // профиль». Просим попробовать снова.
+          if (!mounted) return;
+          AppToast.show(
+            context,
+            'Не удалось сохранить профиль. Проверьте интернет и попробуйте снова.',
+          );
+          setState(() => _isSaving = false);
+          return;
         }
       }
       // Зеркалим имя/фото в локальный AppController — UI-консьюмеры

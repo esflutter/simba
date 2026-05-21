@@ -47,6 +47,12 @@ class OrderResponsesRepository {
   }
 
   /// Исполнитель откликается на заказ.
+  ///
+  /// Идемпотентность через серверный уникальный индекс `idx_resp_active`
+  /// `(order_ref, executor) WHERE status IN ('pending', 'accepted')`. При
+  /// сетевом флапе после успешного INSERT повторная отправка вернёт 400
+  /// с unique-violation; ловим её и считаем операцию успешной (запись
+  /// уже создана, повторно не нужно).
   Future<void> respond(String orderId, {int? etaMin, String? comment}) async {
     if (!_isLive) {
       _ref.read(appControllerProvider.notifier).takeOrderAsExecutor(orderId);
@@ -55,13 +61,40 @@ class OrderResponsesRepository {
     final pb = _pb!;
     final me = pb.authStore.record;
     if (me == null) return;
-    await withPbAuthRetry(_ref,() => pb.collection('order_responses').create(body: {
-      'order_ref': orderId,
-      'executor': me.id,
-      'status': 'pending',
-      'eta_min': ?etaMin,
-      if (comment != null && comment.isNotEmpty) 'comment': comment,
-    }).timeout(_pbTimeout));
+    try {
+      await withPbAuthRetry(
+          _ref,
+          () => pb.collection('order_responses').create(body: {
+                'order_ref': orderId,
+                'executor': me.id,
+                'status': 'pending',
+                'eta_min': ?etaMin,
+                if (comment != null && comment.isNotEmpty) 'comment': comment,
+              }).timeout(_pbTimeout));
+    } on ClientException catch (e) {
+      // 400/409 на unique-index — это значит, наш предыдущий запрос
+      // ДОШЁЛ до сервера, просто ACK не вернулся. Проверяем, лежит ли
+      // активный pending-отклик от нас по этому заказу; если да —
+      // успех. Иначе пробрасываем оригинальную ошибку.
+      if (e.statusCode == 400 || e.statusCode == 409) {
+        try {
+          await withPbAuthRetry(
+              _ref,
+              () => pb
+                  .collection('order_responses')
+                  .getFirstListItem(
+                    pb.filter(
+                      'order_ref = {:oid} && executor = {:eid} && '
+                          'status = "pending"',
+                      {'oid': orderId, 'eid': me.id},
+                    ),
+                  )
+                  .timeout(_pbTimeout));
+          return; // уже есть — idempotent-успех
+        } catch (_) {/* нет записи — реальная ошибка, пробрасываем */}
+      }
+      rethrow;
+    }
   }
 
   /// Исключение, которое выбрасывается, если pending-отклик не найден к моменту

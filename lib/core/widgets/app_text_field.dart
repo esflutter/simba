@@ -53,17 +53,45 @@ class _AppTextFieldState extends State<AppTextField> {
   late final FocusNode _focus;
   late TextEditingController _ctrl;
 
+  // Сохранённая ссылка на focus-listener — нужна, чтобы корректно
+  // отписаться при dispose / смене внешнего контроллера. Раньше тут был
+  // ещё и listener на сам контроллер, который дёргал setState на каждый
+  // символ — но текст контроллера в дереве этого виджета не читается
+  // (лейбл анимируется только по фокусу, цвет — по hasFocus). Лишний
+  // setState на каждое нажатие клавиши перестраивал Stack/Container во
+  // всех формах. Убрал — формы стали ощутимо плавнее.
+  late final VoidCallback _focusListener;
+
+  void _safeSetState() {
+    if (!mounted) return;
+    setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
     _focus = FocusNode();
     _ctrl = widget.controller ?? TextEditingController();
-    _focus.addListener(() => setState(() {}));
-    _ctrl.addListener(() => setState(() {}));
+    _focusListener = _safeSetState;
+    _focus.addListener(_focusListener);
+  }
+
+  @override
+  void didUpdateWidget(covariant AppTextField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Если родитель передал НОВЫЙ контроллер (типичный паттерн при
+    // ребилде с другим key или сменой источника данных), переключаемся
+    // на него. Слушать его не надо — но старый внутренний контроллер
+    // надо корректно диспозить, иначе будет утечка.
+    if (!identical(widget.controller, oldWidget.controller)) {
+      if (oldWidget.controller == null) _ctrl.dispose();
+      _ctrl = widget.controller ?? TextEditingController();
+    }
   }
 
   @override
   void dispose() {
+    _focus.removeListener(_focusListener);
     _focus.dispose();
     if (widget.controller == null) _ctrl.dispose();
     super.dispose();
@@ -72,7 +100,7 @@ class _AppTextFieldState extends State<AppTextField> {
   @override
   Widget build(BuildContext context) {
     final hasFocus = _focus.hasFocus;
-    final labelColor = hasFocus ? AppColors.primary : const Color(0x99000000);
+    final labelColor = hasFocus ? AppColors.primary : AppColors.textSecondary;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,

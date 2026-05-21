@@ -100,11 +100,14 @@ class OrdersRepository {
         .toList();
   }
 
-  /// Лента заказов для исполнителя (гео-поиск через кастомный роут).
+  /// Лента заказов для исполнителя. Возвращает ВСЕ open-заказы в
+  /// выбранном городе. Раньше у запроса были lat/lng/radius_km, но
+  /// слайдер «расстояние» в UI так и не появился — клиент всегда слал
+  /// дефолтный радиус 5 км вокруг центра города, и заказы из спальных
+  /// районов в ленту не попадали. Убрали гео-параметры совсем:
+  /// бизнес-правило — «вижу заказы своего города», география города
+  /// уже задана через `users.city` + правило listRule на orders.
   Future<List<Order>> feed({
-    required double lat,
-    required double lng,
-    required double radiusKm,
     String? categoryId,
     String? cityId,
   }) async {
@@ -119,62 +122,53 @@ class OrdersRepository {
           .toList();
     }
     final pb = _pb!;
+    final body = jsonEncode({
+      'category': ?categoryId,
+      'city': ?cityId,
+    });
+
+    Future<http.Response> doRequest() => sendWithSharedClient(
+          (c) => c
+              .post(
+                Uri.parse('${pb.baseURL}/api/orders/feed'),
+                headers: {
+                  if (pb.authStore.token.isNotEmpty)
+                    'Authorization': 'Bearer ${pb.authStore.token}',
+                  'Content-Type': 'application/json',
+                },
+                body: body,
+              )
+              .timeout(const Duration(seconds: 10)),
+        );
+
     final http.Response resp;
     try {
-      resp = await http
-          .post(
-            Uri.parse('${pb.baseURL}/api/orders/feed'),
-            headers: {
-              if (pb.authStore.token.isNotEmpty)
-                'Authorization': 'Bearer ${pb.authStore.token}',
-              'Content-Type': 'application/json',
-            },
-            body: jsonEncode({
-              'lat': lat,
-              'lng': lng,
-              'radius_km': radiusKm,
-              'category': ?categoryId,
-              'city': ?cityId,
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
+      resp = await doRequest();
     } catch (e) {
-      debugPrint('[orders_repository] feed transport error: $e');
+      // В release не пишем `e` — текст ошибки http может содержать URL
+      // с query, который попадает в logcat.
+      if (kDebugMode) {
+        debugPrint('[orders_repository] feed transport error: $e');
+      }
       return const [];
     }
     // Auth-flow: токен мог истечь, бэк отдаёт 401. Сначала пытаемся
-    // молча обновить токен через authRefresh — это снимает раздражающий
-    // вылет на /auth/phone посреди сессии, если token истёк по TTL.
-    // Если refresh не помог — чистим и кидаем юзера на логин.
+    // молча обновить токен через общий single-flight — если параллельно
+    // лента/мои заказы уже триггерят refresh, тут ждём его результат.
     if (resp.statusCode == 401 || resp.statusCode == 403) {
       try {
-        await pb.collection('users').authRefresh().timeout(_pbTimeout);
+        await pb.refreshAuthSingleFlight();
         // Повтор запроса с новым токеном. Сохраняем cap на 1 — больше двух
         // авторизационных циклов подряд почти всегда означает реальную
         // проблему авторизации, продолжать перебор нет смысла.
-        final retry = await http
-            .post(
-              Uri.parse('${pb.baseURL}/api/orders/feed'),
-              headers: {
-                if (pb.authStore.token.isNotEmpty)
-                  'Authorization': 'Bearer ${pb.authStore.token}',
-                'Content-Type': 'application/json',
-              },
-              body: jsonEncode({
-                'lat': lat,
-                'lng': lng,
-                'radius_km': radiusKm,
-                'category': ?categoryId,
-                'city': ?cityId,
-              }),
-            )
-            .timeout(const Duration(seconds: 10));
+        final retry = await doRequest();
         if (retry.statusCode == 200) {
           return _parseFeedBody(retry.body, pb);
         }
       } catch (e) {
-        // refresh упал — токен реально просрочен/отозван
-        debugPrint('[orders_repository] feed authRefresh failed: $e');
+        if (kDebugMode) {
+          debugPrint('[orders_repository] feed authRefresh failed: $e');
+        }
       }
       pb.authStore.clear();
       try {
@@ -195,7 +189,9 @@ class OrdersRepository {
     try {
       decoded = jsonDecode(body);
     } catch (e) {
-      debugPrint('[orders_repository] feed JSON parse failed: $e');
+      if (kDebugMode) {
+        debugPrint('[orders_repository] feed JSON parse failed: $e');
+      }
       return const [];
     }
     final items = (decoded is Map && decoded['items'] is List)
@@ -233,15 +229,26 @@ class OrdersRepository {
       // orderFromRecord может вернуть null для битых записей без customer.
       return orderFromRecord(r, pb);
     } catch (e) {
-      debugPrint('[orders_repository] get($orderId) failed: $e');
+      // $e от PB ClientException содержит тело запроса/ответа — в release
+      // не пишем, чтобы не утекало в logcat.
+      if (kDebugMode) {
+        debugPrint('[orders_repository] get($orderId) failed: $e');
+      }
       return null;
     }
   }
 
   /// Создание заказа.
+  ///
+  /// [clientUid] — клиентский UUID для идемпотентности. Если задан, и
+  /// сеть оборвалась после успешной записи на сервере, повторная
+  /// отправка с тем же UID не создаст дубликат: сервер вернёт ошибку
+  /// уникального индекса, а мы найдём ранее созданный заказ через
+  /// фильтр и вернём его как успех.
   Future<Order> create({
     required Order draft,
     List<File>? photoFiles,
+    String? clientUid,
   }) async {
     if (!_isLive) {
       _ref.read(appControllerProvider.notifier).createOrder(draft);
@@ -264,12 +271,16 @@ class OrdersRepository {
       if (d.length == 10) d = '7$d';
       if (d.length == 11 && d[0] == '7') normalizedPhone = '+$d';
     }
+    // trim() для title/description — UI-валидация уже работает с
+     // тримленным значением (`title.trim().isNotEmpty`), но в БД до
+    // этого уходили пробелы по краям. Поиск и сортировка по этим полям
+    // ломались, а карточки в ленте выглядели с висящим пробелом.
     final body = <String, dynamic>{
       'customer': me.id,
       'category': draft.categoryId,
       'city': _ref.read(appControllerProvider).selectedCity.id,
-      'title': draft.title,
-      'description': draft.description,
+      'title': draft.title.trim(),
+      'description': draft.description.trim(),
       'address': draft.address,
       'lat': draft.location.latitude,
       'lng': draft.location.longitude,
@@ -280,6 +291,7 @@ class OrdersRepository {
       if (draft.scheduledAt != null)
         'scheduled_at': draft.scheduledAt!.toUtc().toIso8601String(),
       'for_other_phone': ?normalizedPhone,
+      if (clientUid != null && clientUid.isNotEmpty) 'client_uid': clientUid,
     };
     // Стримим файлы с диска. До этого был `readAsBytes()` + fromBytes —
     // он загружал все фото в heap одновременно: 3 × 8 МБ = 24 МБ RAM,
@@ -298,20 +310,47 @@ class OrdersRepository {
         filename: f.path.split(Platform.pathSeparator).last,
       ));
     }
-    // upload фото может быть тяжелее обычного create — даём чуть больше
-    // времени (фото на 8 МБ лимите × 5 шт + multipart-обвязка).
-    final r = await _withAuthRetry(() => pb
-        .collection('orders')
-        .create(body: body, files: files)
-        .timeout(const Duration(seconds: 30)));
-    final created = orderFromRecord(r, pb);
-    if (created == null) {
-      // Не должно случиться: мы только что передали `customer` в body
-      // и получили запись назад. Если бэк всё же вернул битую — это
-      // редкая аномалия, лучше упасть, чем тихо потерять заказ.
-      throw StateError('orderFromRecord returned null for just-created order ${r.id}');
+    try {
+      // upload фото может быть тяжелее обычного create — даём чуть больше
+      // времени (фото на 8 МБ лимите × 5 шт + multipart-обвязка).
+      final r = await _withAuthRetry(() => pb
+          .collection('orders')
+          .create(body: body, files: files)
+          .timeout(const Duration(seconds: 30)));
+      final created = orderFromRecord(r, pb);
+      if (created == null) {
+        // Не должно случиться: мы только что передали `customer` в body
+        // и получили запись назад. Если бэк всё же вернул битую — это
+        // редкая аномалия, лучше упасть, чем тихо потерять заказ.
+        throw StateError('orderFromRecord returned null for just-created order ${r.id}');
+      }
+      return created;
+    } catch (e) {
+      // Если был передан client_uid — проверим, не лежит ли уже такой
+      // заказ на сервере. Это покрывает три сценария:
+      //   1. Таймаут / обрыв сети после успешной отправки тела.
+      //   2. ACK потерялся, юзер тапнул «Опубликовать» ещё раз — здесь
+      //      сервер вернёт constraint violation на уникальном индексе.
+      //   3. Любая другая 4xx, при которой запись фактически создалась.
+      // Если запись находится — операция идемпотентно успешна.
+      if (clientUid != null && clientUid.isNotEmpty) {
+        try {
+          final existing = await pb
+              .collection('orders')
+              .getFirstListItem(
+                pb.filter(
+                  'customer = {:c} && client_uid = {:u}',
+                  {'c': me.id, 'u': clientUid},
+                ),
+                expand: 'customer,executor,category',
+              )
+              .timeout(const Duration(seconds: 10));
+          final order = orderFromRecord(existing, pb);
+          if (order != null) return order;
+        } catch (_) {/* записи нет — пробрасываем исходную ошибку */}
+      }
+      rethrow;
     }
-    return created;
   }
 
   /// Отмена заказа заказчиком = полное удаление записи.
@@ -453,7 +492,9 @@ class OrdersRepository {
       // Реальный заказ из РФ имеет lat≈41..82 и lng≈19..170 — нулевые
       // координаты сюда не попадают по бизнесу.
       if (lat == 0 && lng == 0) {
-        debugPrint('[orders_repository] feed item ${m['id']} has 0/0 coords — skipping');
+        if (kDebugMode) {
+          debugPrint('[orders_repository] feed item ${m['id']} has 0/0 coords — skipping');
+        }
         return null;
       }
       final id = m['id'] as String;
@@ -462,7 +503,11 @@ class OrdersRepository {
       // `pbFileUrl` — он работает для НЕ-protected файлов; protected потребует
       // token-параметр через `pb.files.getUrl(record, name)` и реальный record.
       // `orders.photos` сейчас НЕ protected (см. миграцию 003) — этого достаточно.
-      final photoNames = (m['photos'] as List?)?.cast<String>() ?? const [];
+      // whereType — устойчиво к битым записям, где в массиве photos
+      // оказалось null/число. Иначе cast<String> ленив и роняет
+      // парсинг всего фид-ответа на первой битой записи.
+      final photoNames =
+          (m['photos'] as List?)?.whereType<String>() ?? const <String>[];
       final photoUrls = photoNames
           .map((name) => pbFileUrl(
                 pb,
@@ -505,14 +550,18 @@ class OrdersRepository {
       // ставила такие заказы наверх, искажая порядок.
       final createdAt = parsePbDate(m['created']?.toString());
       if (createdAt == null) {
-        debugPrint('[orders_repository] feed item ${m['id']} has invalid `created` — skipping');
+        if (kDebugMode) {
+          debugPrint('[orders_repository] feed item ${m['id']} has invalid `created` — skipping');
+        }
         return null;
       }
       // priceRub меньше kPriceMin валидно невозможен — это сигнал что
       // бэк прислал битую запись, лучше не показывать чем «бесплатный заказ».
       final price = (m['price_rub'] as num?)?.toInt() ?? 0;
       if (price < kPriceMin) {
-        debugPrint('[orders_repository] feed item ${m['id']} has invalid price_rub=$price — skipping');
+        if (kDebugMode) {
+          debugPrint('[orders_repository] feed item ${m['id']} has invalid price_rub=$price — skipping');
+        }
         return null;
       }
       return Order(
@@ -541,7 +590,9 @@ class OrdersRepository {
         customerPhotoUrl: customerPhotoUrl,
       );
     } catch (e) {
-      debugPrint('[orders_repository] failed to parse feed item: $e');
+      if (kDebugMode) {
+        debugPrint('[orders_repository] failed to parse feed item: $e');
+      }
       return null;
     }
   }
@@ -571,17 +622,12 @@ final myExecutorOrdersProvider = FutureProvider<List<Order>>((ref) async {
 /// addReview, setRole, executorActive, …) триггерила бы новый HTTP-запрос
 /// в `/api/orders/feed` — HTTP-флуд и дёрганая лента.
 final feedOrdersProvider = FutureProvider<List<Order>>((ref) async {
-  final city =
-      ref.watch(appControllerProvider.select((s) => s.selectedCity));
-  final radiusKm =
-      ref.watch(appControllerProvider.select((s) => s.searchRadiusKm));
-  // Передаём cityId — бэк фильтрует ленту строго по городу пользователя
-  // (city == auth.user.city на бэке). Лента НЕ должна показывать заказы
-  // из чужих городов: бизнес-правило SimbA — юзер видит только свой город.
-  return ref.read(ordersRepositoryProvider).feed(
-        lat: city.center.latitude,
-        lng: city.center.longitude,
-        radiusKm: radiusKm,
-        cityId: city.id,
-      );
+  final cityId = ref.watch(
+    appControllerProvider.select((s) => s.selectedCity.id),
+  );
+  // Лента — это все open-заказы города. Никаких радиусов больше нет:
+  // в UI слайдера «расстояние» не было, дефолтный 5-км круг скрывал
+  // заказы из спальных районов. Бизнес-правило простое — видим то,
+  // что в моём городе.
+  return ref.read(ordersRepositoryProvider).feed(cityId: cityId);
 });

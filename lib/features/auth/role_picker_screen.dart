@@ -8,37 +8,53 @@ import '../../core/widgets/app_card.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 
-class RolePickerScreen extends ConsumerWidget {
+class RolePickerScreen extends ConsumerStatefulWidget {
   const RolePickerScreen({super.key});
 
-  Future<void> _finishRegistration(
-    BuildContext context,
-    WidgetRef ref,
-    UserRole role,
-    String homePath,
-  ) async {
-    final notifier = ref.read(appControllerProvider.notifier);
-    notifier.setRole(role);
-    // Регистрация полностью завершена — теперь онбординг считается
-    // «просмотренным» (флаг хранится в prefs пожизненно). Раньше
-    // он ставился в конце страниц онбординга, и если юзер не доходил
-    // до конца регистрации, на следующий запуск приложение могло
-    // привести его в неконсистентное состояние.
-    await notifier.markOnboardingSeen();
-    if (!context.mounted) return;
-    context.go(homePath);
+  @override
+  ConsumerState<RolePickerScreen> createState() => _RolePickerScreenState();
+}
+
+class _RolePickerScreenState extends ConsumerState<RolePickerScreen> {
+  // Защита от двойного тапа. Картинка-герой делит экран на левую и
+  // правую половину поверх двух карточек снизу — итого 4 кликабельные
+  // зоны. Без блокировки два быстрых тапа стартуют два setRole + два
+  // фоновых syncExecutorStatus (каждый просит GPS-координаты), а
+  // markOnboardingSeen вообще успевает отработать дважды.
+  bool _busy = false;
+
+  Future<void> _finishRegistration(UserRole role, String homePath) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final notifier = ref.read(appControllerProvider.notifier);
+      notifier.setRole(role);
+      // Регистрация полностью завершена — теперь онбординг считается
+      // «просмотренным» (флаг хранится в prefs пожизненно). Раньше
+      // он ставился в конце страниц онбординга, и если юзер не доходил
+      // до конца регистрации, на следующий запуск приложение могло
+      // привести его в неконсистентное состояние.
+      await notifier.markOnboardingSeen();
+      if (!mounted) return;
+      context.go(homePath);
+    } finally {
+      // Сбрасываем _busy в `finally` — иначе при исключении в
+      // markOnboardingSeen (например, prefs не доступны) экран
+      // замёрз бы навсегда без визуальной подсказки.
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
-  void _pickCustomer(BuildContext context, WidgetRef ref) {
-    _finishRegistration(context, ref, UserRole.customer, '/home/create');
+  void _pickCustomer() {
+    _finishRegistration(UserRole.customer, '/home/create');
   }
 
-  void _pickExecutor(BuildContext context, WidgetRef ref) {
-    _finishRegistration(context, ref, UserRole.executor, '/home/orders');
+  void _pickExecutor() {
+    _finishRegistration(UserRole.executor, '/home/orders');
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -66,7 +82,7 @@ class RolePickerScreen extends ConsumerWidget {
                                 flex: 42,
                                 child: GestureDetector(
                                   behavior: HitTestBehavior.opaque,
-                                  onTap: () => _pickCustomer(context, ref),
+                                  onTap: _pickCustomer,
                                 ),
                               ),
                               const Spacer(flex: 16),
@@ -74,7 +90,7 @@ class RolePickerScreen extends ConsumerWidget {
                                 flex: 42,
                                 child: GestureDetector(
                                   behavior: HitTestBehavior.opaque,
-                                  onTap: () => _pickExecutor(context, ref),
+                                  onTap: _pickExecutor,
                                 ),
                               ),
                             ],
@@ -94,13 +110,13 @@ class RolePickerScreen extends ConsumerWidget {
                   _RoleCard(
                     title: 'Нужна помощь',
                     subtitle: 'Разместить заказ на услугу',
-                    onTap: () => _pickCustomer(context, ref),
+                    onTap: _pickCustomer,
                   ),
                   SizedBox(height: 8.h),
                   _RoleCard(
                     title: 'Готов помочь',
                     subtitle: 'Найти заказ на услугу',
-                    onTap: () => _pickExecutor(context, ref),
+                    onTap: _pickExecutor,
                   ),
                   SizedBox(height: 66.h),
                 ],

@@ -5,18 +5,77 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/date_time_formatters.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_network_image.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
 import 'reviews_providers.dart';
 
-class ReviewsScreen extends ConsumerWidget {
+class ReviewsScreen extends ConsumerStatefulWidget {
   const ReviewsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ReviewsScreen> createState() => _ReviewsScreenState();
+}
+
+class _ReviewsScreenState extends ConsumerState<ReviewsScreen> {
+  /// PB realtime-подписка на коллекцию reviews. Без неё новый отзыв,
+  /// пришедший в момент когда юзер смотрит список своих отзывов, не
+  /// появляется до pull-to-refresh.
+  Future<void> Function()? _reviewsUnsub;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeReviews());
+  }
+
+  Future<void> _subscribeReviews() async {
+    if (!mounted) return;
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    final myId = ref.read(appControllerProvider).user?.id;
+    if (myId == null || myId.isEmpty) return;
+    try {
+      final unsub = await pb.collection('reviews').subscribe('*', (e) {
+        if (!mounted) return;
+        // PB rules уже фильтруют события на стороне сервера — нам
+        // приходят только видимые отзывы. На клиенте всё равно
+        // отбрасываем чужие, чтобы не делать лишний запрос для отзыва
+        // на другого юзера (где я был автором).
+        final rec = e.record;
+        if (rec == null) {
+          ref.invalidate(reviewsForUserProvider(myId));
+          return;
+        }
+        if (rec.getStringValue('to_user') == myId) {
+          ref.invalidate(reviewsForUserProvider(myId));
+        }
+      });
+      if (!mounted) {
+        await unsub();
+        return;
+      }
+      _reviewsUnsub = unsub;
+    } catch (_) {/* WS недоступен — pull-to-refresh всё ещё работает */}
+  }
+
+  @override
+  void dispose() {
+    final unsub = _reviewsUnsub;
+    _reviewsUnsub = null;
+    if (unsub != null) {
+      // ignore: discarded_futures
+      unsub();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // Берём отзывы из репозитория (live или mock-fallback) для текущего юзера.
     // Пустой массив (data:[]) — валидный ответ для нового юзера: НЕ подменяем
     // его моком, иначе пользователь увидит чужие demo-отзывы.
@@ -100,7 +159,7 @@ class ReviewsScreen extends ConsumerWidget {
                       16.w,
                       16.h,
                       16.w,
-                      MediaQuery.of(context).viewPadding.bottom,
+                      MediaQuery.viewPaddingOf(context).bottom,
                     ),
                     child: Column(
                       children: [
@@ -153,7 +212,7 @@ class ReviewsScreen extends ConsumerWidget {
                       16.w,
                       16.h,
                       16.w,
-                      MediaQuery.of(context).viewPadding.bottom,
+                      MediaQuery.viewPaddingOf(context).bottom,
                     ),
                     // +1 — это карточка-сводка рейтинга в самом верху,
                     // дальше идут сами отзывы. ListView.builder ленив,
@@ -213,9 +272,7 @@ class _RatingSummaryCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Text(
-                hasReviews
-                    ? average.toStringAsFixed(1)
-                    : '0',
+                hasReviews ? formatRating(average) : '0',
                 style: TextStyle(
                   color: AppColors.textPrimary,
                   fontSize: 20.sp,

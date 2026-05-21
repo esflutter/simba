@@ -3,45 +3,49 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
+import 'core/theme/system_bar_style.dart';
 import 'data/local/preferences_store.dart';
 import 'data/remote/pocketbase_client.dart';
 
-/// Единое описание стиля системных баров. Раньше тот же список параметров
-/// был продублирован в `main()` (через `SystemChrome.setSystemUIOverlayStyle`)
-/// и в `AnnotatedRegion` глобального билдера — любые изменения требовали
-/// править оба места. Теперь источник один.
-const _kSystemBarStyle = SystemUiOverlayStyle(
-  statusBarColor: Colors.transparent,
-  statusBarIconBrightness: Brightness.dark,
-  statusBarBrightness: Brightness.light,
-  systemNavigationBarColor: Color(0xFFF5F5F5),
-  systemNavigationBarDividerColor: Color(0xFFF5F5F5),
-  systemNavigationBarIconBrightness: Brightness.dark,
-  // На Android 10+ ОС может рисовать полупрозрачный «контрастный» оверлей
-  // поверх нижней панели — на цветных скринах это выглядит как синеватый
-  // оттенок системных кнопок. Отключаем.
-  systemNavigationBarContrastEnforced: false,
-  systemStatusBarContrastEnforced: false,
-);
+/// Дефолтный стиль системных баров — для основного потока экранов.
+/// Splash и онбординг используют тот же `simbaSystemBarStyle`, но с
+/// другими цветами фона.
+final _kSystemBarStyle = simbaSystemBarStyle();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
   ]);
+  // Edge-to-edge: на Android 15+ (API 35+) свойства типа
+  // `systemNavigationBarColor` игнорируются. Без edge-to-edge система
+  // показывает дефолтный чёрный фон под кнопками навигации, даже если
+  // приложение синее — на онбординге получалась видимая чёрная полоса
+  // над кнопками. С edge-to-edge `Scaffold.backgroundColor` сам красит
+  // эту область своим цветом, а SafeArea внутри даёт корректные отступы
+  // для контента.
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
   SystemChrome.setSystemUIOverlayStyle(_kSystemBarStyle);
+  // Подгружаем локализованные данные для пакета `intl` (русские месяцы
+  // и дни недели). Без этого DateFormat с локалью 'ru_RU' падает с
+  // LocaleDataException при первом форматировании — экран истории и
+  // карточка заказа используют 'd MMMM yyyy' / 'dd.MM.yyyy HH:mm'.
+  await initializeDateFormatting('ru_RU');
   final prefs = await SharedPreferences.getInstance();
-  // PocketBase создаётся ОДИН раз здесь, чтобы привязать AsyncAuthStore к
-  // тем же SharedPreferences и persist'ить токен между запусками.
+  // PocketBase создаётся ОДИН раз здесь. Токен сессии хранится в
+  // защищённом системном хранилище (Android Keystore / iOS Keychain),
+  // не в обычных SharedPreferences — иначе на рутованном устройстве
+  // он читается тривиально.
   //
   // NB: authRefresh при бутстрапе НЕ дёргаем здесь — это делает
   // SplashScreen через authRepository.tryRefreshAuth (там же показывается
   // лоадер и обрабатывается результат). Иначе получали дубль запроса.
-  final pb = buildPocketBase(prefs);
+  final pb = await buildPocketBase(prefs);
 
   runApp(
     ProviderScope(

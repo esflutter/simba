@@ -10,6 +10,7 @@ import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/pocketbase_client.dart';
 import '../../data/remote/reviews_repository.dart';
+import '../../data/remote/users_repository.dart' show publicUserProvider;
 import '../orders/order_details_screen.dart' show orderByIdProvider;
 import '../reviews/reviews_providers.dart';
 
@@ -241,8 +242,18 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
       ref.invalidate(reviewsByOrderProvider(order.id));
       ref.invalidate(orderByIdProvider(order.id));
       ref.invalidate(myReviewedOrderIdsProvider);
+      // Рейтинг получателя меняется бэкенд-хуком, нужно пере-запросить
+      // его публичный профиль. Иначе если экран профиля получателя
+      // открыт в стеке — там продолжит висеть старый рейтинг до выхода
+      // и повторного входа.
+      ref.invalidate(publicUserProvider(recipientId));
     } catch (_) {
       if (!mounted) return;
+      // Идемпотентность отправки решена в репозитории: повторный create
+      // ловит 400/409 на unique-index и возвращает уже созданную запись.
+      // Поэтому здесь оставляем обычное «не удалось» — реальная ошибка
+      // (валидация, сеть до отправки тела, FSM-запрет) показывается без
+      // лишних предположений «возможно прошло».
       AppToast.show(context, 'Не удалось отправить отзыв');
       setState(() => _isSubmitting = false);
       return;
@@ -339,7 +350,9 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
   @override
   Widget build(BuildContext context) {
     final canSubmit = _rating > 0 && !_isSubmitting;
-    final viewInsets = MediaQuery.of(context).viewInsets.bottom;
+    // viewInsetsOf — точечная подписка только на изменения клавиатуры,
+    // без полного ребилда при любых других метриках устройства.
+    final viewInsets = MediaQuery.viewInsetsOf(context).bottom;
     return Padding(
       // Поднимаем шторку над клавиатурой.
       padding: EdgeInsets.only(bottom: viewInsets),
@@ -373,17 +386,23 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
                     ),
                     Positioned(
                       right: 0,
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: _isSubmitting
-                            ? null
-                            : () => Navigator.of(context).pop(),
-                        child: Padding(
-                          padding: EdgeInsets.all(6.r),
-                          child: Icon(
-                            Icons.close_rounded,
-                            color: AppColors.primary,
-                            size: 20.r,
+                      // 44×44 — минимум touch-target для крестика диалога.
+                      child: SizedBox(
+                        width: 44.r,
+                        height: 44.r,
+                        child: Material(
+                          color: Colors.transparent,
+                          shape: const CircleBorder(),
+                          child: InkWell(
+                            customBorder: const CircleBorder(),
+                            onTap: _isSubmitting
+                                ? null
+                                : () => Navigator.of(context).pop(),
+                            child: Icon(
+                              Icons.close_rounded,
+                              color: AppColors.primary,
+                              size: 20.r,
+                            ),
                           ),
                         ),
                       ),
@@ -398,6 +417,10 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
                     children: List.generate(5, (i) {
                       final filled = i < _rating;
                       return GestureDetector(
+                        // `opaque` — чтобы тап в прозрачную зону между
+                        // звёздами тоже срабатывал, а не уходил под
+                        // соседнюю иконку.
+                        behavior: HitTestBehavior.opaque,
                         onTap: _isSubmitting
                             ? null
                             : () => setState(() => _rating = i + 1),

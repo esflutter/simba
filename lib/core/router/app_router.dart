@@ -30,7 +30,30 @@ import '../../features/profile/edit_profile_screen.dart';
 import '../../features/profile/history_screen.dart';
 import '../../features/reviews/reviews_screen.dart';
 
-final routerProvider = Provider<GoRouter>((ref) => _buildRouter(ref));
+final routerProvider = Provider<GoRouter>((ref) {
+  // refreshListenable — без него редирект перечитывается только при
+  // навигации. Если сессия слетела в фоне (refresh упал → appController.logout),
+  // юзер остаётся на текущем экране с пустыми данными до первого тапа.
+  // Заводим простой счётчик и бамаем его при смене юзера / города /
+  // онбординга — на это GoRouter перевычислит redirect и сам уведёт на
+  // /auth/phone (или /city, /onboarding по ситуации).
+  final refresh = ValueNotifier<int>(0);
+  ref.listen<AppState>(appControllerProvider, (prev, next) {
+    final changed = prev?.user?.id != next.user?.id ||
+        prev?.onboardingSeen != next.onboardingSeen ||
+        prev?.selectedCityId != next.selectedCityId ||
+        prev?.role != next.role;
+    if (changed) refresh.value++;
+  });
+  final router = _buildRouter(ref, refresh);
+  ref.onDispose(() {
+    // Сначала router — он внутри `removeListener` от refresh; если
+    // refresh уже dispose'нут, в debug-сборке это assertion error.
+    router.dispose();
+    refresh.dispose();
+  });
+  return router;
+});
 
 /// Returns the next route to send a user to, depending on how complete their
 /// onboarding is. Used both by Splash and by go_router's redirect.
@@ -68,9 +91,10 @@ String postAuthRoute(WidgetRef ref, {required bool isNewUser}) {
   return nextOnboardingRoute(state) ?? '/home/my';
 }
 
-GoRouter _buildRouter(Ref ref) {
+GoRouter _buildRouter(Ref ref, Listenable refresh) {
   return GoRouter(
     initialLocation: '/splash',
+    refreshListenable: refresh,
     routes: [
       GoRoute(path: '/splash', builder: (_, _) => const SplashScreen()),
       GoRoute(path: '/onboarding', builder: (_, _) => const OnboardingScreen()),

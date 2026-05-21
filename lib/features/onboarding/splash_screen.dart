@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/router/app_router.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/theme/system_bar_style.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/auth_repository.dart';
@@ -66,12 +67,10 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.light,
-        statusBarBrightness: Brightness.dark,
-        systemNavigationBarColor: AppColors.primarySplash,
-        systemNavigationBarIconBrightness: Brightness.light,
+      value: simbaSystemBarStyle(
+        navBarColor: AppColors.primarySplash,
+        navIconBrightness: Brightness.light,
+        statusIconBrightness: Brightness.light,
       ),
       child: Scaffold(
         backgroundColor: AppColors.primarySplash,

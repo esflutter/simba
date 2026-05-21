@@ -45,8 +45,11 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
   // `code must be 4 numbers` — серверная сторона не принимает другую длину.
   static const int _codeLength = 4;
   static const int _timerSeconds = 60;
-  static const _errorColor = Color(0xFFFF5F57);
-  static const _errorBorderColor = Color(0x7FFF383C);
+  // Раньше тут был кастомный красный 0xFFFF5F57, не соответствующий
+  // палитре. Используем общий токен ошибки + полупрозрачный его вариант
+  // для рамки подсветки.
+  static const _errorColor = AppColors.error;
+  static final _errorBorderColor = AppColors.error.withValues(alpha: 0.50);
 
   Key _pinKey = UniqueKey();
   String _code = '';
@@ -298,13 +301,53 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
         color: _errorColor,
       ).copyWith(letterSpacing: 0.25, height: 1.43);
 
+  /// Подтверждение случайного «назад» при наполовину введённом коде.
+  /// За каждый OTP реально платится поставщику SMS — нельзя позволить
+  /// случайному жесту/тапу системной кнопки стереть код и форсировать
+  /// повторный resend.
+  Future<bool> _confirmLeave() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Прервать ввод кода?'),
+        content: const Text(
+          'Введённые цифры удалятся. Для новой попытки придётся ждать '
+          'таймер и запрашивать SMS заново.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Остаться'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Выйти'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
+  }
+
   @override
   Widget build(BuildContext context) {
     final canContinue = _code.length == _codeLength && !_isVerifying;
     final borderColor = _hasError ? _errorBorderColor : AppColors.divider;
     final activeBorderColor = _hasError ? _errorBorderColor : AppColors.primary;
 
-    return Scaffold(
+    return PopScope(
+      // Блокируем pop только при незавершённой попытке: введённые цифры
+      // или активная верификация. Пустое поле — выходим без вопроса.
+      canPop: _code.isEmpty && !_isVerifying,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        if (!mounted) return;
+        final shouldLeave = await _confirmLeave();
+        if (!shouldLeave) return;
+        if (!context.mounted) return;
+        if (context.canPop()) context.pop();
+      },
+      child: Scaffold(
       body: SafeArea(
         child: Padding(
           padding: EdgeInsets.fromLTRB(16.w, 8.h, 16.w, 16.h),
@@ -487,6 +530,7 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
             ],
           ),
         ),
+      ),
       ),
     );
   }

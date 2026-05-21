@@ -41,6 +41,11 @@ dependencies:
   pin_code_fields: ^9.3.0
   iconsax_plus: ^1.0.0
   shared_preferences: ^2.5.5
+  # JWT PocketBase хранится в системном защищённом хранилище: Android
+  # Keystore (через EncryptedSharedPreferences) и iOS Keychain. На
+  # рутованном Android / iPhone с jailbreak SharedPreferences читается
+  # тривиально — туда токен класть нельзя.
+  flutter_secure_storage: ^9.2.2
   url_launcher: ^6.3.1
   http: ^1.2.2
   # Прямая зависимость нужна, чтобы явно указывать MediaType для аватаров

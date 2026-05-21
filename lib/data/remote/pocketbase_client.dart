@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:pocketbase/pocketbase.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -21,8 +22,36 @@ final pocketbaseProvider = Provider<PocketBase?>(
   (ref) => throw UnimplementedError('pocketbaseProvider must be overridden in main()'),
 );
 
-/// Ключ, под которым AsyncAuthStore сохраняет JSON {token, model} в prefs.
+/// Ключ, под которым раньше хранился JSON {token, model} в обычных
+/// SharedPreferences. Сейчас используется только для разовой миграции —
+/// при первом запуске после обновления токен переезжает отсюда в
+/// защищённое хранилище.
 const String kPbAuthPrefsKey = 'pb_auth';
+
+/// Ключ для защищённого хранилища (Android Keystore / iOS Keychain).
+const String kPbAuthSecureKey = 'simba.pb_auth';
+
+/// Опции защищённого хранилища.
+///
+/// На Android по умолчанию `flutter_secure_storage` пишет в обычный
+/// SharedPreferences под маской — без EncryptedSharedPreferences токен
+/// читается тривиально на рутованном устройстве. Принудительно
+/// включаем шифрование на стороне OS.
+///
+/// На iOS дефолтный `first_unlock` уровень доступа подходит — токен
+/// читается после первой разблокировки устройства пользователем, что
+/// нужно для авторестарта фонового потока.
+const _kSecureAndroidOptions = AndroidOptions(
+  encryptedSharedPreferences: true,
+);
+const _kSecureIOSOptions = IOSOptions(
+  accessibility: KeychainAccessibility.first_unlock,
+);
+
+const FlutterSecureStorage simbaSecureStorage = FlutterSecureStorage(
+  aOptions: _kSecureAndroidOptions,
+  iOptions: _kSecureIOSOptions,
+);
 
 /// Общий `http.Client` для прямых HTTP-вызовов из приложения
 /// (DaData, кастомные ручки бэка) — переиспользует TCP/TLS между запросами.
@@ -78,14 +107,60 @@ Future<http.Response> sendWithSharedClient(
   }
 }
 
-/// Фабрика клиента: создаётся один раз в `main()` после `SharedPreferences.getInstance()`.
-/// Возвращает null, если URL не задан (моки).
-PocketBase? buildPocketBase(SharedPreferences prefs) {
+/// Фабрика клиента: создаётся один раз в `main()`. Возвращает null,
+/// если URL не задан (моки).
+///
+/// Async — потому что чтение токена идёт из защищённого хранилища
+/// (Android Keystore / iOS Keychain). Если в новом хранилище ничего
+/// нет, но есть legacy-токен в SharedPreferences (юзер обновил
+/// приложение со старой версии), переносим его и сразу удаляем из
+/// prefs — иначе он там лежал бы в открытом виде.
+Future<PocketBase?> buildPocketBase(
+  SharedPreferences prefs, {
+  FlutterSecureStorage secureStorage = simbaSecureStorage,
+}) async {
   if (!Env.hasPocketbase) return null;
+
+  String? initial;
+  try {
+    initial = await secureStorage.read(key: kPbAuthSecureKey);
+  } catch (_) {
+    // На свежем устройстве/симуляторе первое чтение может бросить
+    // PlatformException (нет ключа) — у разных версий плагина по-
+    // разному, на всякий случай ловим всё.
+    initial = null;
+  }
+  if (initial == null) {
+    final legacy = prefs.getString(kPbAuthPrefsKey);
+    if (legacy != null && legacy.isNotEmpty) {
+      bool migrated = false;
+      try {
+        await secureStorage.write(key: kPbAuthSecureKey, value: legacy);
+        initial = legacy;
+        migrated = true;
+      } catch (_) {
+        // Если защищённое хранилище недоступно (старая ОС/эмулятор
+        // без поддержки Keystore) — оставляем токен в prefs, чтобы
+        // юзера не разлогинивать. Без этого fallback'а старые
+        // устройства теряли бы сессию при первом запуске после
+        // обновления.
+        initial = legacy;
+      }
+      // Чистим legacy-ключ ТОЛЬКО при успешной миграции. Если запись
+      // в secure storage упала, prefs.remove до сих пор всё равно
+      // отрабатывал — и юзер с проблемным Keystore терял сессию при
+      // каждом запуске (память сессии исчезала вместе с процессом).
+      if (migrated) {
+        await prefs.remove(kPbAuthPrefsKey);
+      }
+    }
+  }
+
   final store = AsyncAuthStore(
-    save: (String raw) async => prefs.setString(kPbAuthPrefsKey, raw),
-    initial: prefs.getString(kPbAuthPrefsKey),
-    clear: () async => prefs.remove(kPbAuthPrefsKey),
+    save: (String raw) async =>
+        secureStorage.write(key: kPbAuthSecureKey, value: raw),
+    initial: initial,
+    clear: () async => secureStorage.delete(key: kPbAuthSecureKey),
   );
   return PocketBase(
     Env.pocketbaseUrl,
@@ -127,6 +202,39 @@ String pbFileUrl(
   return '$base/api/files/$c/$r/$f';
 }
 
+/// Single-flight для `authRefresh`: пока один вызов в полёте, остальные
+/// ждут его результат, а не шлют второй refresh параллельно.
+///
+/// Без этого при возврате приложения из фона одновременно инвалидируются
+/// несколько провайдеров (лента, мои заказы, мои отклики), каждый ловит
+/// 401 на своём первом запросе и шлёт собственный authRefresh с одним и
+/// тем же старым токеном. SMS Aero / PB отвечают каждому новым токеном,
+/// и поздно вернувшийся ответ затирает свежий — следующий запрос снова
+/// получает 401, цикл. Симптом: иногда после фона приложение выкидывает
+/// на /auth/phone при валидной сессии.
+///
+/// Expando хранит Future per PocketBase instance, чтобы не пересекаться
+/// между тестами или возможными несколькими клиентами.
+final Expando<Future<void>> _authRefreshInFlight = Expando('pb_refresh');
+
+Future<void> _refreshTokenSingleFlight(PocketBase pb) {
+  final pending = _authRefreshInFlight[pb];
+  if (pending != null) return pending;
+  final fut = pb
+      .collection('users')
+      .authRefresh()
+      .timeout(const Duration(seconds: 15));
+  _authRefreshInFlight[pb] = fut;
+  // Очищаем слот после завершения (успешного или нет), чтобы следующий
+  // 401 запустил свежий refresh, а не получал stale Future.
+  fut.whenComplete(() {
+    if (identical(_authRefreshInFlight[pb], fut)) {
+      _authRefreshInFlight[pb] = null;
+    }
+  });
+  return fut;
+}
+
 /// Универсальная обёртка для PB-вызовов: ловит 401/403 (истёкший токен),
 /// один раз пробует `authRefresh()` и повторяет операцию. Если refresh
 /// тоже упал — чистит authStore и пробрасывает исключение, чтобы
@@ -144,15 +252,22 @@ extension PocketBaseAuthRetry on PocketBase {
       final code = e.statusCode;
       if (code != 401 && code != 403) rethrow;
       try {
-        await collection('users')
-            .authRefresh()
-            .timeout(const Duration(seconds: 15));
+        await _refreshTokenSingleFlight(this);
       } catch (_) {
         authStore.clear();
         rethrow;
       }
       return op();
     }
+  }
+
+  /// Запустить (или дождаться) общий single-flight refresh токена.
+  /// Используется в местах, где идёт прямой `http.post` к нашим кастомным
+  /// ручкам (мы их не оборачиваем в `withAuthRetry`, потому что это
+  /// чистый http, а не PB API). Все вызывающие делят одну Future —
+  /// никаких параллельных refresh на разных провайдерах.
+  Future<void> refreshAuthSingleFlight() {
+    return _refreshTokenSingleFlight(this);
   }
 }
 

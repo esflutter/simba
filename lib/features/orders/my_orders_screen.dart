@@ -8,7 +8,9 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/order_display.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/auth_repository.dart' show authRepositoryProvider;
 import '../../data/remote/orders_repository.dart';
+import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
 import 'order_card.dart';
 
 enum _MyTab { customer, executor }
@@ -20,7 +22,8 @@ class MyOrdersScreen extends ConsumerStatefulWidget {
   ConsumerState<MyOrdersScreen> createState() => _MyOrdersScreenState();
 }
 
-class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
+class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
+    with WidgetsBindingObserver {
   /// Выбранная вкладка. Nullable до первого build — там вычислится
   /// дефолтная (по самому свежему заказу или, если оба списка пусты,
   /// по выбранной роли при регистрации).
@@ -28,28 +31,95 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
   // Юзер тапнул по табу — больше не пересчитываем default при новых данных.
   bool _userPickedTab = false;
 
-  /// По умолчанию: если есть заказы — открываем вкладку с самым свежим
-  /// `created`. Если в обеих ролях пусто — используем роль из стейта
-  /// (которую юзер выбрал на role_picker при регистрации).
+  /// PB realtime-подписка на коллекцию orders. Без неё юзер, держащий
+  /// экран открытым, не видел изменений с другой стороны (исполнитель
+  /// отменил, заказчик завершил, авто-крон зачистил протухший заказ)
+  /// до pull-to-refresh. Подписываемся на '*' — клиентский фильтр
+  /// в build всё равно отбросит не свои заказы.
+  Future<void> Function()? _ordersUnsub;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeOrders());
+  }
+
+  Future<void> _subscribeOrders() async {
+    if (!mounted) return;
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    try {
+      final unsub = await pb.collection('orders').subscribe('*', (_) {
+        if (!mounted) return;
+        ref.invalidate(myOrdersStreamProvider);
+        ref.invalidate(myExecutorOrdersProvider);
+      });
+      if (!mounted) {
+        await unsub();
+        return;
+      }
+      _ordersUnsub = unsub;
+    } catch (_) {/* WebSocket недоступен — экран продолжит работать без realtime */}
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    final unsub = _ordersUnsub;
+    _ordersUnsub = null;
+    if (unsub != null) {
+      // ignore: discarded_futures
+      unsub();
+    }
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Возврат из фона — могли что-то пропустить (push'и через ws
+      // не получим, пока приложение свёрнуто). Освежаем оба списка.
+      ref.invalidate(myOrdersStreamProvider);
+      ref.invalidate(myExecutorOrdersProvider);
+      // Превентивный refresh-token — если приложение лежало в фоне
+      // долго и Supabase/PB JWT TTL прошёл, первый запрос упёрся бы
+      // в 401 + withAuthRetry (видно скрытый «лаг»). В ленте такая же
+      // защита уже есть, тут добавляем для симметрии.
+      // ignore: discarded_futures
+      ref.read(authRepositoryProvider).tryRefreshAuth();
+    }
+  }
+
+  /// Дефолтная вкладка при первом открытии экрана.
+  ///
+  /// Правило: текущая роль (state.role) важнее, чем свежесть заказов.
+  /// Если юзер ВКЛЮЧИЛ «Готов помочь» (role=executor), он явно «в
+  /// режиме исполнителя» — ему логично сразу видеть свои принятые
+  /// заказы, а не размещённые. Симметрично: customer-режим открывает
+  /// «Я заказчик» по умолчанию.
+  ///
+  /// Если в роли пусто — даём шанс другой роли (если там что-то есть),
+  /// иначе остаёмся на роли по умолчанию (пустой состоянием с CTA-кнопкой
+  /// «Создать заказ» / «Перейти к ленте»).
   _MyTab _defaultTab({
     required Iterable<Order> mine,
     required Iterable<Order> asExecutor,
     required UserRole role,
   }) {
-    final mineLast = mine.isEmpty
-        ? null
-        : mine.map((o) => o.createdAt).reduce((a, b) => a.isAfter(b) ? a : b);
-    final execLast = asExecutor.isEmpty
-        ? null
-        : asExecutor
-            .map((o) => o.createdAt)
-            .reduce((a, b) => a.isAfter(b) ? a : b);
-    if (mineLast != null && execLast != null) {
-      return mineLast.isAfter(execLast) ? _MyTab.customer : _MyTab.executor;
+    final preferred =
+        role == UserRole.executor ? _MyTab.executor : _MyTab.customer;
+    final preferredList =
+        preferred == _MyTab.executor ? asExecutor : mine;
+    if (preferredList.isNotEmpty) return preferred;
+    // Предпочтительная вкладка пуста — если в другой что-то есть,
+    // открываем её, чтобы юзер не пялился на пустой экран.
+    final fallbackList = preferred == _MyTab.executor ? mine : asExecutor;
+    if (fallbackList.isNotEmpty) {
+      return preferred == _MyTab.executor ? _MyTab.customer : _MyTab.executor;
     }
-    if (mineLast != null) return _MyTab.customer;
-    if (execLast != null) return _MyTab.executor;
-    return role == UserRole.executor ? _MyTab.executor : _MyTab.customer;
+    // Обе пусты — остаёмся на предпочтительной (там CTA-empty-state).
+    return preferred;
   }
 
   @override

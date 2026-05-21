@@ -10,6 +10,8 @@ import '../../features/create_order/order_draft.dart';
 import '../../features/reviews/reviews_providers.dart';
 import '../mock/app_state.dart';
 import '../models/models.dart';
+import 'categories_repository.dart';
+import 'cities_repository.dart';
 import 'dadata_client.dart';
 import 'order_responses_repository.dart';
 import 'orders_repository.dart';
@@ -89,13 +91,15 @@ class AuthRepository {
     final pb = _pb!;
     final http.Response resp;
     try {
-      resp = await http
-          .post(
-            Uri.parse('${pb.baseURL}/api/auth/sms/send'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'phone': phone}),
-          )
-          .timeout(_httpTimeout);
+      resp = await sendWithSharedClient(
+        (c) => c
+            .post(
+              Uri.parse('${pb.baseURL}/api/auth/sms/send'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'phone': phone}),
+            )
+            .timeout(_httpTimeout),
+      );
     } on TimeoutException {
       return const AuthResult(ok: false, errorCode: 'network');
     } catch (_) {
@@ -138,13 +142,15 @@ class AuthRepository {
     final pb = _pb!;
     final http.Response resp;
     try {
-      resp = await http
-          .post(
-            Uri.parse('${pb.baseURL}/api/auth/sms/status'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'session_id': sessionId}),
-          )
-          .timeout(_httpTimeout);
+      resp = await sendWithSharedClient(
+        (c) => c
+            .post(
+              Uri.parse('${pb.baseURL}/api/auth/sms/status'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'session_id': sessionId}),
+            )
+            .timeout(_httpTimeout),
+      );
     } on TimeoutException {
       return const AuthResult(ok: false, errorCode: 'network');
     } catch (_) {
@@ -228,13 +234,15 @@ class AuthRepository {
     final pb = _pb!;
     final http.Response resp;
     try {
-      resp = await http
-          .post(
-            Uri.parse('${pb.baseURL}/api/auth/sms/verify'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'session_id': sessionId, 'code': code}),
-          )
-          .timeout(_httpTimeout);
+      resp = await sendWithSharedClient(
+        (c) => c
+            .post(
+              Uri.parse('${pb.baseURL}/api/auth/sms/verify'),
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode({'session_id': sessionId, 'code': code}),
+            )
+            .timeout(_httpTimeout),
+      );
     } on TimeoutException {
       return const AuthResult(ok: false, errorCode: 'network');
     } catch (_) {
@@ -319,12 +327,21 @@ class AuthRepository {
         // Свежий логин: пушим локальный выбор на сервер
         // fire-and-forget. Ошибки не критичны — следующий setCity
         // повторит попытку.
-        try {
-          pb
-              .collection('users')
-              .update(record.id, body: {'city': localCityId})
-              .timeout(const Duration(seconds: 10));
-        } catch (_) {/* не блокируем auth */}
+        //
+        // ВАЖНО: unawaited + catchError. Внешний try/catch не ловит
+        // ошибку этого Future — он завершается синхронно ДО того, как
+        // запрос реально выполнится. Без catchError исключение через
+        // 10 сек таймаута всплывает в Zone-handler и в release-сборках
+        // даёт crash-log.
+        unawaited(pb
+            .collection('users')
+            .update(record.id, body: {'city': localCityId})
+            .timeout(const Duration(seconds: 10))
+            .catchError((Object _) {
+          // Не блокируем auth, тихо игнорируем. RecordModel-возврат для
+          // совместимости с типом возвращаемого Future.
+          return record;
+        }));
       } else if (!isFreshLogin && cityId.isNotEmpty && cityId != localCityId) {
         // Silent refresh: сервер обновился (другой девайс?). Принимаем
         // серверное значение, чтобы оба девайса показывали одно и то же.
@@ -348,6 +365,45 @@ class AuthRepository {
       hasTransport: record.getBoolValue('has_transport'),
     );
     _ref.read(appControllerProvider.notifier).completeAuthRemote(user);
+
+    // Роль и «Готов помочь»: на свежем логине берём серверное значение
+    // `is_active_executor`. Поле живёт в users_private (клиенту напрямую
+    // не видно), бэк прокидывает его в meta auth-ответа (см. helpers.js
+    // ensureUserAndAuth). Раньше клиент пытался читать его из record —
+    // там его никогда не было, синхронизация тихо не работала.
+    //
+    // logout локально сбрасывает state.role на customer — без серверной
+    // подтяжки сценарий «выйти-войти на том же телефоне» терял бы
+    // исторический «Готов помочь». Для новых юзеров серверное значение
+    // по умолчанию false → ничего не ломаем; роль им выставит
+    // /role_picker после verifyOtp (setRole пушит на сервер сам).
+    //
+    // На silent refresh (cold start) серверный флаг в meta НЕ приходит
+    // (authRefresh не зовёт нашу ручку). В этом случае берём
+    // соответствующее состояние из ранее сохранённого state.role и
+    // одновременно синхронизируем `executorActive` (он на cold-start
+    // всегда сбрасывался в false, из-за чего тумблер «Готов помочь»
+    // показывался выключенным даже когда сервер считал юзера активным).
+    final metaIsActiveExecutor = meta?['is_active_executor'];
+    if (isFreshLogin && metaIsActiveExecutor is bool) {
+      final serverRole =
+          metaIsActiveExecutor ? UserRole.executor : UserRole.customer;
+      final localRole = _ref.read(appControllerProvider).role;
+      if (localRole != serverRole) {
+        ctrl.adoptRoleFromServer(serverRole);
+      }
+      // executorActive (флаг «Готов помочь сейчас») тоже выравниваем
+      // под серверный — без этого тумблер в UI и серверный сегмент
+      // push'ей могут рассинхрониться: юзер закрыл приложение в
+      // «онлайн», сервер шлёт ему пуши, а локально тумблер OFF.
+      ctrl.adoptExecutorActiveFromServer(metaIsActiveExecutor);
+    } else if (!isFreshLogin) {
+      // Silent refresh: meta пустая. Зеркалим executorActive под текущую
+      // роль — это лучшее приближение, что есть у клиента без отдельного
+      // запроса к users_private.
+      final localRole = _ref.read(appControllerProvider).role;
+      ctrl.adoptExecutorActiveFromServer(localRole == UserRole.executor);
+    }
     return AuthResult(ok: true, isNewUser: isNew, status: 'verified');
   }
 
@@ -404,10 +460,13 @@ class AuthRepository {
       final v = jsonDecode(body);
       return v is Map ? v.cast<String, dynamic>() : null;
     } catch (e) {
-      // Бывает на 502/Cloudflare-челлендж: возвращается HTML вместо JSON.
-      // Лог в release-сборку через debugPrint попадёт только при подключённом
-      // дебагере; для серверной отладки достаточно бэк-логов.
-      debugPrint('[auth_repository] _safeJson parse failed: $e');
+      // На 502/Cloudflare-челлендже бэк отвечает HTML вместо JSON.
+      // В release-сборку логируем только сам факт ошибки, без `e`: текст
+      // исключения от http может содержать URL запроса с query-параметрами
+      // и попасть в logcat, где его читают сторонние приложения.
+      if (kDebugMode) {
+        debugPrint('[auth_repository] _safeJson parse failed: $e');
+      }
       return null;
     }
   }
@@ -425,20 +484,26 @@ class AuthRepository {
       // (но без открытого приложения они всё равно не дойдут до UI).
       if (pb.authStore.isValid) {
         try {
-          await sharedHttpClient.post(
-            Uri.parse('${pb.baseURL}/api/me/executor-status'),
-            headers: {
-              // Bearer-префикс обязателен: PB 0.22+ строго парсит схему
-              // авторизации, без `Bearer ` запрос приходит на сервер как
-              // анонимный (e.auth=null). В executor-status это значило, что
-              // флаг is_active_executor никогда не сбрасывался в false при
-              // logout — пуш-сегмент держал юзера активным до естественного
-              // истечения TTL координат.
-              'Authorization': 'Bearer ${pb.authStore.token}',
-              'Content-Type': 'application/json',
-            },
-            body: '{"is_active": false}',
-          ).timeout(const Duration(seconds: 3));
+          // sendWithSharedClient — если устройство после долгого сна
+          // имеет закрытый сокет, обёртка сама пересоздаст клиент.
+          // Без неё logout сразу после wake-up иногда оставлял флаг
+          // is_active_executor включённым на сервере.
+          await sendWithSharedClient(
+            (c) => c.post(
+              Uri.parse('${pb.baseURL}/api/me/executor-status'),
+              headers: {
+                // Bearer-префикс обязателен: PB 0.22+ строго парсит схему
+                // авторизации, без `Bearer ` запрос приходит на сервер как
+                // анонимный (e.auth=null). В executor-status это значило, что
+                // флаг is_active_executor никогда не сбрасывался в false при
+                // logout — пуш-сегмент держал юзера активным до естественного
+                // истечения TTL координат.
+                'Authorization': 'Bearer ${pb.authStore.token}',
+                'Content-Type': 'application/json',
+              },
+              body: '{"is_active": false}',
+            ).timeout(const Duration(seconds: 3)),
+          );
         } catch (_) {/* не блокируем logout */}
       }
       pb.authStore.clear();
@@ -452,12 +517,25 @@ class AuthRepository {
       _ref.invalidate(feedOrdersProvider);
       _ref.invalidate(contactPhoneProvider);
       _ref.invalidate(reviewsForUserProvider);
+      _ref.invalidate(reviewsByOrderProvider);
+      // Кэш «по каким заказам я уже оставил отзыв» сделан НЕ-autoDispose
+      // (одна выборка для обоих табов истории). Без явного invalidate
+      // на logout — после смены пользователя на том же устройстве
+      // кнопка «Оставить отзыв» рисуется/прячется по заказам прошлого
+      // юзера, пока не пройдёт первый запрос свежего списка отзывов.
+      _ref.invalidate(myReviewedOrderIdsProvider);
       _ref.read(orderDraftProvider.notifier).reset();
       _ref.invalidate(reviewsRepositoryProvider);
       _ref.invalidate(ordersRepositoryProvider);
       _ref.invalidate(orderResponsesRepositoryProvider);
       _ref.invalidate(usersRepositoryProvider);
       _ref.invalidate(dadataClientProvider);
+      // Справочники городов и категорий — публичные данные, но за время
+      // сессии админ мог добавить/выключить город или категорию.
+      // Без инвалидации новый юзер на этом устройстве видит старый
+      // список до полного перезапуска приложения.
+      _ref.invalidate(citiesProvider);
+      _ref.invalidate(categoriesProvider);
     } catch (_) {
       // ok если провайдер не зарегистрирован в текущем scope.
     }
@@ -491,10 +569,11 @@ class AuthRepository {
       // 6с синхронизировано с обёрткой в splash_screen — иначе внутренний
       // таймаут срабатывал раньше, и splash думал что refresh не дошёл,
       // хотя он мог ещё успеть.
-      await pb
-          .collection('users')
-          .authRefresh()
-          .timeout(const Duration(seconds: 6));
+      //
+      // Идём через общий single-flight — иначе splash и параллельные
+      // провайдеры на главном экране могут одновременно запустить два
+      // refresh с одним токеном, и поздний ответ затрёт свежий.
+      await pb.refreshAuthSingleFlight().timeout(const Duration(seconds: 6));
       final record = pb.authStore.record;
       if (record != null) {
         // Зеркалим record в AppController.state.user тем же путём, что и

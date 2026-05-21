@@ -326,7 +326,11 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final city = ref.watch(appControllerProvider).selectedCity;
+    // .select — иначе экран с активной картой и подсказками ребилдится
+    // на любую мутацию AppState (createOrder, addReview, setRole и т.д.).
+    final city = ref.watch(
+      appControllerProvider.select((s) => s.selectedCity),
+    );
     // Приоритет центра карты: ранее выбранная точка → известное
     // местоположение пользователя (если попадает в один из городов из
     // списка) → центр выбранного в чипе города.
@@ -703,13 +707,20 @@ class _SearchFieldState extends State<_SearchField> {
               valueListenable: widget.controller,
               builder: (_, value, _) {
                 if (value.text.isEmpty) return const SizedBox.shrink();
-                return Padding(
-                  padding: EdgeInsets.only(left: 16.w),
-                  child: GestureDetector(
-                    onTap: widget.onClear,
-                    behavior: HitTestBehavior.opaque,
-                    child: Icon(IconsaxPlusLinear.close_circle,
-                        size: 24.r, color: AppColors.primary),
+                return GestureDetector(
+                  onTap: widget.onClear,
+                  behavior: HitTestBehavior.opaque,
+                  // 44×44 тап-зона при визуально том же 24-размером
+                  // крестике. Раньше «голая» иконка часто не реагировала,
+                  // пользователю приходилось стирать вручную.
+                  child: SizedBox(
+                    width: 44.r,
+                    height: 44.r,
+                    child: Icon(
+                      IconsaxPlusLinear.close_circle,
+                      size: 24.r,
+                      color: AppColors.primary,
+                    ),
                   ),
                 );
               },

@@ -186,60 +186,80 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                 ),
               ),
               SizedBox(height: 12.h),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  GestureDetector(
-                    onTap: _isSending ? null : () => setState(() => _agreed = !_agreed),
-                    child: Container(
+              // Чекбокс согласия. Тап работает как по самому квадратику,
+              // так и по тексту рядом — раньше клик мимо квадратика 22×22
+              // игнорировался, и было непонятно, что галочка вообще
+              // переключается. На сами TextSpan'ы ссылок recognizer не
+              // навешен, отдельных переходов на «Условия / Политику» нет,
+              // так что общий GestureDetector конфликтов не вызывает.
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _isSending
+                    ? null
+                    : () => setState(() => _agreed = !_agreed),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
                       margin: EdgeInsets.only(top: 2.h),
                       width: 22.r,
                       height: 22.r,
                       decoration: BoxDecoration(
-                        color: _agreed ? AppColors.primary : Colors.transparent,
+                        color:
+                            _agreed ? AppColors.primary : Colors.transparent,
                         border: Border.all(
-                          color: _agreed ? AppColors.primary : AppColors.textTertiary,
+                          color: _agreed
+                              ? AppColors.primary
+                              : AppColors.textTertiary,
                           width: 2.0,
                         ),
                         borderRadius: BorderRadius.circular(6.r),
                       ),
                       child: _agreed
                           ? Icon(
-  Icons.check_rounded,
-  size: 18.r,
-  color: AppColors.surface,
-  shadows: const [Shadow(color: AppColors.surface, blurRadius: 2)],
-)
+                              Icons.check_rounded,
+                              size: 18.r,
+                              color: AppColors.surface,
+                              shadows: const [
+                                Shadow(
+                                  color: AppColors.surface,
+                                  blurRadius: 2,
+                                ),
+                              ],
+                            )
                           : null,
                     ),
-                  ),
-                  SizedBox(width: 12.w),
-                  Expanded(
-                    child: Text.rich(
-                      TextSpan(
-                        style: AppText.caption(color: AppColors.textSecondary),
-                        children: [
-                          const TextSpan(text: 'Согласен(а) с '),
-                          TextSpan(
-                            text: 'Условиями использования',
-                            style: AppText.caption(color: AppColors.primary).copyWith(
-                              decoration: TextDecoration.underline,
-                              decorationColor: AppColors.primary,
+                    SizedBox(width: 12.w),
+                    Expanded(
+                      child: Text.rich(
+                        TextSpan(
+                          style:
+                              AppText.caption(color: AppColors.textSecondary),
+                          children: [
+                            const TextSpan(text: 'Согласен(а) с '),
+                            TextSpan(
+                              text: 'Условиями использования',
+                              style: AppText.caption(color: AppColors.primary)
+                                  .copyWith(
+                                decoration: TextDecoration.underline,
+                                decorationColor: AppColors.primary,
+                              ),
                             ),
-                          ),
-                          const TextSpan(text: ' и '),
-                          TextSpan(
-                            text: 'Политикой конфиденциальности',
-                            style: AppText.caption(color: AppColors.primary).copyWith(
-                              decoration: TextDecoration.underline,
-                              decorationColor: AppColors.primary,
+                            const TextSpan(text: ' и '),
+                            TextSpan(
+                              text: 'Политикой конфиденциальности',
+                              style: AppText.caption(color: AppColors.primary)
+                                  .copyWith(
+                                decoration: TextDecoration.underline,
+                                decorationColor: AppColors.primary,
+                              ),
                             ),
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
               SizedBox(height: 18.h),
               _PhoneNextButton(

@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../mock/mock_data.dart';
@@ -10,10 +10,15 @@ final categoriesProvider = FutureProvider<List<Category>>((ref) async {
   final pb = ref.read(pocketbaseProvider);
   if (pb == null) return MockData.categories;
   try {
-    final records = await pb.collection('categories').getFullList(
+    final records = await pb
+        .collection('categories')
+        .getFullList(
           filter: 'is_active = true',
           sort: 'sort_order',
-        );
+        )
+        // См. комментарий в cities_repository — без таймаута UI висит
+        // на спиннере при первом запуске и плохой сети.
+        .timeout(const Duration(seconds: 15));
     return records
         .map((r) => Category(
               id: r.id,
@@ -24,7 +29,9 @@ final categoriesProvider = FutureProvider<List<Category>>((ref) async {
   } catch (e) {
     // Fallback на встроенный список — лучше показать стандартные категории,
     // чем пустой экран. В логах увидим причину для отладки.
-    debugPrint('[categories_repository] live fetch failed, using mock: $e');
+    if (kDebugMode) {
+      debugPrint('[categories_repository] live fetch failed, using mock: $e');
+    }
     return MockData.categories;
   }
 });

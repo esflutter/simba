@@ -8,6 +8,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/theme/system_bar_style.dart';
 
 class _OnboardPage {
   const _OnboardPage({required this.image, required this.title, required this.body});
@@ -101,12 +102,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
   @override
   Widget build(BuildContext context) {
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.light,
-        statusBarBrightness: Brightness.dark,
-        systemNavigationBarColor: AppColors.primary,
-        systemNavigationBarIconBrightness: Brightness.light,
+      value: simbaSystemBarStyle(
+        navBarColor: AppColors.primary,
+        navIconBrightness: Brightness.light,
+        statusIconBrightness: Brightness.light,
       ),
       child: Scaffold(
         backgroundColor: AppColors.primary,
@@ -152,7 +151,7 @@ class _PageContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final screenW = MediaQuery.of(context).size.width;
+    final screenW = MediaQuery.sizeOf(context).width;
     return LayoutBuilder(
       builder: (context, constraints) {
         final imgH = constraints.maxHeight * 0.50;

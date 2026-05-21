@@ -12,6 +12,7 @@ import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
+import '../../core/router/app_router.dart' show nextOnboardingRoute;
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/cities_repository.dart';
@@ -94,6 +95,26 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
     _animCtrl.reverse();
   }
 
+  /// Куда уйти после того, как юзер с уже созданным аккаунтом выбрал
+  /// город. Раньше тут был просто `context.pop()` — но если /city был
+  /// первым экраном в стеке (например, юзер ранее закрыл приложение
+  /// на этапе заполнения профиля и его перебросило на выбор города
+  /// при следующем cold-start), pop ничего не делал, и юзер залипал
+  /// на экране — казалось, что города «не нажимаются».
+  ///
+  /// Если pop возможен — pop'аем (это смена города из настроек или
+  /// дип-линка). Если нет — догоняем следующий шаг онбординга через
+  /// `nextOnboardingRoute`; если все шаги пройдены, ведём на главный.
+  void _goAfterCityChosen() {
+    if (context.canPop()) {
+      context.pop();
+      return;
+    }
+    final state = ref.read(appControllerProvider);
+    final next = nextOnboardingRoute(state);
+    context.go(next ?? '/home/my');
+  }
+
   @override
   void dispose() {
     _searchCtrl.dispose();
@@ -169,6 +190,7 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                           child: Opacity(
                             opacity: _anim.value,
                             child: GestureDetector(
+                              behavior: HitTestBehavior.opaque,
                               onTap: () {
                                 final hasUser =
                                     ref.read(appControllerProvider).user !=
@@ -179,12 +201,26 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                   _closeSearch();
                                 }
                               },
+                              // Минимальный тап-таргет 44×44. Раньше иконка 20.r
+                              // была без расширения, попадание с первого раза
+                              // сбивалось — особенно сразу после клавиатуры,
+                              // когда экран сжат.
                               child: Padding(
-                                padding: EdgeInsets.only(bottom: 16.h),
-                                child: Icon(
-                                  Icons.arrow_back_ios_new_rounded,
-                                  size: 20.r,
-                                  color: AppColors.primary,
+                                padding: EdgeInsets.only(bottom: 4.h),
+                                child: SizedBox(
+                                  width: 44.r,
+                                  height: 44.r,
+                                  // Center — без него иконка 20.r рисуется в
+                                  // верхнем-левом углу 44×44 контейнера, и
+                                  // визуально стрелка съезжает с прежней
+                                  // позиции дизайна.
+                                  child: Center(
+                                    child: Icon(
+                                      Icons.arrow_back_ios_new_rounded,
+                                      size: 20.r,
+                                      color: AppColors.primary,
+                                    ),
+                                  ),
                                 ),
                               ),
                             ),
@@ -259,7 +295,7 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                     // — здесь повторный вызов не нужен.
                                     if (hasUser) {
                                       ctrl.setCity(c.id);
-                                      context.pop();
+                                      _goAfterCityChosen();
                                       return;
                                     }
                                     _searchCtrl.text = c.name;
@@ -319,7 +355,7 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                     null;
                                 ctrl.setCity(_selectedId!);
                                 if (hasUser) {
-                                  context.pop();
+                                  _goAfterCityChosen();
                                 } else {
                                   context.go('/auth/phone');
                                 }
@@ -465,7 +501,7 @@ class _RequestCitySheetState extends State<_RequestCitySheet> {
           16.w,
           16.h,
           16.w,
-          MediaQuery.of(context).viewInsets.bottom + 16.h,
+          MediaQuery.viewInsetsOf(context).bottom + 16.h,
         ),
         child: Column(
         mainAxisSize: MainAxisSize.min,

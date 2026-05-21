@@ -27,6 +27,7 @@ class OrderDraft {
     this.cityFiasId,
     this.postalCode,
     this.qcGeo,
+    this.clientUid,
   });
 
   final String? categoryId;
@@ -61,6 +62,14 @@ class OrderDraft {
   /// 5 — координат нет. Бэкенд решает, дозволять ли заказ при низком qc_geo.
   final int? qcGeo;
 
+  /// Клиентский UUID для идемпотентности create-запроса. Генерируется
+  /// при первой попытке публикации и переживает уход с экрана: если
+  /// юзер тапнул «Опубликовать», получил тайм-аут, ушёл назад и вернулся
+  /// через минуту — повторная отправка с тем же UID не создаст дубликат
+  /// (на сервере уникальный индекс по (customer, client_uid)). После
+  /// успешной публикации `reset()` обнуляет вместе со всем черновиком.
+  final String? clientUid;
+
   Map<String, dynamic> toJson() => {
         if (categoryId != null) 'categoryId': categoryId,
         'title': title,
@@ -79,6 +88,7 @@ class OrderDraft {
         if (cityFiasId != null) 'cityFiasId': cityFiasId,
         if (postalCode != null) 'postalCode': postalCode,
         if (qcGeo != null) 'qcGeo': qcGeo,
+        if (clientUid != null) 'clientUid': clientUid,
       };
 
   static OrderDraft fromJson(Map<String, dynamic> j) {
@@ -111,6 +121,7 @@ class OrderDraft {
       cityFiasId: j['cityFiasId'] as String?,
       postalCode: j['postalCode'] as String?,
       qcGeo: (j['qcGeo'] as num?)?.toInt(),
+      clientUid: j['clientUid'] as String?,
     );
   }
 
@@ -157,6 +168,7 @@ class OrderDraft {
     String? cityFiasId,
     String? postalCode,
     int? qcGeo,
+    String? clientUid,
     bool clearScheduled = false,
     bool clearForOther = false,
     bool clearAddressMeta = false,
@@ -181,6 +193,7 @@ class OrderDraft {
         cityFiasId: clearAddressMeta ? null : cityFiasId ?? this.cityFiasId,
         postalCode: clearAddressMeta ? null : postalCode ?? this.postalCode,
         qcGeo: clearAddressMeta ? null : qcGeo ?? this.qcGeo,
+        clientUid: clientUid ?? this.clientUid,
       );
 }
 
@@ -246,7 +259,9 @@ class OrderDraftController extends Notifier<OrderDraft> {
       // prefs не записался: на следующий cold-start черновик потеряется.
       // Это терпимо, но в логах должно быть видно — иначе тихая регрессия
       // (особенно при тестах с заполненным emulator-storage).
-      debugPrint('[OrderDraft] persist failed: $e');
+      if (kDebugMode) {
+        debugPrint('[OrderDraft] persist failed: $e');
+      }
     }
   }
 
@@ -267,6 +282,7 @@ class OrderDraftController extends Notifier<OrderDraft> {
     String? cityFiasId,
     String? postalCode,
     int? qcGeo,
+    String? clientUid,
     bool clearScheduled = false,
     bool clearForOther = false,
     bool clearAddressMeta = false,
@@ -289,6 +305,7 @@ class OrderDraftController extends Notifier<OrderDraft> {
       cityFiasId: cityFiasId,
       postalCode: postalCode,
       qcGeo: qcGeo,
+      clientUid: clientUid,
       clearScheduled: clearScheduled,
       clearForOther: clearForOther,
       clearAddressMeta: clearAddressMeta,

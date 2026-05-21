@@ -24,7 +24,11 @@ android {
         applicationId = "com.simba.simba"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // Принудительно 23 (Android 6.0). На API 21-22 AndroidX Security
+        // не поддерживает EncryptedSharedPreferences, а наш токен сессии
+        // лежит именно там. 5.0/5.1 — доли процента устройств, отказ
+        // оправдан безопасностью.
+        minSdk = 23
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

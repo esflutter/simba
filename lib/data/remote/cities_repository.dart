@@ -14,10 +14,16 @@ final citiesProvider = FutureProvider<List<City>>((ref) async {
     return MockData.cities;
   }
   try {
-    final records = await pb.collection('cities').getFullList(
+    final records = await pb
+        .collection('cities')
+        .getFullList(
           filter: 'is_active = true',
           sort: 'sort_order',
-        );
+        )
+        // Без таймаута зависший сокет держит спиннер по 60+ секунд (это
+        // один из первых экранов после логина). При проблеме — мягкий
+        // fallback на встроенный список ниже.
+        .timeout(const Duration(seconds: 15));
     return records.map((r) {
       // bounds_radius_km может быть null если миграция 1700000009 ещё не
       // отработала — используем дефолт из City.boundsRadiusKm (50).
@@ -37,7 +43,9 @@ final citiesProvider = FutureProvider<List<City>>((ref) async {
   } catch (e) {
     // На случай если бэкенд недоступен — мягкий fallback на моки,
     // чтобы UI не сломался.
-    debugPrint('[cities_repository] live fetch failed, using mock: $e');
+    if (kDebugMode) {
+      debugPrint('[cities_repository] live fetch failed, using mock: $e');
+    }
     return MockData.cities;
   }
 });

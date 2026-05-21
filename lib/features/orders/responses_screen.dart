@@ -10,6 +10,7 @@ import 'package:pocketbase/pocketbase.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/date_time_formatters.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_network_image.dart';
@@ -18,6 +19,7 @@ import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
+import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
 import '../../data/remote/users_repository.dart' show publicUserProvider;
 import 'order_details_screen.dart' show orderByIdProvider;
 
@@ -65,6 +67,57 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
   /// потому что второй PATCH успешно проходит до того, как первый
   /// инвалидирует providers.
   bool _busy = false;
+
+  /// PB realtime-подписка на order_responses. Без неё новые отклики
+  /// (другой исполнитель только что нажал «Откликнуться») не появляются
+  /// в списке, пока юзер сам не сделает pull-to-refresh; точно так же
+  /// отозванные отклики продолжают висеть как «активные».
+  Future<void> Function()? _responsesUnsub;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeResponses());
+  }
+
+  Future<void> _subscribeResponses() async {
+    if (!mounted) return;
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) return;
+    try {
+      final unsub = await pb.collection('order_responses').subscribe('*', (e) {
+        if (!mounted) return;
+        // Фильтр по orderId на клиенте: WS-канал даёт события по всей
+        // коллекции (PB-правила всё равно отсечут чужие записи на
+        // сервере), мы дополнительно отбрасываем отклики на другие
+        // заказы, чтобы не дёргать запрос лишний раз.
+        final rec = e.record;
+        if (rec == null) {
+          ref.invalidate(pendingExecutorIdsProvider(widget.orderId));
+          return;
+        }
+        if (rec.getStringValue('order_ref') == widget.orderId) {
+          ref.invalidate(pendingExecutorIdsProvider(widget.orderId));
+        }
+      });
+      if (!mounted) {
+        await unsub();
+        return;
+      }
+      _responsesUnsub = unsub;
+    } catch (_) {/* WebSocket недоступен — pull-to-refresh всё ещё работает */}
+  }
+
+  @override
+  void dispose() {
+    final unsub = _responsesUnsub;
+    _responsesUnsub = null;
+    if (unsub != null) {
+      // ignore: discarded_futures
+      unsub();
+    }
+    super.dispose();
+  }
 
   Future<void> _withLock(Future<void> Function() op) async {
     if (_busy) return;
@@ -403,9 +456,7 @@ class _ResponseCardState extends ConsumerState<_ResponseCard> {
                             ),
                             SizedBox(width: 4.w),
                             Text(
-                              user.rating
-                                  .toStringAsFixed(1)
-                                  .replaceAll('.', ','),
+                              formatRating(user.rating),
                               style: TextStyle(
                                 color: AppColors.textPrimary,
                                 fontSize: 16.sp,

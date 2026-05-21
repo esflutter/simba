@@ -29,29 +29,29 @@ class UsersRepository {
   }) async {
     final pb = _pb;
     if (pb == null) return null;
-    Future<http.Response> doRequest() => http
-        .post(
-          Uri.parse('${pb.baseURL}/api/users/$userId/contact-phone'),
-          headers: {
-            if (pb.authStore.token.isNotEmpty)
-              'Authorization': 'Bearer ${pb.authStore.token}',
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode({'order_id': orderId}),
-        )
-        .timeout(const Duration(seconds: 8));
+    Future<http.Response> doRequest() => sendWithSharedClient(
+          (c) => c
+              .post(
+                Uri.parse('${pb.baseURL}/api/users/$userId/contact-phone'),
+                headers: {
+                  if (pb.authStore.token.isNotEmpty)
+                    'Authorization': 'Bearer ${pb.authStore.token}',
+                  'Content-Type': 'application/json',
+                },
+                body: jsonEncode({'order_id': orderId}),
+              )
+              .timeout(const Duration(seconds: 8)),
+        );
 
     http.Response resp;
     try {
       resp = await doRequest();
       if (resp.statusCode == 401 || resp.statusCode == 403) {
-        // Один раз пробуем refresh + повторить запрос. Если refresh не
-        // сработал — отдаём null, верхний уровень покажет «телефон скрыт».
+        // Refresh идёт через общий single-flight — если параллельно лента
+        // и мои заказы уже триггерят refresh, тут просто ждём его результат,
+        // а не шлём свой второй authRefresh с тем же старым токеном.
         try {
-          await pb
-              .collection('users')
-              .authRefresh()
-              .timeout(const Duration(seconds: 10));
+          await pb.refreshAuthSingleFlight();
           resp = await doRequest();
         } catch (_) {
           return null;
@@ -83,10 +83,15 @@ class UsersRepository {
     final pb = _pb;
     if (pb == null) return null;
     try {
-      final r = await pb
-          .collection('users')
-          .getOne(userId)
-          .timeout(const Duration(seconds: 10));
+      // withAuthRetry — если в момент открытия чужого профиля токен
+      // истёк, обёртка молча обновит и повторит запрос. Без неё экран
+      // показывал пустую заглушку до выхода-входа.
+      final r = await pb.withAuthRetry(
+        () => pb
+            .collection('users')
+            .getOne(userId)
+            .timeout(const Duration(seconds: 10)),
+      );
       final photoRaw = r.get<dynamic>('photo');
       String? photoUrl;
       if (photoRaw is String && photoRaw.isNotEmpty) {

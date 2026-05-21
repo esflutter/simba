@@ -95,21 +95,34 @@ class _AppToastViewState extends State<_AppToastView>
   }
 
   Future<void> _dismiss() async {
-    if (_dismissing) return;
+    if (_dismissing || !mounted) return;
     _dismissing = true;
-    await _ac.reverse();
+    try {
+      await _ac.reverse();
+    } catch (_) {
+      // AnimationController может быть уже dispose'нут к этому моменту
+      // (Overlay снят раньше, чем сработал авто-таймер). Без catch —
+      // AssertionError в debug.
+    }
     if (mounted) widget.onDismiss();
   }
 
   @override
   void dispose() {
+    // Снимаем ссылку из контроллера — иначе глобальный таймер на 3 секунды
+    // продолжает держать `dismiss = _dismiss` и при срабатывании дёргает
+    // метод уже dispose'нутого State'а. Симптом — AssertionError при
+    // быстром переходе между экранами после показа тоста.
+    if (identical(widget.controller.dismiss, _dismiss)) {
+      widget.controller.dismiss = null;
+    }
     _ac.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final topInset = MediaQuery.of(context).viewPadding.top;
+    final topInset = MediaQuery.viewPaddingOf(context).top;
     return Positioned(
       top: topInset + 52.h,
       left: 16.w,
@@ -138,7 +151,7 @@ class _AppToastViewState extends State<_AppToastView>
                   widget.message,
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: const Color(0xFFF5F5F5),
+                    color: AppColors.background,
                     fontSize: 13.sp,
                     fontWeight: FontWeight.w400,
                     height: 1.54,

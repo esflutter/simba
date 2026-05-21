@@ -27,7 +27,9 @@ Order? orderFromRecord(RecordModel r, [PocketBase? pb]) {
     // Битая запись: без customer теряется логика «свой/чужой заказ»
     // (всё сравнение с auth.id даст false). Лучше пропустить и
     // залогировать, чем тащить мусор в UI.
-    debugPrint('orderFromRecord: skipping order ${r.id} — empty customer');
+    if (kDebugMode) {
+      debugPrint('orderFromRecord: skipping order ${r.id} — empty customer');
+    }
     return null;
   }
   final rawStatus = r.getStringValue('status');
@@ -49,7 +51,9 @@ Order? orderFromRecord(RecordModel r, [PocketBase? pb]) {
   // даты). debugPrint поможет найти источник проблемы.
   var createdAt = parsePbDate(r.getStringValue('created'));
   if (createdAt == null) {
-    debugPrint('orderFromRecord: order ${r.id} has invalid `created` — using epoch fallback');
+    if (kDebugMode) {
+      debugPrint('orderFromRecord: order ${r.id} has invalid `created` — using epoch fallback');
+    }
     createdAt = DateTime.fromMillisecondsSinceEpoch(0);
   }
 
@@ -155,7 +159,7 @@ OrderStatus _statusFromString(String s) {
       // отображался как открытый, появлялся в фиде, на него можно было
       // откликнуться. Сейчас логируем, fallback оставляем — но в логах видно,
       // что клиент устарел.
-      if (s.isNotEmpty) {
+      if (s.isNotEmpty && kDebugMode) {
         debugPrint('[order_mapper] unknown order status "$s" — fallback to open');
       }
       return OrderStatus.open;
@@ -167,7 +171,10 @@ OrderStatus _statusFromString(String s) {
 List<String> _filePhotoUrls(RecordModel r, String field, PocketBase? pb) {
   final raw = r.get<dynamic>(field);
   if (raw is! List) return const [];
-  final names = raw.cast<String>();
+  // whereType<String>() — устойчиво к битым записям, где в массиве
+  // photos оказалось null или число. `cast<String>()` падает лениво
+  // при первой итерации, что роняло весь экран ленты.
+  final names = raw.whereType<String>();
   if (pb == null) return const [];
   return names
       .map((name) => pb.files.getUrl(r, name).toString())

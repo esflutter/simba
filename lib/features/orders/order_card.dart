@@ -26,7 +26,13 @@ class OrderCard extends StatelessWidget {
     if (order.scheduledAt != null) {
       // toLocal(): scheduledAt в БД хранится в UTC, без перевода в локальное
       // время ночные заказы отображались на 1 день вперёд/назад.
-      return DateFormat('dd.MM.yyyy').format(order.scheduledAt!.toLocal());
+      final dt = order.scheduledAt!.toLocal();
+      // Если у заказа выставлено конкретное время (не 00:00), показываем
+      // его в карточке — раньше в ленте была только дата, и исполнитель
+      // узнавал «8 утра, не успею» только открыв детали.
+      final hasTime = dt.hour != 0 || dt.minute != 0;
+      final pattern = hasTime ? 'dd.MM.yyyy HH:mm' : 'dd.MM.yyyy';
+      return DateFormat(pattern).format(dt);
     }
     return order.asap ? 'Как можно быстрее' : 'Не указано';
   }
