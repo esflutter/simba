@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Android 13+ требует это разрешение для показа уведомлений
+         (в т.ч. push'ей FCM). Без него FirebaseMessaging.getToken()
+         работает, но системно уведомления не показываются. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="SimbA"
         android:name="${applicationName}"

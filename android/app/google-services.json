@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "94172925307",
+    "project_id": "simba-8941e",
+    "storage_bucket": "simba-8941e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:94172925307:android:d651e44fd48dec2ec441de",
+        "android_client_info": {
+          "package_name": "com.simba.simba"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBhWSr-7aBQTirup0tmdinKwdWntl9HQ9M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

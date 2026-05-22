@@ -68,6 +68,10 @@ class CategoryChip extends StatelessWidget {
         ),
         child: Text(
           label,
+          // Длинные категории («Уборка и помощь по хозяйству») без
+          // ellipsis растягивают чип и ломают раскладку карточки.
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
           style: TextStyle(
             fontSize: 12.sp,
             fontWeight: FontWeight.w400,
@@ -85,6 +89,8 @@ class CategoryChip extends StatelessWidget {
       ),
       child: Text(
         label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 13.sp,
           fontWeight: FontWeight.w500,

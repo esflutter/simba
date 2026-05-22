@@ -36,6 +36,14 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   bool _hasTransport = false;
   bool _isSaving = false;
 
+  // Снапшот значений на момент входа в экран. Сравнение с текущими
+  // даёт флаг «есть несохранённые изменения» — нужен для PopScope, чтобы
+  // не давать молча потерять введённое нажатием «назад».
+  String _initialName = '';
+  String? _initialPhotoPath;
+  bool _initialHasTools = false;
+  bool _initialHasTransport = false;
+
   @override
   void initState() {
     super.initState();
@@ -47,6 +55,39 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     _photoPath = u?.photoPath;
     _hasTools = u?.hasTools ?? false;
     _hasTransport = u?.hasTransport ?? false;
+    _initialName = _name.text;
+    _initialPhotoPath = _photoPath;
+    _initialHasTools = _hasTools;
+    _initialHasTransport = _hasTransport;
+  }
+
+  bool get _isDirty {
+    if (_name.text.trim() != _initialName.trim()) return true;
+    if (_photoPath != _initialPhotoPath) return true;
+    if (_hasTools != _initialHasTools) return true;
+    if (_hasTransport != _initialHasTransport) return true;
+    return false;
+  }
+
+  Future<bool> _confirmDiscard() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Выйти без сохранения?'),
+        content: const Text('Изменения, которые вы внесли, будут потеряны.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Остаться'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Выйти'),
+          ),
+        ],
+      ),
+    );
+    return ok ?? false;
   }
 
   @override
@@ -308,8 +349,20 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.background,
+    return PopScope(
+      // canPop: true — нет несохранённых изменений, выходим без вопросов.
+      // false — перехватываем pop и спрашиваем подтверждение.
+      canPop: !_isDirty || _isSaving,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        if (!mounted) return;
+        final discard = await _confirmDiscard();
+        if (!discard) return;
+        if (!context.mounted) return;
+        if (context.canPop()) context.pop();
+      },
+      child: Scaffold(
+        backgroundColor: AppColors.background,
       body: Column(
         children: [
           // Header (white, with back + centered title)
@@ -456,6 +509,7 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
             ),
           ),
         ],
+      ),
       ),
     );
   }

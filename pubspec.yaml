@@ -62,6 +62,15 @@ dependencies:
   # давало десятки HTTP-запросов на одно открытие экрана.
   cached_network_image: ^3.4.1
 
+  # Firebase Cloud Messaging — пуш-уведомления для Android и iOS.
+  # firebase_core инициализирует SDK (нужен один раз в main), firebase_messaging
+  # отвечает за получение FCM-токена, обработку входящих пушей в foreground/
+  # background/terminated состояниях и регистрацию foreground-обработчика.
+  # Кросс-платформенная обёртка, работает поверх google-services.json (Android)
+  # и GoogleService-Info.plist (iOS).
+  firebase_core: ^4.2.0
+  firebase_messaging: ^16.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

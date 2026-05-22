@@ -1,3 +1,5 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -16,6 +18,19 @@ import 'data/remote/pocketbase_client.dart';
 /// Splash и онбординг используют тот же `simbaSystemBarStyle`, но с
 /// другими цветами фона.
 final _kSystemBarStyle = simbaSystemBarStyle();
+
+/// Обработчик FCM-пушей, пришедших когда приложение в фоне или убито.
+/// Должен быть top-level и помечен `@pragma('vm:entry-point')` — иначе
+/// Flutter AOT (release-сборка) вырежет его, и пуш не доберётся до
+/// изолята. Сам handler — лёгкий: систему уведомления Android и iOS
+/// уже показали на лок-скрин/в шторке (FCM-payload с `notification` это
+/// делает автоматически), нам остаётся инициализировать Firebase в
+/// изоляте — на случай, если в дальнейшем добавим обработку `data`-only
+/// сообщений (например, тихое обновление счётчика непрочитанных).
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  await Firebase.initializeApp();
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,7 +51,24 @@ Future<void> main() async {
   // LocaleDataException при первом форматировании — экран истории и
   // карточка заказа используют 'd MMMM yyyy' / 'dd.MM.yyyy HH:mm'.
   await initializeDateFormatting('ru_RU');
+  // Firebase — для FCM-пушей. Настройки берутся из google-services.json
+  // (Android) и GoogleService-Info.plist (iOS), google-services Gradle
+  // плагин/Firebase iOS-инициализатор сами подставляют параметры. Инициализация
+  // обязательна ДО первого вызова Firebase API (FirebaseMessaging.instance).
+  // Если в проекте файла нет — Firebase.initializeApp() кинет исключение;
+  // приложение запустится, но пуши работать не будут.
+  await Firebase.initializeApp();
+  // Регистрируем background-handler — пуши, пришедшие когда приложение
+  // в фоне/убито, обрабатываются в отдельном изоляте. Регистрация ДО
+  // runApp обязательна, повторно через onMessage в SimbaApp foreground-
+  // пуши тоже обрабатываются.
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
   final prefs = await SharedPreferences.getInstance();
+  // PreferencesStore.create — асинхронный конструктор: телефон лежит в
+  // защищённом хранилище (Android Keystore / iOS Keychain), при старте
+  // нужно его подтянуть в in-memory кэш и при необходимости мигрировать
+  // со старого открытого ключа.
+  final prefsStore = await PreferencesStore.create(prefs);
   // PocketBase создаётся ОДИН раз здесь. Токен сессии хранится в
   // защищённом системном хранилище (Android Keystore / iOS Keychain),
   // не в обычных SharedPreferences — иначе на рутованном устройстве
@@ -50,7 +82,7 @@ Future<void> main() async {
   runApp(
     ProviderScope(
       overrides: [
-        preferencesProvider.overrideWithValue(PreferencesStore(prefs)),
+        preferencesProvider.overrideWithValue(prefsStore),
         pocketbaseProvider.overrideWithValue(pb),
       ],
       child: const SimbaApp(),

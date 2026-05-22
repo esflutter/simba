@@ -21,6 +21,10 @@ plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "8.11.1" apply false
     id("org.jetbrains.kotlin.android") version "2.2.20" apply false
+    // Google services — читает google-services.json и подставляет нужные
+    // строки в манифест/ресурсы во время сборки. Нужен для Firebase
+    // (FCM-пуши и т.д.). apply false здесь, применяется в app/build.gradle.kts.
+    id("com.google.gms.google-services") version "4.4.4" apply false
 }
 
 include(":app")

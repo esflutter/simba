@@ -472,19 +472,27 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
                   children: _ruTags.map((t) {
                     final selected = _tags.contains(t);
                     return GestureDetector(
+                      // HitTestBehavior.opaque — чтобы тап ловился по всей
+                      // зоне Container'а, а не только по тексту. Раньше
+                      // мимо букв нажатие проваливалось — тэги были как бы
+                      // «дырявыми».
+                      behavior: HitTestBehavior.opaque,
                       onTap: _isSubmitting
                           ? null
                           : () => setState(() {
                                 selected ? _tags.remove(t) : _tags.add(t);
                               }),
+                      // vertical:10 + текст 14sp с line-height 1.4 = ~30dp
+                      // высота. Раньше было vertical:6 → ~24dp, пальцем
+                      // на сложенной Wrap-сетке легко промахнуться.
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 150),
-                        padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 6.h),
+                        padding: EdgeInsets.symmetric(horizontal: 14.w, vertical: 10.h),
                         decoration: BoxDecoration(
                           color: selected
                               ? AppColors.primary
                               : AppColors.background,
-                          borderRadius: BorderRadius.circular(8.r),
+                          borderRadius: BorderRadius.circular(10.r),
                         ),
                         child: Text(
                           t,

@@ -13,6 +13,7 @@ import '../models/models.dart';
 import 'categories_repository.dart';
 import 'cities_repository.dart';
 import 'dadata_client.dart';
+import 'fcm_repository.dart';
 import 'order_responses_repository.dart';
 import 'orders_repository.dart';
 import 'pocketbase_client.dart';
@@ -404,6 +405,12 @@ class AuthRepository {
       final localRole = _ref.read(appControllerProvider).role;
       ctrl.adoptExecutorActiveFromServer(localRole == UserRole.executor);
     }
+    // Регистрируем FCM-токен на сервере. Делаем fire-and-forget: запрос
+    // permission на iOS показывает системный диалог (200-500 мс), а ждать
+    // его в auth-флоу нет смысла — авторизация прошла, дальше пусть
+    // токен дописывается в фоне. Если упало (нет интернета, permission
+    // denied) — следующий запуск приложения попробует снова.
+    unawaited(_ref.read(fcmRepositoryProvider).registerForCurrentUser());
     return AuthResult(ok: true, isNewUser: isNew, status: 'verified');
   }
 
@@ -475,6 +482,18 @@ class AuthRepository {
   /// провайдеры, чтобы при следующем входе данные не «протекли».
   Future<void> logout() async {
     final pb = _pb;
+    // ВАЖНО: чистим FCM-токен ДО pb.authStore.clear(), иначе fcmRepository
+    // потеряет доступ к userId и не сможет очистить fcm_token на сервере.
+    // Иначе следующий владелец того же устройства начнёт получать пуши,
+    // адресованные предыдущему юзеру.
+    if (pb != null && pb.authStore.isValid) {
+      try {
+        await _ref
+            .read(fcmRepositoryProvider)
+            .clearForCurrentUser()
+            .timeout(const Duration(seconds: 3));
+      } catch (_) {/* не блокируем logout */}
+    }
     if (pb != null) {
       // Перед очисткой токена снимаем флаг is_active_executor на бэке,
       // иначе сегмент push-рассылки «new_order_nearby» продолжит включать
@@ -548,6 +567,17 @@ class AuthRepository {
   /// При успехе зеркалит данные юзера из `pb.authStore.record` в AppController,
   /// иначе splash на cold-start увидит `isValid==true` при пустом `state.user`
   /// и погонит на онбординг при валидной сессии.
+  // Дедуп частых вызовов tryRefreshAuth. Резюм-обработчики на нескольких
+  // экранах (feed, my_orders, history, sms_code, splash) дёргают refresh
+  // на каждый перевод приложения в foreground — если пользователь часто
+  // переключается между приложениями (или Android посылает фейковый
+  // resumed на изменение системных настроек), это лишний трафик и шум
+  // в логах. Если прошло меньше 30 секунд с последнего успешного
+  // refresh — возвращаем true без сетевого вызова. На single-flight это
+  // не влияет (тот защищает от параллельных запросов в одну секунду).
+  DateTime _lastSuccessfulRefreshAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const _kRefreshDedupWindow = Duration(seconds: 30);
+
   Future<bool> tryRefreshAuth() async {
     final pb = _pb;
     if (pb == null || !pb.authStore.isValid) {
@@ -565,6 +595,11 @@ class AuthRepository {
       } catch (_) {}
       return false;
     }
+    // Дедуп: если только что (< 30 сек) уже сделали refresh — пропускаем.
+    if (DateTime.now().difference(_lastSuccessfulRefreshAt) <
+        _kRefreshDedupWindow) {
+      return true;
+    }
     try {
       // 6с синхронизировано с обёрткой в splash_screen — иначе внутренний
       // таймаут срабатывал раньше, и splash думал что refresh не дошёл,
@@ -574,6 +609,7 @@ class AuthRepository {
       // провайдеры на главном экране могут одновременно запустить два
       // refresh с одним токеном, и поздний ответ затрёт свежий.
       await pb.refreshAuthSingleFlight().timeout(const Duration(seconds: 6));
+      _lastSuccessfulRefreshAt = DateTime.now();
       final record = pb.authStore.record;
       if (record != null) {
         // Зеркалим record в AppController.state.user тем же путём, что и

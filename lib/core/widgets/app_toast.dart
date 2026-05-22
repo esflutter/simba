@@ -5,9 +5,16 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import '../theme/app_colors.dart';
 
-/// Единый стиль всплывающих уведомлений: синяя плашка сверху экрана,
+/// Тип уведомления — отличаются цветом плашки.
+///   info    — нейтральные информационные сообщения (default).
+///   success — успех действия (зелёная плашка).
+///   error   — ошибка (красная плашка).
+enum AppToastType { info, success, error }
+
+/// Единый стиль всплывающих уведомлений: плашка сверху экрана,
 /// текст 13sp w400 #F5F5F5, padding 12/8, radius 8. Скрывается по тапу
-/// на крестик или автоматически через [duration].
+/// на крестик или автоматически через [duration]. Цвет фона зависит
+/// от [type] — глаз отличает успех от ошибки боковым зрением.
 class AppToast {
   AppToast._();
 
@@ -17,6 +24,7 @@ class AppToast {
     BuildContext context,
     String message, {
     Duration duration = const Duration(seconds: 3),
+    AppToastType type = AppToastType.info,
   }) {
     _activeEntry?.remove();
     _activeTimer?.cancel();
@@ -29,6 +37,7 @@ class AppToast {
     entry = OverlayEntry(
       builder: (ctx) => _AppToastView(
         message: message,
+        type: type,
         controller: controller,
         onDismiss: () {
           if (entry.mounted) entry.remove();
@@ -47,6 +56,14 @@ class AppToast {
       controller.dismiss?.call();
     });
   }
+
+  /// Сокращения для удобства в коде.
+  static void success(BuildContext context, String message,
+          {Duration duration = const Duration(seconds: 3)}) =>
+      show(context, message, duration: duration, type: AppToastType.success);
+  static void error(BuildContext context, String message,
+          {Duration duration = const Duration(seconds: 3)}) =>
+      show(context, message, duration: duration, type: AppToastType.error);
 }
 
 OverlayEntry? _activeEntry;
@@ -59,11 +76,13 @@ class _ToastController {
 class _AppToastView extends StatefulWidget {
   const _AppToastView({
     required this.message,
+    required this.type,
     required this.controller,
     required this.onDismiss,
   });
 
   final String message;
+  final AppToastType type;
   final _ToastController controller;
   final VoidCallback onDismiss;
 
@@ -137,7 +156,14 @@ class _AppToastViewState extends State<_AppToastView>
               child: Container(
                 padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 8.h),
                 decoration: BoxDecoration(
-                  color: AppColors.primary,
+                  // success — приятный зелёный, error — красный, info —
+                  // дефолтный фирменный синий. Контрастный белый текст
+                  // читается на всех трёх.
+                  color: switch (widget.type) {
+                    AppToastType.success => const Color(0xFF2E7D32),
+                    AppToastType.error => const Color(0xFFC62828),
+                    AppToastType.info => AppColors.primary,
+                  },
                   borderRadius: BorderRadius.circular(8.r),
                   boxShadow: [
                     BoxShadow(
