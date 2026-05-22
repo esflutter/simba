@@ -29,12 +29,19 @@ const Map<String, String> _tagSlugByRu = {
 };
 
 /// Открывает шторку «Оставить отзыв» снизу экрана.
+///
+/// `isDismissible: false` + `enableDrag: false`: рейтинг и текст
+/// отзыва — это введённые юзером данные, которые легко потерять
+/// случайным свайпом по фону. Если юзер хочет выйти — для этого
+/// есть крестик в правом верхнем углу шторки.
 Future<void> showLeaveReviewSheet(BuildContext context, String orderId) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     backgroundColor: Colors.transparent,
     barrierColor: Colors.black.withValues(alpha: 0.40),
+    isDismissible: false,
+    enableDrag: false,
     builder: (_) => _LeaveReviewGate(orderId: orderId),
   );
 }
@@ -222,6 +229,12 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
             comment: _ctrl.text.trim(),
             tags: slugTags,
           );
+      // Шторку могли закрыть пока запрос летел (теоретически — сейчас
+      // выключили drag/dismissible, но кнопка-крестик всё равно
+      // доступна). Любое обращение к `ref` после dispose State'а
+      // бросает исключение в Riverpod, поэтому проверяем mounted ПЕРЕД
+      // любым ref.invalidate / setState / context.use.
+      if (!mounted) return;
       // Зеркало в локальный стейт делаем ТОЛЬКО когда PB не подключён
       // (мок-режим): иначе после live-успеха получаем дубль отзыва в
       // `state.reviews`, который потом подмешивается в fallback-ветке
@@ -254,12 +267,16 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
       // Поэтому здесь оставляем обычное «не удалось» — реальная ошибка
       // (валидация, сеть до отправки тела, FSM-запрет) показывается без
       // лишних предположений «возможно прошло».
-      AppToast.show(context, 'Не удалось отправить отзыв');
+      if (context.mounted) AppToast.show(context, 'Не удалось отправить отзыв');
       setState(() => _isSubmitting = false);
       return;
     }
     if (!mounted) return;
     setState(() => _isSubmitting = false);
+    // Дополнительная проверка перед открытием диалога — между setState
+    // и showDialog нет await, но context.mounted дешёвая и страхует от
+    // случайной гонки в будущем.
+    if (!context.mounted) return;
 
     showDialog<void>(
       context: context,

@@ -210,20 +210,32 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
     // restrictToCity=true → DaData физически не вернёт адреса других городов.
     // cityName используется как fallback на старых записях без FIAS-ID
     // (если миграция 1700000009 ещё не отработала на бэке).
-    final results = await client.suggest(
-      query,
-      count: 7,
-      cityFiasId: city.dadataFiasId,
-      cityName: city.dadataFiasId == null ? city.name : null,
-    );
-    // Игнорируем устаревшие ответы: пока летел запрос, юзер мог продолжить
-    // печатать, и пришёл уже более новый mySeq.
-    if (mySeq != _suggestSeq || !mounted) return;
-    _cacheSuggest(key, results);
-    setState(() {
-      _suggestions = results;
-      _loading = false;
-    });
+    try {
+      final results = await client.suggest(
+        query,
+        count: 7,
+        cityFiasId: city.dadataFiasId,
+        cityName: city.dadataFiasId == null ? city.name : null,
+      );
+      // Игнорируем устаревшие ответы: пока летел запрос, юзер мог продолжить
+      // печатать, и пришёл уже более новый mySeq.
+      if (mySeq != _suggestSeq || !mounted) return;
+      _cacheSuggest(key, results);
+      setState(() {
+        _suggestions = results;
+        _loading = false;
+      });
+    } catch (_) {
+      // Сетевая ошибка / DaData недоступна — без catch _loading зависал
+      // в true навсегда, и юзер видел крутящийся спиннер пока не наберёт
+      // следующий символ. Тихо схлопываем подсказки в пустой результат —
+      // юзер может ввести адрес вручную или ткнуть в карту.
+      if (mySeq != _suggestSeq || !mounted) return;
+      setState(() {
+        _suggestions = const [];
+        _loading = false;
+      });
+    }
   }
 
   void _pickSuggestion(AddressSuggestion s) {

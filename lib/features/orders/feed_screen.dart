@@ -101,8 +101,20 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     if (auth.isLive) {
       auth.tryRefreshAuth().then((ok) {
         if (!mounted || ok) return;
+        // ВАЖНО: одного факта `ok == false` мало для редиректа на /auth.
+        // Сценарий: юзер запросил permission на геолокацию → Android
+        // сворачивает приложение на показ диалога → resumed → этот
+        // hook → tryRefreshAuth уходит в сеть → пока ждём, юзер
+        // успевает нажать «Назад» на диалоге → resumed второй раз →
+        // dedup внутри tryRefreshAuth возвращает true мгновенно, но
+        // первый запрос ещё в полёте и может вернуть false из-за
+        // race. Без двойной проверки (state.user == null И PB-токен
+        // невалидный) юзер вылетает на ввод телефона прямо с открытой
+        // ленты. Теперь редирект — только если ОБА условия выполнены.
         final user = ref.read(appControllerProvider).user;
-        if (user == null) {
+        final pb = ref.read(pocketbaseProvider);
+        final tokenValid = pb?.authStore.isValid ?? false;
+        if (user == null && !tokenValid) {
           context.go('/auth/phone');
         }
       });
@@ -383,14 +395,12 @@ class _Header extends StatelessWidget {
                   child: InkWell(
                     borderRadius: BorderRadius.circular(8.r),
                     onTap: onSwitchRole,
-                    // 44dp по высоте — это основной тумблер исполнителя
-                    // в шапке ленты, в него тяжело попадать большим
-                    // пальцем при ширине бордюра 6dp.
+                    // 32dp — компактная высота, совпадает с CityPill слева.
                     child: Container(
-                      constraints: BoxConstraints(minHeight: 44.h),
+                      constraints: BoxConstraints(minHeight: 32.h),
                       alignment: Alignment.center,
                       padding:
-                          EdgeInsets.symmetric(horizontal: 14.w, vertical: 8.h),
+                          EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
                       child: Text(
                         roleCta,
                         style: TextStyle(

@@ -249,7 +249,42 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
   /// `text-field` оставлен только `name:ru` с откатом на `name`
   /// (для мест без русского имени — например, мелких сёл за рубежом).
   Future<Style> _loadLocalizedStyle() async {
-    final Style original = await StyleReader(uri: widget.styleUri).read();
+    // Под VPN / нестабильным каналом первая попытка StyleReader может
+    // упасть (TLS handshake таймаут, DNS-флап). Раньше карта в этом
+    // случае показывалась серой — мы вообще не обрабатывали ошибку.
+    // Теперь делаем 3 попытки с растущей задержкой и явным таймаутом
+    // на каждую — на стабильной сети это занимает первые ~300 мс, на
+    // флапающей даём шанс ~12 секунд суммарно.
+    Style? original;
+    Object? lastError;
+    const delays = [
+      Duration.zero,
+      Duration(milliseconds: 700),
+      Duration(seconds: 2),
+    ];
+    for (final delay in delays) {
+      if (delay > Duration.zero) {
+        await Future<void>.delayed(delay);
+        if (!mounted) {
+          throw StateError('widget disposed during style retry');
+        }
+      }
+      try {
+        original = await StyleReader(uri: widget.styleUri)
+            .read()
+            .timeout(const Duration(seconds: 8));
+        break;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    if (original == null) {
+      // Все три попытки упали — пробрасываем ошибку наверх. UI поймает
+      // её в FutureBuilder и покажет дружелюбное сообщение вместо
+      // серого фона. Карта попробует загрузиться при следующем заходе
+      // на экран — стиль не кэшируется в памяти процесса.
+      throw lastError ?? Exception('map style unreachable');
+    }
     try {
       final String text =
           await rootBundle.loadString('assets/maps/positron.json');
@@ -461,10 +496,37 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
             color: AppColors.surfaceVariant,
             alignment: Alignment.center,
             padding: EdgeInsets.all(16.w),
-            child: Text(
-              'Не удалось загрузить карту',
-              textAlign: TextAlign.center,
-              style: AppText.body(color: AppColors.textSecondary),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Не удалось загрузить карту',
+                  textAlign: TextAlign.center,
+                  style: AppText.body(color: AppColors.textSecondary),
+                ),
+                SizedBox(height: 4.h),
+                Text(
+                  'Проверьте интернет или VPN',
+                  textAlign: TextAlign.center,
+                  style: AppText.bodySmall(color: AppColors.textTertiary),
+                ),
+                SizedBox(height: 12.h),
+                TextButton(
+                  onPressed: () {
+                    // Принудительно пересоздаём future, чтобы стиль
+                    // подгрузился заново. Без setState FutureBuilder
+                    // продолжает показывать старую ошибку.
+                    setState(() {
+                      _styleFuture = _loadLocalizedStyle();
+                    });
+                  },
+                  child: Text(
+                    'Повторить',
+                    style: AppText.body(color: AppColors.primary)
+                        .copyWith(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
             ),
           );
         }

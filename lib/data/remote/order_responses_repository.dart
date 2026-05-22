@@ -46,6 +46,41 @@ class OrderResponsesRepository {
     return records.map((r) => r.getStringValue('executor')).toList();
   }
 
+  /// Статус отклика конкретного исполнителя на заказ. Возвращает строку
+  /// статуса (`pending`/`accepted`/`declined`/`withdrawn`) или null если
+  /// исполнитель ещё не откликался. Нужен чтобы отличать «отклик в
+  /// процессе» от «отклик уже отклонён» — во втором случае повторная
+  /// кнопка «Откликнуться» бессмысленна.
+  Future<String?> myResponseStatus(String orderId, String executorId) async {
+    if (!_isLive) {
+      // Моки — нет статуса отдельной записи, грубо: если в локальных
+      // responses есть executorId, считаем pending; иначе null.
+      final s = _ref.read(appControllerProvider);
+      for (final o in [...s.myOrders, ...s.orders]) {
+        if (o.id == orderId && o.responses.contains(executorId)) {
+          return 'pending';
+        }
+      }
+      return null;
+    }
+    final pb = _pb!;
+    try {
+      final r = await withPbAuthRetry(_ref, () => pb
+          .collection('order_responses')
+          .getFirstListItem(
+            pb.filter(
+              'order_ref = {:oid} && executor = {:eid}',
+              {'oid': orderId, 'eid': executorId},
+            ),
+          )
+          .timeout(_pbTimeout));
+      return r.getStringValue('status');
+    } catch (_) {
+      // 404 — отклика нет.
+      return null;
+    }
+  }
+
   /// Исполнитель откликается на заказ.
   ///
   /// Идемпотентность через серверный уникальный индекс `idx_resp_active`

@@ -19,7 +19,14 @@ class CityPill extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(8.r),
         onTap: () => context.push('/city'),
-        child: Padding(
+        child: Container(
+          // 32dp — высота совпадает с соседним тумблером «Готов помочь»
+          // в шапке ленты (см. feed_screen `_Header`), чтобы оба контрола
+          // в Row были одной высоты. БЕЗ `alignment` — иначе при обёртке
+          // CityPill в Expanded+Align внутри Row он растягивался во всю
+          // ширину доступного места; контролы должны ужиматься по
+          // содержимому, центрирование высоты обеспечивается Padding'ом.
+          constraints: BoxConstraints(minHeight: 32.h),
           padding: EdgeInsets.fromLTRB(8.w, 6.h, 10.w, 6.h),
           child: Row(
             mainAxisSize: MainAxisSize.min,

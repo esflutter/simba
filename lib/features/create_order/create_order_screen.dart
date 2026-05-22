@@ -142,6 +142,11 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
         AppToast.show(context, 'Разрешите доступ к геолокации');
         return;
       }
+      // Permission-диалог мог провисеть несколько секунд (юзер думал),
+      // за это время экран мог быть закрыт. Без mounted-проверки следом
+      // getCurrentPosition отрабатывает на demount'нутом state и в finally
+      // setState кидает AssertionError.
+      if (!mounted) return;
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,

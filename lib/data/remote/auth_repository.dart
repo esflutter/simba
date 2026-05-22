@@ -398,18 +398,20 @@ class AuthRepository {
       // push'ей могут рассинхрониться: юзер закрыл приложение в
       // «онлайн», сервер шлёт ему пуши, а локально тумблер OFF.
       ctrl.adoptExecutorActiveFromServer(metaIsActiveExecutor);
-    } else if (!isFreshLogin) {
-      // Silent refresh: meta пустая. Зеркалим executorActive под текущую
-      // роль — это лучшее приближение, что есть у клиента без отдельного
-      // запроса к users_private.
-      final localRole = _ref.read(appControllerProvider).role;
-      ctrl.adoptExecutorActiveFromServer(localRole == UserRole.executor);
     }
+    // На silent refresh executorActive НЕ трогаем. Раньше тут стоял
+    // ctrl.adoptExecutorActiveFromServer(localRole == executor), который
+    // на каждом cold-start заново включал тумблер у юзеров с role=executor —
+    // даже если юзер на другом устройстве сам выключил «Готов помочь».
+    // executorActive хранится локально в SharedPreferences и переживает
+    // cold-start; синхронизация с сервером по-настоящему нужна только при
+    // fresh login (на новом устройстве/после reinstall).
     // Регистрируем FCM-токен на сервере. Делаем fire-and-forget: запрос
     // permission на iOS показывает системный диалог (200-500 мс), а ждать
     // его в auth-флоу нет смысла — авторизация прошла, дальше пусть
     // токен дописывается в фоне. Если упало (нет интернета, permission
     // denied) — следующий запуск приложения попробует снова.
+    debugPrint('[FCM] auth: scheduling registerForCurrentUser');
     unawaited(_ref.read(fcmRepositoryProvider).registerForCurrentUser());
     return AuthResult(ok: true, isNewUser: isNew, status: 'verified');
   }
@@ -529,6 +531,13 @@ class AuthRepository {
       await Future<void>.delayed(Duration.zero);
     }
     _ref.read(appControllerProvider.notifier).logout();
+    // Сбрасываем dedup-маркер силент-рефреша. Без сброса следующий логин
+    // другим аккаунтом в течение 30 секунд после logout-а пропустит
+    // полноценный refresh — _lastSuccessfulRefreshAt всё ещё «свежий» по
+    // часам, и tryRefreshAuth вернёт true без сетевого вызова. Это
+    // безвредно само по себе (новый authStore уже валиден), но даёт
+    // мизерный шанс на путаницу при отладке.
+    _lastSuccessfulRefreshAt = DateTime.fromMillisecondsSinceEpoch(0);
 
     try {
       _ref.invalidate(myOrdersStreamProvider);

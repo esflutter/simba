@@ -31,7 +31,13 @@ class AppToast {
     _activeEntry = null;
     _activeTimer = null;
 
-    final overlay = Overlay.of(context);
+    // maybeOf вместо of: вызовы из глобальных обработчиков ошибок или
+    // из контекста до того, как поднялся Navigator (например, во время
+    // ранней инициализации) приходят без Overlay в дереве — раньше
+    // приложение валилось assertion'ом. Молча игнорируем — тост это
+    // не критичный канал.
+    final overlay = Overlay.maybeOf(context);
+    if (overlay == null) return;
     final controller = _ToastController();
     late OverlayEntry entry;
     entry = OverlayEntry(

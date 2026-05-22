@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
@@ -56,6 +55,24 @@ final _hasMyResponseProvider = FutureProvider.autoDispose
     return ids.contains(args.executorId);
   } catch (_) {
     return false;
+  }
+});
+
+/// Статус отклика текущего исполнителя на заказ. Нужен чтобы различать
+/// «отклик в работе» (pending — баннер «Отклик отправлен») от «отклик
+/// уже отклонён» (declined — баннер «Отклик не выбран», кнопка повторно
+/// откликнуться не показывается). Без этого после отклонения заказчиком
+/// исполнитель видит активную кнопку «Откликнуться» и жмёт её повторно —
+/// сервер ругается unique-violation, а юзер не понимает почему.
+final _myResponseStatusProvider = FutureProvider.autoDispose
+    .family<String?, ({String orderId, String executorId})>((ref, args) async {
+  if (args.executorId.isEmpty || args.executorId == 'me') return null;
+  try {
+    return await ref
+        .read(orderResponsesRepositoryProvider)
+        .myResponseStatus(args.orderId, args.executorId);
+  } catch (_) {
+    return null;
   }
 });
 
@@ -366,6 +383,23 @@ class _OrderDetailsBody extends ConsumerWidget {
         (hasMyResponseAsync?.isLoading ?? false) &&
         !(hasMyResponseAsync?.hasValue ?? false);
 
+    // Статус отклика — null/pending/accepted/declined/withdrawn. Нужен
+    // чтобы отделить «отклик ещё в работе» от «отклик уже отклонён»: во
+    // втором случае нельзя снова жать «Откликнуться». Запрашиваем только
+    // когда заказ open и я — потенциальный исполнитель.
+    final myResponseStatusAsync = needHasResponseCheck
+        ? ref.watch(
+            _myResponseStatusProvider(
+              (orderId: order.id, executorId: myId),
+            ),
+          )
+        : null;
+    final myResponseStatus = myResponseStatusAsync?.maybeWhen(
+      data: (s) => s,
+      orElse: () => null,
+    );
+    final myResponseDeclined = myResponseStatus == 'declined';
+
     // City-guard: deep-link мог открыть заказ из чужого города
     // (push-уведомление, history, шаринг). Баннер «Откликаться нельзя»
     // имеет смысл только когда заказ ещё открыт и пользователь к нему
@@ -539,6 +573,7 @@ class _OrderDetailsBody extends ConsumerWidget {
               myId,
               isForeignCity,
               isCheckingMyResponse,
+              myResponseDeclined,
             ),
           ),
         ],
@@ -556,6 +591,7 @@ class _OrderDetailsBody extends ConsumerWidget {
     String myId,
     bool isForeignCity,
     bool isCheckingMyResponse,
+    bool myResponseDeclined,
   ) {
     // Источник правды по отзывам — `reviewsByOrderProvider`. В live-режиме
     // `state.reviews` маппером не наполняется, и hasMyReview через локальный
@@ -753,6 +789,16 @@ class _OrderDetailsBody extends ConsumerWidget {
           textColor: AppColors.primary,
           label: 'Отклик отправлен',
         ));
+      } else if (myResponseDeclined) {
+        // Отклик уже отправлялся, но заказчик его отклонил. Повторно
+        // откликаться нельзя — серверный unique-индекс не даст создать
+        // вторую запись, а юзеру было бы непонятно почему. Показываем
+        // нейтральный баннер вместо активной кнопки.
+        widgets.add(_StatusBanner(
+          color: AppColors.surfaceVariant,
+          textColor: AppColors.textSecondary,
+          label: 'Отклик уже отправлен',
+        ));
       } else if (order.isExpiredOpen) {
         widgets.add(_StatusBanner(
           color: AppColors.surfaceVariant,
@@ -815,16 +861,23 @@ class _OrderDetailsBody extends ConsumerWidget {
   }
 
   void _confirmCancel(BuildContext context, WidgetRef ref, String id) {
-    Future<void> doCancel() async {
+    // Возвращает true только если бэк действительно отменил заказ.
+    // Раньше doCancel() возвращал Future<void>, ловил ошибку, показывал
+    // тост — но дальше всё равно срабатывал context.pop(), и юзер
+    // вылетал из деталей с ощущением «отменил», хотя заказ остался
+    // активным на сервере.
+    Future<bool> doCancel() async {
       try {
         await ref.read(ordersRepositoryProvider).cancel(id);
-        if (!context.mounted) return;
+        if (!context.mounted) return true;
         ref.invalidate(myOrdersStreamProvider);
         ref.invalidate(myExecutorOrdersProvider);
         ref.invalidate(feedOrdersProvider);
+        return true;
       } catch (e) {
-        if (!context.mounted) return;
+        if (!context.mounted) return false;
         AppToast.show(context, humanizeBackendError(e));
+        return false;
       }
     }
 
@@ -887,13 +940,13 @@ class _OrderDetailsBody extends ConsumerWidget {
                 textColor: AppColors.surface,
                 onTap: () async {
                   // Сначала закрываем диалог, потом ждём cancel, и только
-                  // после успеха pop'аем экран. Раньше doCancel() шло без
-                  // await и context.pop() вызывался синхронно — если cancel
-                  // упал, тост ошибки летел на уже dispose'нутый экран.
+                  // после РЕАЛЬНОГО успеха pop'аем экран. Раньше pop вызывался
+                  // безусловно — юзер уходил с экрана даже когда бэк отклонил
+                  // отмену, и думал что отменил, хотя заказ остался активным.
                   Navigator.of(dialogCtx).pop();
-                  await doCancel();
+                  final ok = await doCancel();
                   if (!context.mounted) return;
-                  context.pop();
+                  if (ok) context.pop();
                 },
               ),
               SizedBox(height: 8.h),
@@ -1184,194 +1237,52 @@ class _AddressBlock extends StatelessWidget {
   final String address;
   final LatLng location;
 
-  /// Спрашивает у пользователя, в каком приложении строить маршрут.
-  /// Раньше Android-версия дёргала Google Maps directions URL — этот
-  /// URL обрабатывается только Google Maps, поэтому экран сразу
-  /// открывался в Google, даже если у юзера были Яндекс.Карты или 2ГИС.
-  /// Теперь показываем bottom sheet с явным выбором, при тапе пытаемся
-  /// открыть нативный deeplink приложения; если оно не установлено —
-  /// прозрачно перекидываем в веб-версию того же сервиса.
+  /// Открывает адрес в внешней карте. На Android — через системный
+  /// `geo:` интент, который показывает стандартный диалог «Открыть в»
+  /// со всеми установленными у пользователя картами (Яндекс, 2ГИС,
+  /// Google Maps, OsmAnd и т.д.). На iOS — Apple Maps (Apple не даёт
+  /// сторонним приложениям показывать системный chooser).
+  ///
+  /// Раньше тут была наша собственная bottom-sheet шторка с явным
+  /// списком 3-4 карт — но это всегда отставало от реального набора
+  /// у юзера (поставил yandex/2gis — не было в нашем списке) и было
+  /// «лишним кликом». Системный chooser Android — то, к чему юзер
+  /// привычен в других приложениях.
   Future<void> _openMapPicker(BuildContext context) async {
-    // Сначала получаем своё положение (если разрешение GPS уже дано) —
-    // тогда в карту улетает не просто точка, а готовый маршрут «откуда».
-    // Permission popup тут НЕ показываем, маршрут вторичен.
-    double? fromLat;
-    double? fromLng;
-    try {
-      final perm = await Geolocator.checkPermission();
-      if (perm == LocationPermission.always ||
-          perm == LocationPermission.whileInUse) {
-        final pos = await Geolocator.getCurrentPosition(
-          locationSettings: const LocationSettings(
-            accuracy: LocationAccuracy.medium,
-            timeLimit: Duration(seconds: 5),
-          ),
-        );
-        fromLat = pos.latitude;
-        fromLng = pos.longitude;
-      }
-    } catch (_) {/* GPS нет / таймаут — поедем без origin */}
-
-    if (!context.mounted) return;
-
     final lat = location.latitude;
     final lng = location.longitude;
-    final originLat = fromLat;
-    final originLng = fromLng;
+    final encodedAddr = Uri.encodeComponent(address);
 
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: AppColors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20.r)),
-      ),
-      builder: (sheetCtx) => SafeArea(
-        top: false,
-        child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16.w, vertical: 8.h),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(height: 8.h),
-              Center(
-                child: Container(
-                  width: 36.w,
-                  height: 4.h,
-                  decoration: BoxDecoration(
-                    color: AppColors.divider,
-                    borderRadius: BorderRadius.circular(2.r),
-                  ),
-                ),
-              ),
-              SizedBox(height: 16.h),
-              Text(
-                'Открыть маршрут в',
-                style: AppText.h3(),
-                textAlign: TextAlign.center,
-              ),
-              SizedBox(height: 8.h),
-              _MapAppTile(
-                label: 'Яндекс.Карты',
-                onTap: () {
-                  Navigator.of(sheetCtx).pop();
-                  _openInYandex(lat, lng, originLat, originLng);
-                },
-              ),
-              _MapAppTile(
-                label: '2ГИС',
-                onTap: () {
-                  Navigator.of(sheetCtx).pop();
-                  _openIn2gis(lat, lng, originLat, originLng);
-                },
-              ),
-              _MapAppTile(
-                label: 'Google Карты',
-                onTap: () {
-                  Navigator.of(sheetCtx).pop();
-                  _openInGoogle(lat, lng, originLat, originLng);
-                },
-              ),
-              if (Platform.isIOS)
-                _MapAppTile(
-                  label: 'Apple Карты',
-                  onTap: () {
-                    Navigator.of(sheetCtx).pop();
-                    _openInAppleMaps(lat, lng, originLat, originLng);
-                  },
-                ),
-              SizedBox(height: 8.h),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+    // Android: стандартный `geo:` интент. launchUrl с
+    // LaunchMode.externalApplication заставляет систему показать диалог
+    // выбора приложения среди всех зарегистрировавших handler для этой
+    // схемы (Яндекс.Карты, 2ГИС, Google Maps, OsmAnd, MAPS.ME и т.д.).
+    // Формат `q=lat,lng(метка)` — Android-стандарт: в открытой карте
+    // сразу появится маркер с подписью адреса, кнопка «Маршрут» в
+    // каждом приложении своя.
+    //
+    // iOS: системного chooser'а для карт нет, Apple ограничивает.
+    // Отдаём в Apple Maps (она встроена везде). Если у пользователя
+    // установлено Яндекс/2ГИС/Google Maps и они зарегистрировали
+    // ассоциацию с maps.apple.com — iOS откроет в выбранном.
+    final Uri uri;
+    if (Platform.isAndroid) {
+      uri = Uri.parse('geo:$lat,$lng?q=$lat,$lng($encodedAddr)');
+    } else {
+      uri = Uri.parse(
+          'https://maps.apple.com/?ll=$lat,$lng&q=$encodedAddr&daddr=$lat,$lng');
+    }
 
-  /// Пробуем открыть URI как внешнее приложение. `launchUrl` бросает
-  /// PlatformException на Android, если scheme не зарегистрирован
-  /// (например, `yandexmaps://` без установленного Яндекса) — оборачиваем
-  /// в try/catch и возвращаем bool, чтобы caller мог упасть на web.
-  Future<bool> _tryLaunch(Uri uri) async {
     try {
-      return await launchUrl(uri, mode: LaunchMode.externalApplication);
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok && context.mounted) {
+        AppToast.error(context, 'Не удалось открыть карту');
+      }
     } catch (_) {
-      return false;
+      if (context.mounted) {
+        AppToast.error(context, 'Не удалось открыть карту');
+      }
     }
-  }
-
-  Future<void> _openInYandex(
-      double lat, double lng, double? fromLat, double? fromLng) async {
-    final hasOrigin = fromLat != null && fromLng != null;
-    final native = hasOrigin
-        ? Uri.parse(
-            'yandexmaps://maps.yandex.ru/?rtext=$fromLat,$fromLng~$lat,$lng&rtt=auto')
-        : Uri.parse('yandexmaps://maps.yandex.ru/?ll=$lng,$lat&z=16&pt=$lng,$lat');
-    if (await _tryLaunch(native)) return;
-    // Веб-fallback откроется в браузере, и Яндекс предложит «Открыть в
-    // приложении» если оно установлено.
-    final encodedAddr = Uri.encodeComponent(address);
-    final web = hasOrigin
-        ? Uri.parse(
-            'https://yandex.ru/maps/?rtext=$fromLat,$fromLng~$lat,$lng&rtt=auto')
-        : Uri.parse('https://yandex.ru/maps/?text=$encodedAddr');
-    await _tryLaunch(web);
-  }
-
-  Future<void> _openIn2gis(
-      double lat, double lng, double? fromLat, double? fromLng) async {
-    final hasOrigin = fromLat != null && fromLng != null;
-    // 2ГИС использует порядок «долгота,широта» (lng,lat) — это
-    // особенность их URL-схемы, у Яндекса и Google порядок «широта,долгота».
-    final native = hasOrigin
-        ? Uri.parse(
-            'dgis://2gis.ru/routeSearch/rsType/car/from/$fromLng,$fromLat/to/$lng,$lat')
-        : Uri.parse('dgis://2gis.ru/geo/$lng,$lat');
-    if (await _tryLaunch(native)) return;
-    final web = hasOrigin
-        ? Uri.parse(
-            'https://2gis.ru/routeSearch/rsType/car/from/$fromLng,$fromLat/to/$lng,$lat')
-        : Uri.parse('https://2gis.ru/geo/$lng,$lat');
-    await _tryLaunch(web);
-  }
-
-  Future<void> _openInGoogle(
-      double lat, double lng, double? fromLat, double? fromLng) async {
-    final hasOrigin = fromLat != null && fromLng != null;
-    // iOS: своя scheme `comgooglemaps://`, Android: универсальный URL
-    // www.google.com/maps/dir, который Google Maps обрабатывает напрямую.
-    final native = Platform.isIOS
-        ? (hasOrigin
-            ? Uri.parse(
-                'comgooglemaps://?saddr=$fromLat,$fromLng&daddr=$lat,$lng&directionsmode=driving')
-            : Uri.parse('comgooglemaps://?q=$lat,$lng'))
-        : (hasOrigin
-            ? Uri.parse(
-                'https://www.google.com/maps/dir/?api=1&origin=$fromLat,$fromLng&destination=$lat,$lng&travelmode=driving')
-            : Uri.parse(
-                'https://www.google.com/maps/search/?api=1&query=$lat,$lng'));
-    if (await _tryLaunch(native)) return;
-    // На iOS если comgooglemaps:// не сработал (Google Maps не установлен),
-    // отправляем в web Google Maps — он откроется в Safari.
-    if (Platform.isIOS) {
-      final web = hasOrigin
-          ? Uri.parse(
-              'https://www.google.com/maps/dir/?api=1&origin=$fromLat,$fromLng&destination=$lat,$lng&travelmode=driving')
-          : Uri.parse(
-              'https://www.google.com/maps/search/?api=1&query=$lat,$lng');
-      await _tryLaunch(web);
-    }
-  }
-
-  Future<void> _openInAppleMaps(
-      double lat, double lng, double? fromLat, double? fromLng) async {
-    final hasOrigin = fromLat != null && fromLng != null;
-    final encodedAddr = Uri.encodeComponent(address);
-    final native = hasOrigin
-        ? Uri.parse(
-            'maps://?saddr=$fromLat,$fromLng&daddr=$lat,$lng&q=$encodedAddr')
-        : Uri.parse('maps://?daddr=$lat,$lng&q=$encodedAddr');
-    await _tryLaunch(native);
   }
 
   void _openFullscreenMap(BuildContext context) {
@@ -1494,39 +1405,6 @@ class _AddressBlock extends StatelessWidget {
   }
 }
 
-/// Строчка в bottom-sheet выбора приложения для маршрута. Дизайн:
-/// высокая зона нажатия (минимум 48dp), текст слева, без иконок —
-/// чтобы не зависеть от бренд-логотипов сторонних приложений.
-class _MapAppTile extends StatelessWidget {
-  const _MapAppTile({required this.label, required this.onTap});
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      borderRadius: BorderRadius.circular(10.r),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(10.r),
-        onTap: onTap,
-        child: Container(
-          padding: EdgeInsets.symmetric(horizontal: 12.w, vertical: 14.h),
-          alignment: Alignment.centerLeft,
-          child: Text(
-            label,
-            style: TextStyle(
-              color: AppColors.textPrimary,
-              fontSize: 16.sp,
-              fontWeight: FontWeight.w500,
-              height: 1.40,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// Полноэкранная карта с маркером заказа. Структура повторяет экран
 /// выбора адреса при создании заказа, но в read-only варианте:

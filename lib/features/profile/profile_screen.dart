@@ -35,19 +35,26 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   /// экрана и повторного входа.
   Future<void> Function()? _reviewsUnsub;
   String? _subscribedForUserId;
+  // Эпоха подписки — инкрементируется на каждый logout/смену юзера.
+  // Защищает от гонки: если subscribe(A1) и subscribe(A2) пересекаются
+  // во времени (например, два ребилда подряд), завершившийся последним
+  // не должен перетереть unsub-токен от того, кто реально активен.
+  int _subscribeEpoch = 0;
 
   // initState не нужен: первая подписка вешается из build при первом
   // появлении user.id (см. условие `_subscribedForUserId != user.id`).
   // Так первая и последующие подписки идут через один и тот же путь.
 
-  Future<void> _subscribeReviews(String myId) async {
+  Future<void> _subscribeReviews(String myId, int epoch) async {
     if (!mounted) return;
+    if (epoch != _subscribeEpoch) return;
     final pb = ref.read(pocketbaseProvider);
     if (pb == null) return;
     if (myId.isEmpty) return;
     try {
       final unsub = await pb.collection('reviews').subscribe('*', (e) {
         if (!mounted) return;
+        if (epoch != _subscribeEpoch) return;
         final rec = e.record;
         if (rec == null) {
           ref.invalidate(reviewsForUserProvider(myId));
@@ -57,10 +64,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
           ref.invalidate(reviewsForUserProvider(myId));
         }
       });
-      if (!mounted || _subscribedForUserId != myId) {
-        // За время await юзер сменился (logout/login другим аккаунтом)
-        // или экран демаунтнулся — отписываемся, чтобы не получать чужие
-        // события.
+      // Эпоха поменялась пока подписывались — это была подписка от
+      // прошлой инкарнации (юзер уже сменился). Откатываем.
+      if (!mounted || epoch != _subscribeEpoch) {
         await unsub();
         return;
       }
@@ -92,6 +98,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       // события не того пользователя.
       if (_subscribedForUserId != null) {
         _subscribedForUserId = null;
+        _subscribeEpoch++;
         // ignore: discarded_futures
         _cancelSubscription();
       }
@@ -104,11 +111,15 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     // загрузки данных) запустят два параллельных subscribe.
     if (_subscribedForUserId != user.id) {
       _subscribedForUserId = user.id;
+      // Эпоха инкрементируется на каждую смену юзера — старые подписки,
+      // которые ещё в полёте, при возврате увидят рассинхронизацию и
+      // откатятся, не перетирая актуальный _reviewsUnsub.
+      final epoch = ++_subscribeEpoch;
       // ignore: discarded_futures
       _cancelSubscription();
       final targetId = user.id;
       WidgetsBinding.instance
-          .addPostFrameCallback((_) => _subscribeReviews(targetId));
+          .addPostFrameCallback((_) => _subscribeReviews(targetId, epoch));
     }
     // Считаем рейтинг из реальных отзывов на текущего юзера, а не из
     // user.rating (он у новых пользователей 0). В live тянем отзывы через
@@ -184,6 +195,22 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   label: 'Связаться с нами',
                   onTap: () => _showContactSheet(context),
                 ),
+                // ── Debug-кнопка отправки тестового пуша ──
+                // Видна только в сборке с SHOW_DESIGN_TOGGLES=true.
+                // Удобно для разработки: нажал — сам получил пуш на
+                // лок-скрин, проверка цепочки клиент → сервер → FCM →
+                // Android-уведомление без необходимости двух устройств.
+                if (const bool.fromEnvironment(
+                  'SHOW_DESIGN_TOGGLES',
+                  defaultValue: false,
+                )) ...[
+                  SizedBox(height: 8.h),
+                  _MenuItem(
+                    icon: IconsaxPlusLinear.notification,
+                    label: 'Тестовый пуш себе',
+                    onTap: () => _sendTestPush(context, ref),
+                  ),
+                ],
                 SizedBox(height: 8.h),
                 _MenuItem(
                   icon: IconsaxPlusLinear.logout,
@@ -202,6 +229,33 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         ],
       ),
     );
+  }
+
+  /// Дёргает серверный endpoint /api/me/fcm-test (он шлёт пуш текущему
+  /// юзеру). Видно только при сборке с SHOW_DESIGN_TOGGLES=true.
+  Future<void> _sendTestPush(BuildContext context, WidgetRef ref) async {
+    final pb = ref.read(pocketbaseProvider);
+    if (pb == null) {
+      AppToast.error(context, 'Бэкенд не подключён (mock-режим)');
+      return;
+    }
+    try {
+      final res = await pb.send(
+        '/api/me/fcm-test',
+        method: 'POST',
+      ).timeout(const Duration(seconds: 10));
+      if (!context.mounted) return;
+      // res — Map; sent=true означает что сервер успешно отправил пуш.
+      final sent = (res is Map && res['sent'] == true);
+      if (sent) {
+        AppToast.success(context, 'Пуш отправлен — должен прилететь');
+      } else {
+        AppToast.error(context, 'Сервер не отправил пуш (нет токена?)');
+      }
+    } catch (e) {
+      if (!context.mounted) return;
+      AppToast.error(context, 'Ошибка: $e');
+    }
   }
 
   void _confirmLogout(BuildContext context, WidgetRef ref) {

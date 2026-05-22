@@ -27,83 +27,104 @@ import 'package:path_provider/path_provider.dart';
 /// размера исходника. Это покрывает и HEIC/HEIF с iPhone (бэк их не
 /// принимает), и крупные исходники 12+ МБ.
 Future<File?> compressAvatar(String srcPath) async {
-  final src = File(srcPath);
-  if (!await src.exists()) return null;
-  final tmpDir = await getTemporaryDirectory();
-  final ts = DateTime.now().millisecondsSinceEpoch;
-  final dst = '${tmpDir.path}${Platform.pathSeparator}simba_avatar_$ts.jpg';
-  final out = await FlutterImageCompress.compressAndGetFile(
-    srcPath,
-    dst,
-    // 512×512 — достаточно для retina-дисплеев при максимальном размере
-    // кружка ~120×120 (3×). Quality 82 даёт стабильно красивое лицо
-    // без видимых JPEG-артефактов.
-    minWidth: 512,
-    minHeight: 512,
-    quality: 82,
-    format: CompressFormat.jpeg,
-  );
-  if (out == null) return null;
-  return File(out.path);
-}
-
-Future<File?> ensurePhotoUnderLimit(String srcPath, double maxMb) async {
-  final src = File(srcPath);
-  if (!await src.exists()) return null;
-  final srcMb = (await src.length()) / 1024 / 1024;
-  // HEIC / HEIF (формат фото из iOS-галереи) на сервере не принимается —
-  // users.photo / orders.photos валидируют по mime, а наш клиент шлёт
-  // application/jpeg|png|webp в зависимости от расширения. Поэтому даже
-  // если HEIC-файл вписался в лимит по размеру, его надо принудительно
-  // перекодировать в JPEG. Без этого iPhone-юзер получал «invalid mime
-  // type» от бэка и не понимал, почему фото не загружается.
-  final ext = srcPath.toLowerCase().split('.').last;
-  final isHeic = ext == 'heic' || ext == 'heif';
-  if (srcMb <= maxMb && !isHeic) return src;
-
-  final tmpDir = await getTemporaryDirectory();
-  final ts = DateTime.now().millisecondsSinceEpoch;
-  // Каждая итерация пишет в свой target, иначе compressAndGetFile может
-  // вернуть тот же путь и FS-кеш будет читать старый размер.
-  final intermediates = <String>[];
-  Future<void> cleanupOthers(String? keep) async {
-    for (final p in intermediates) {
-      if (p == keep) continue;
-      try {
-        final f = File(p);
-        if (await f.exists()) await f.delete();
-      } catch (_) {/* не критично */}
-    }
-  }
-
-  for (var i = 0; i < 4; i++) {
-    final quality = const [70, 50, 30, 15][i];
-    final dst = '${tmpDir.path}${Platform.pathSeparator}simba_compress_${ts}_$quality.jpg';
-    intermediates.add(dst);
+  // try/catch на всё тело: HEIC/HEIF без поддержки кодека, битый файл,
+  // OOM на огромном PNG — всё это бросает PlatformException из нативного
+  // плагина. Без try/catch это рушило весь флоу выбора аватарки.
+  try {
+    final src = File(srcPath);
+    if (!await src.exists()) return null;
+    final tmpDir = await getTemporaryDirectory();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final dst = '${tmpDir.path}${Platform.pathSeparator}simba_avatar_$ts.jpg';
     final out = await FlutterImageCompress.compressAndGetFile(
       srcPath,
       dst,
-      quality: quality,
-      // Если исходник уже маленький — minWidth/Height не увеличат, только
-      // ограничат снизу. 1920 — достаточно для marketplace-фото.
-      minWidth: 1920,
-      minHeight: 1920,
+      // 512×512 — достаточно для retina-дисплеев при максимальном размере
+      // кружка ~120×120 (3×). Quality 82 даёт стабильно красивое лицо
+      // без видимых JPEG-артефактов.
+      minWidth: 512,
+      minHeight: 512,
+      quality: 82,
       format: CompressFormat.jpeg,
     );
-    if (out == null) continue;
-    final outFile = File(out.path);
-    final outMb = (await outFile.length()) / 1024 / 1024;
-    if (outMb <= maxMb) {
-      // Чистим промежуточные пережатия с большей quality, оставляем
-      // только тот файл, который вернули. Без этого после выбора 5 фото
-      // в tmp могло остаться до 20 файлов-черновиков — ОС их подчистит,
-      // но локально диск зря тратится.
-      await cleanupOthers(out.path);
-      return outFile;
-    }
+    if (out == null) return null;
+    return File(out.path);
+  } catch (_) {
+    return null;
   }
-  // Все итерации не уложились — на всякий случай чистим, чтобы не
-  // оставить мусор от неудачной обработки.
-  await cleanupOthers(null);
-  return null;
+}
+
+Future<File?> ensurePhotoUnderLimit(String srcPath, double maxMb) async {
+  // Любой шаг ниже может бросить PlatformException (битый файл, нет
+  // места под /tmp, неподдерживаемый формат) — оборачиваем целиком,
+  // чтобы вызывающий код не получил сырой stacktrace.
+  try {
+    final src = File(srcPath);
+    if (!await src.exists()) return null;
+    final srcMb = (await src.length()) / 1024 / 1024;
+    // HEIC / HEIF (формат фото из iOS-галереи) на сервере не принимается —
+    // users.photo / orders.photos валидируют по mime, а наш клиент шлёт
+    // application/jpeg|png|webp в зависимости от расширения. Поэтому даже
+    // если HEIC-файл вписался в лимит по размеру, его надо принудительно
+    // перекодировать в JPEG. Без этого iPhone-юзер получал «invalid mime
+    // type» от бэка и не понимал, почему фото не загружается.
+    final ext = srcPath.toLowerCase().split('.').last;
+    final isHeic = ext == 'heic' || ext == 'heif';
+    if (srcMb <= maxMb && !isHeic) return src;
+
+    final tmpDir = await getTemporaryDirectory();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    // Каждая итерация пишет в свой target, иначе compressAndGetFile может
+    // вернуть тот же путь и FS-кеш будет читать старый размер.
+    final intermediates = <String>[];
+    Future<void> cleanupOthers(String? keep) async {
+      for (final p in intermediates) {
+        if (p == keep) continue;
+        try {
+          final f = File(p);
+          if (await f.exists()) await f.delete();
+        } catch (_) {/* не критично */}
+      }
+    }
+
+    for (var i = 0; i < 4; i++) {
+      final quality = const [70, 50, 30, 15][i];
+      final dst =
+          '${tmpDir.path}${Platform.pathSeparator}simba_compress_${ts}_$quality.jpg';
+      intermediates.add(dst);
+      try {
+        final out = await FlutterImageCompress.compressAndGetFile(
+          srcPath,
+          dst,
+          quality: quality,
+          // Если исходник уже маленький — minWidth/Height не увеличат, только
+          // ограничат снизу. 1920 — достаточно для marketplace-фото.
+          minWidth: 1920,
+          minHeight: 1920,
+          format: CompressFormat.jpeg,
+        );
+        if (out == null) continue;
+        final outFile = File(out.path);
+        final outMb = (await outFile.length()) / 1024 / 1024;
+        if (outMb <= maxMb) {
+          // Чистим промежуточные пережатия с большей quality, оставляем
+          // только тот файл, который вернули. Без этого после выбора 5 фото
+          // в tmp могло остаться до 20 файлов-черновиков — ОС их подчистит,
+          // но локально диск зря тратится.
+          await cleanupOthers(out.path);
+          return outFile;
+        }
+      } catch (_) {
+        // Очередная итерация упала на нативном уровне — пробуем дальше,
+        // вдруг следующее качество отработает. Не прерываемся.
+        continue;
+      }
+    }
+    // Все итерации не уложились — на всякий случай чистим, чтобы не
+    // оставить мусор от неудачной обработки.
+    await cleanupOthers(null);
+    return null;
+  } catch (_) {
+    return null;
+  }
 }

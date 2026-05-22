@@ -43,6 +43,13 @@ class AppNetworkImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final errorView = fallback ?? const SizedBox.shrink();
+    // Пустой url — сразу fallback. Без этого пакет всё равно сначала
+    // пытается распарсить пустую строку, дёргает error-колбэк, а в логах
+    // остаются ошибки сети — шум на ровном месте.
+    if (url.isEmpty) {
+      return SizedBox(width: width, height: height, child: errorView);
+    }
     final dpr = MediaQuery.maybeOf(context)?.devicePixelRatio ?? 1.0;
     int? capDim(double? lp, int? explicit) {
       if (explicit != null) return explicit;
@@ -54,14 +61,22 @@ class AppNetworkImage extends StatelessWidget {
       if (px <= 0) return 1;
       return px > 512 ? 512 : px;
     }
-    final errorView = fallback ?? const SizedBox.shrink();
+    final memW = capDim(width, memCacheWidth);
+    final memH = capDim(height, memCacheHeight);
     return CachedNetworkImage(
       imageUrl: url,
       fit: fit,
       width: width,
       height: height,
-      memCacheWidth: capDim(width, memCacheWidth),
-      memCacheHeight: capDim(height, memCacheHeight),
+      memCacheWidth: memW,
+      memCacheHeight: memH,
+      // Дисковый кэш отдельно от памяти: оригинал на сервере может быть
+      // 4000×3000, и без этой пары пакет сохранял бы его на диск как есть.
+      // У юзера с 50 заказами это могло отъесть сотни МБ места. Кэп те же
+      // 512px — для аватарок/тамбнейлов с запасом, и совпадает с тем, как
+      // мы их потом декодируем в память.
+      maxWidthDiskCache: memW,
+      maxHeightDiskCache: memH,
       // Загрузка: прозрачный SizedBox размером с виджет. Силуэт-fallback
       // показывается только при ошибке/пустом url. Иначе на доли секунды
       // юзер видит «дефолтный» силуэт до подгрузки своей аватарки —

@@ -24,6 +24,20 @@ class FcmRepository {
   FcmRepository(this._ref);
   final Ref _ref;
   StreamSubscription<String>? _tokenRefreshSub;
+  // Защита от шторма регистраций при cold-start: splash, feed и my_orders
+  // независимо дёргают tryRefreshAuth, и каждый _consumeAuthEnvelope зовёт
+  // registerForCurrentUser. Без дедупа 3 запроса в Firebase + 3 PATCH'а на
+  // сервер за секунду. Запоминаем какой userId последний раз регистрировали
+  // и время — повторный вызов в течение 5 минут просто пропускаем.
+  String? _lastRegisteredUserId;
+  DateTime _lastRegisteredAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const _kRegisterDedupWindow = Duration(minutes: 5);
+  // Single-flight: пока идёт регистрация одного юзера, параллельные
+  // вызовы получают тот же Future вместо запуска новой цепочки запросов
+  // в Firebase. Без этого три cold-start вызова _consumeAuthEnvelope
+  // (splash, feed, my_orders) реально дёргают три параллельных
+  // getToken + три PATCH на /users/:id.
+  Future<void>? _inFlight;
 
   /// Зарегистрировать токен текущего залогиненного пользователя на
   /// сервере. Идемпотентно: повторный вызов с тем же токеном просто
@@ -34,33 +48,66 @@ class FcmRepository {
     final userId = pb.authStore.record?.id;
     if (userId == null) return;
 
+    // Дедуп: тот же юзер успешно регистрировался недавно — пропускаем.
+    if (userId == _lastRegisteredUserId &&
+        DateTime.now().difference(_lastRegisteredAt) < _kRegisterDedupWindow) {
+      return;
+    }
+    // Single-flight: если параллельный вызов уже регистрирует — ждём его.
+    final inFlight = _inFlight;
+    if (inFlight != null) return inFlight;
+    final future = _doRegister(userId);
+    _inFlight = future;
+    try {
+      await future;
+    } finally {
+      _inFlight = null;
+    }
+  }
+
+  Future<void> _doRegister(String userId) async {
     final messaging = FirebaseMessaging.instance;
+
+    debugPrint('[FCM] register start for user=$userId');
 
     // Permission. На iOS обязательно — без alert/badge/sound ничего не
     // покажется. На Android 13+ системный диалог POST_NOTIFICATIONS,
     // на старших Android — no-op (доступ выдан по умолчанию).
     try {
-      await messaging.requestPermission(
+      final settings = await messaging.requestPermission(
         alert: true,
         badge: true,
         sound: true,
-      );
+      ).timeout(const Duration(seconds: 10));
+      debugPrint('[FCM] permission status=${settings.authorizationStatus}');
     } catch (e) {
-      if (kDebugMode) debugPrint('FCM permission request failed: $e');
+      debugPrint('[FCM] permission request failed: $e');
       // Permission не критичен для регистрации токена — токен можно
       // получить и без него, просто пуши не будут показываться.
     }
 
     String? token;
     try {
-      token = await messaging.getToken();
+      // getToken может зависнуть на устройствах без Google Play Services
+      // (huawei новые без GMS, или приложение установлено до полной
+      // инициализации FCM). Таймаут 15 сек — достаточно для нормальной
+      // сети, не вешает auth-флоу на минуты.
+      token = await messaging
+          .getToken()
+          .timeout(const Duration(seconds: 15));
+      debugPrint('[FCM] getToken returned len=${token?.length ?? 0}');
     } catch (e) {
-      if (kDebugMode) debugPrint('FCM getToken failed: $e');
+      debugPrint('[FCM] getToken failed: $e');
       return;
     }
-    if (token == null || token.isEmpty) return;
+    if (token == null || token.isEmpty) {
+      debugPrint('[FCM] token empty — skip save');
+      return;
+    }
 
     await _saveTokenToServer(token);
+    _lastRegisteredUserId = userId;
+    _lastRegisteredAt = DateTime.now();
 
     // Подписка на refresh. FCM может обновить токен при переустановке
     // приложения, очистке данных, удалении/восстановлении из бэкапа.
@@ -78,6 +125,10 @@ class FcmRepository {
 
     await _tokenRefreshSub?.cancel();
     _tokenRefreshSub = null;
+    // Сбрасываем dedup-маркер — следующий логин (другим юзером или тем
+    // же после logout) должен зарегистрировать токен заново.
+    _lastRegisteredUserId = null;
+    _lastRegisteredAt = DateTime.fromMillisecondsSinceEpoch(0);
 
     if (pb != null && userId != null) {
       try {
@@ -101,14 +152,23 @@ class FcmRepository {
 
   Future<void> _saveTokenToServer(String token) async {
     final pb = _ref.read(pocketbaseProvider);
-    if (pb == null) return;
+    if (pb == null) {
+      debugPrint('[FCM] save skipped: pb=null (mock mode)');
+      return;
+    }
     final userId = pb.authStore.record?.id;
-    if (userId == null) return;
+    if (userId == null) {
+      debugPrint('[FCM] save skipped: authStore.record=null');
+      return;
+    }
     try {
-      await pb.collection('users').update(userId, body: {'fcm_token': token});
-      if (kDebugMode) debugPrint('FCM token saved for user $userId');
+      await pb
+          .collection('users')
+          .update(userId, body: {'fcm_token': token})
+          .timeout(const Duration(seconds: 10));
+      debugPrint('[FCM] token saved for user $userId');
     } catch (e) {
-      if (kDebugMode) debugPrint('FCM token save failed: $e');
+      debugPrint('[FCM] token save failed: $e');
     }
   }
 }

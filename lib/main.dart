@@ -55,14 +55,23 @@ Future<void> main() async {
   // (Android) и GoogleService-Info.plist (iOS), google-services Gradle
   // плагин/Firebase iOS-инициализатор сами подставляют параметры. Инициализация
   // обязательна ДО первого вызова Firebase API (FirebaseMessaging.instance).
-  // Если в проекте файла нет — Firebase.initializeApp() кинет исключение;
-  // приложение запустится, но пуши работать не будут.
-  await Firebase.initializeApp();
-  // Регистрируем background-handler — пуши, пришедшие когда приложение
-  // в фоне/убито, обрабатываются в отдельном изоляте. Регистрация ДО
-  // runApp обязательна, повторно через onMessage в SimbaApp foreground-
-  // пуши тоже обрабатываются.
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  //
+  // try/catch: если google-services.json потерян/сломан или Google Play
+  // Services недоступны (Huawei без GMS, старая прошивка) — пуши просто
+  // не работают, но всё остальное приложение должно запуститься. Без
+  // этого юзер видел чёрный экран при битой конфигурации.
+  bool firebaseReady = false;
+  try {
+    await Firebase.initializeApp();
+    firebaseReady = true;
+  } catch (e) {
+    debugPrint('[main] Firebase.initializeApp failed: $e — пуши отключены');
+  }
+  // Регистрируем background-handler только если Firebase успел подняться.
+  // Иначе onBackgroundMessage сразу падает.
+  if (firebaseReady) {
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  }
   final prefs = await SharedPreferences.getInstance();
   // PreferencesStore.create — асинхронный конструктор: телефон лежит в
   // защищённом хранилище (Android Keystore / iOS Keychain), при старте

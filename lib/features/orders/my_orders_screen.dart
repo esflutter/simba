@@ -188,23 +188,37 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
         .where((o) => !o.isCompletedByExecutor)
         .toList();
 
-    // _tab кэшируется на StatefulWidget, но _defaultTab выбирает по
-    // ПОСЛЕДНИМ заказам в каждой роли. До этого таб устанавливался ОДИН
-    // раз и не обновлялся, когда асинхронные данные приходили позже —
-    // например, после онбординга у юзера всегда оказывалась вкладка
-    // «Я заказчик», даже если у него уже была работа в роли исполнителя.
+    // Дефолтная вкладка фиксируется ОДИН раз на основе текущей роли
+    // и того, что есть в обоих списках на момент готовности данных.
+    // Раньше пересчитывалось при каждом приходе свежих данных от двух
+    // потоков (myOrdersStreamProvider + myExecutorOrdersProvider), и
+    // юзер видел, как вкладка визуально прыгает на 0.5 секунды.
     //
-    // Считаем «исходную» вкладку только пока юзер сам не переключал
-    // вручную (_userPickedTab=false): при поступлении свежих данных
-    // дефолт пересчитывается, после первого тапа — фиксируется.
-    if (!_userPickedTab) {
-      _tab = _defaultTab(mine: mine, asExecutor: asExecutor, role: myRole);
+    // Условие фиксации: оба провайдера загружены (hasValue) ИЛИ
+    // пользователь сам уже тапнул по табу. До этого момента используем
+    // предварительный дефолт по роли — он не «прыгает», потому что роль
+    // в state.user стабильна.
+    final asyncDataReady = asyncMine.hasValue && asyncExec.hasValue;
+    if (_tab == null || (!_userPickedTab && asyncDataReady)) {
+      final newTab =
+          _defaultTab(mine: mine, asExecutor: asExecutor, role: myRole);
+      if (_tab != newTab) {
+        // Используем addPostFrameCallback — иначе мутация state из build
+        // нарушает Flutter-инвариант и в редких сценариях даёт «двойной
+        // ребилд». Сам _tab локальная переменная для отрисовки текущего
+        // кадра считается ниже из newTab.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (_userPickedTab) return;
+          if (_tab == newTab) return;
+          setState(() => _tab = newTab);
+        });
+      }
     }
-    final tab = _tab ??= _defaultTab(
-      mine: mine,
-      asExecutor: asExecutor,
-      role: myRole,
-    );
+    // Для отрисовки текущего кадра: если _tab ещё null (первый build до
+    // получения данных) — выводим вкладку по роли без всяких прыжков.
+    final tab = _tab ??
+        (myRole == UserRole.executor ? _MyTab.executor : _MyTab.customer);
 
     final visible = tab == _MyTab.customer ? mine : asExecutor;
 
