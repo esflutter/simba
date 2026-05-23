@@ -790,14 +790,14 @@ class _OrderDetailsBody extends ConsumerWidget {
           label: 'Отклик отправлен',
         ));
       } else if (myResponseDeclined) {
-        // Отклик уже отправлялся, но заказчик его отклонил. Повторно
-        // откликаться нельзя — серверный unique-индекс не даст создать
-        // вторую запись, а юзеру было бы непонятно почему. Показываем
-        // нейтральный баннер вместо активной кнопки.
+        // Тот же визуальный баннер, что и для pending: факт «отклик уже
+        // ушёл» для исполнителя важнее факта «его отклонили» (про
+        // отказ ему сообщил отдельный пуш). Повторный отклик невозможен
+        // — серверный unique-индекс не даст создать вторую запись.
         widgets.add(_StatusBanner(
-          color: AppColors.surfaceVariant,
-          textColor: AppColors.textSecondary,
-          label: 'Отклик уже отправлен',
+          color: AppColors.primarySoft,
+          textColor: AppColors.primary,
+          label: 'Отклик отправлен',
         ));
       } else if (order.isExpiredOpen) {
         widgets.add(_StatusBanner(

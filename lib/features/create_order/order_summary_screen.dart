@@ -218,6 +218,7 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
                           .fromDbValue(draft.paymentMethod)
                           .label
                       : 'Укажите способ оплаты',
+                  isPlaceholder: draft.paymentMethod == null,
                   onTap: _isPublishing
                       ? () {}
                       : () async {
@@ -535,10 +536,18 @@ class _OrderCreatedDialog extends StatelessWidget {
 }
 
 class _PaymentMethod extends StatelessWidget {
-  const _PaymentMethod({required this.value, required this.onTap});
+  const _PaymentMethod({
+    required this.value,
+    required this.onTap,
+    this.isPlaceholder = false,
+  });
 
   final String value;
   final VoidCallback onTap;
+  // true пока юзер не выбрал способ оплаты — текст рисуем полупрозрачным,
+  // как стандартный плейсхолдер. Иначе «Укажите способ оплаты» чёрным
+  // выглядит как уже заполненное поле.
+  final bool isPlaceholder;
 
   @override
   Widget build(BuildContext context) {
@@ -561,7 +570,11 @@ class _PaymentMethod extends StatelessWidget {
                     value,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: AppText.body(color: AppColors.textPrimary).copyWith(height: 1.50),
+                    style: AppText.body(
+                      color: isPlaceholder
+                          ? Colors.black.withValues(alpha: 0.60)
+                          : AppColors.textPrimary,
+                    ).copyWith(height: 1.50),
                   ),
                 ),
                 SizedBox(width: 16.w),

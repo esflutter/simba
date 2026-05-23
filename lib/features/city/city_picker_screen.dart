@@ -294,8 +294,12 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                     // draft'а через `orderDraftProvider.notifier.clearAddress()`
                                     // — здесь повторный вызов не нужен.
                                     if (hasUser) {
-                                      ctrl.setCity(c.id);
+                                      // Навигация до setCity: setCity бампает
+                                      // refreshListenable роутера, pop на том
+                                      // же кадре пытался бы закрыть уже
+                                      // пересчитанный стек и проваливался.
                                       _goAfterCityChosen();
+                                      ctrl.setCity(c.id);
                                       return;
                                     }
                                     _searchCtrl.text = c.name;
@@ -353,12 +357,14 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                         .read(appControllerProvider)
                                         .user !=
                                     null;
-                                ctrl.setCity(_selectedId!);
+                                // См. порядок «навигация до setCity» в onTap
+                                // списка выше.
                                 if (hasUser) {
                                   _goAfterCityChosen();
                                 } else {
                                   context.go('/auth/phone');
                                 }
+                                ctrl.setCity(_selectedId!);
                               }
                             : null,
                       ),

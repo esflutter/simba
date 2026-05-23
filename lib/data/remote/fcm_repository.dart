@@ -20,6 +20,10 @@ import 'pocketbase_client.dart';
 /// PocketBase realtime инвалидирует данные, экран обновляется. Если в
 /// будущем понадобится баннер при открытом приложении, добавим
 /// flutter_local_notifications.
+/// fcm_token в users помечен hidden — обычный PATCH через PB API
+/// тихо игнорируется, нужен кастомный endpoint.
+const _kFcmTokenEndpoint = '/api/me/fcm-token';
+
 class FcmRepository {
   FcmRepository(this._ref);
   final Ref _ref;
@@ -105,14 +109,14 @@ class FcmRepository {
       return;
     }
 
-    await _saveTokenToServer(token);
-    _lastRegisteredUserId = userId;
-    _lastRegisteredAt = DateTime.now();
+    final saved = await _saveTokenToServer(token);
+    if (saved) {
+      _lastRegisteredUserId = userId;
+      _lastRegisteredAt = DateTime.now();
+    }
 
-    // Подписка на refresh. FCM может обновить токен при переустановке
-    // приложения, очистке данных, удалении/восстановлении из бэкапа.
-    // Без подписки сервер останется со старым токеном и пуши перестанут
-    // доходить.
+    // FCM обновляет токен при переустановке/очистке данных/восстановлении
+    // из бэкапа. Без подписки сервер останется со старым токеном.
     _tokenRefreshSub?.cancel();
     _tokenRefreshSub = messaging.onTokenRefresh.listen(_saveTokenToServer);
   }
@@ -132,11 +136,13 @@ class FcmRepository {
 
     if (pb != null && userId != null) {
       try {
-        await pb.collection('users').update(userId, body: {'fcm_token': ''});
+        // 5 секунд: logout не должен залипать на минуту при тормозящей
+        // сети. Даже если запрос не дойдёт — следующий логин перезапишет.
+        await pb
+            .send(_kFcmTokenEndpoint, method: 'POST', body: {'token': ''})
+            .timeout(const Duration(seconds: 5));
       } catch (e) {
         if (kDebugMode) debugPrint('FCM token clear failed: $e');
-        // Не критично — токен на сервере останется, но при логине
-        // нового пользователя перезапишется новым.
       }
     }
 
@@ -150,25 +156,29 @@ class FcmRepository {
     }
   }
 
-  Future<void> _saveTokenToServer(String token) async {
+  /// Возвращает true при подтверждённом сохранении на сервере. Вызывающая
+  /// сторона использует это, чтобы не ставить dedup-маркер при неудаче —
+  /// иначе следующая попытка будет заблокирована на 5 минут зря.
+  Future<bool> _saveTokenToServer(String token) async {
     final pb = _ref.read(pocketbaseProvider);
     if (pb == null) {
       debugPrint('[FCM] save skipped: pb=null (mock mode)');
-      return;
+      return false;
     }
     final userId = pb.authStore.record?.id;
     if (userId == null) {
       debugPrint('[FCM] save skipped: authStore.record=null');
-      return;
+      return false;
     }
     try {
       await pb
-          .collection('users')
-          .update(userId, body: {'fcm_token': token})
+          .send(_kFcmTokenEndpoint, method: 'POST', body: {'token': token})
           .timeout(const Duration(seconds: 10));
       debugPrint('[FCM] token saved for user $userId');
+      return true;
     } catch (e) {
       debugPrint('[FCM] token save failed: $e');
+      return false;
     }
   }
 }

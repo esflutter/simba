@@ -377,8 +377,13 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
                         textAlign: TextAlign.center,
                       ),
                       SizedBox(height: 8.h),
+                      // Короткая фраза, чтобы номер всегда помещался в одну
+                      // строку с подписью. Длинный вариант «Мы отправили SMS
+                      // с кодом на номер …» переносился непредсказуемо: на
+                      // одних устройствах разрывался между «+7» и остатком
+                      // номера, на других весь номер уезжал на новую строку.
                       Text(
-                        'Мы отправили SMS с кодом на номер ${widget.phone}',
+                        'Код отправлен на ${widget.phone}',
                         textAlign: TextAlign.center,
                         style: AppText.body().copyWith(
                           color: Colors.black.withValues(alpha: 0.60),
