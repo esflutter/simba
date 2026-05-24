@@ -70,6 +70,11 @@ dependencies:
   # и GoogleService-Info.plist (iOS).
   firebase_core: ^4.2.0
   firebase_messaging: ^16.2.2
+  # Локальные нотификации — нужны, чтобы показывать FCM-пуш как баннер,
+  # когда приложение в foreground. На Android FCM сам показывает баннер
+  # только когда приложение в background/закрыто; в foreground приложение
+  # обязано отрисовать уведомление само через этот пакет.
+  flutter_local_notifications: ^21.0.0
 
 dev_dependencies:
   flutter_test:

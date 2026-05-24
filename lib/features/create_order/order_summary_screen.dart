@@ -379,17 +379,23 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
       await ref
           .read(ordersRepositoryProvider)
           .create(draft: order, photoFiles: photoFiles, clientUid: uid);
-      // Успех — обновляем мои заказы и ленту исполнителей, чистим черновик.
+      // Успех — обновляем мои заказы и ленту исполнителей.
       ref.invalidate(myOrdersStreamProvider);
       ref.invalidate(myExecutorOrdersProvider);
       ref.invalidate(feedOrdersProvider);
-      ref.read(orderDraftProvider.notifier).reset();
       if (!context.mounted) return;
       await showDialog<void>(
         context: context,
         barrierColor: Colors.black.withValues(alpha: 0.40),
         builder: (ctx) => const _OrderCreatedDialog(),
       );
+      // Reset делаем ПОСЛЕ закрытия попапа: пока юзер смотрит «Заказ
+      // создан!», экран summary под попапом не должен ребилдиться с
+      // плейсхолдерами на полях — иначе сквозь барьер видно, как
+      // выбранный способ оплаты внезапно превращается в «Укажите
+      // способ оплаты». До reset clientUid в драфте остаётся прежним,
+      // повторный submit ловится серверной идемпотентностью.
+      ref.read(orderDraftProvider.notifier).reset();
       if (!context.mounted) return;
       context.go('/home/my');
     } catch (e) {

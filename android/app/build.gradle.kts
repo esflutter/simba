@@ -14,6 +14,10 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // Core library desugaring — даёт доступ к java.time и подобным
+        // на Android < 26. Требуется пакетом flutter_local_notifications
+        // (он строится на java.time для расписания уведомлений).
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -44,6 +48,12 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+}
+
+dependencies {
+    // Парный артефакт к isCoreLibraryDesugaringEnabled выше — без него
+    // флаг ничего не даёт. Минимум 2.0.4 требует flutter_local_notifications 21.
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {

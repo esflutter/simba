@@ -13,6 +13,7 @@ import 'core/theme/app_theme.dart';
 import 'core/theme/system_bar_style.dart';
 import 'data/local/preferences_store.dart';
 import 'data/remote/pocketbase_client.dart';
+import 'data/remote/push_handler.dart';
 
 /// Дефолтный стиль системных баров — для основного потока экранов.
 /// Splash и онбординг используют тот же `simbaSystemBarStyle`, но с
@@ -99,11 +100,30 @@ Future<void> main() async {
   );
 }
 
-class SimbaApp extends ConsumerWidget {
+class SimbaApp extends ConsumerStatefulWidget {
   const SimbaApp({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SimbaApp> createState() => _SimbaAppState();
+}
+
+class _SimbaAppState extends ConsumerState<SimbaApp> {
+  @override
+  void initState() {
+    super.initState();
+    // Подключаем обработчик тапов по push-уведомлениям после того,
+    // как Riverpod-граф готов: ref.read(routerProvider) внутри нуждается
+    // в активном ProviderScope. addPostFrameCallback — чтобы у роутера
+    // успел отработать первый redirect (splash → home/auth) до того, как
+    // мы попробуем pushReplacement по deep-link из «холодного» пуша.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      // ignore: discarded_futures
+      ref.read(pushHandlerProvider).init();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return ScreenUtilInit(
       // 360×800 — медианная logical-size современного Android (Pixel 6+/9
       // ≈ 360×808, Galaxy S22 ≈ 360×780). На iPhone 13 mini (375×812)
