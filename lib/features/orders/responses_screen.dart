@@ -10,6 +10,7 @@ import 'package:pocketbase/pocketbase.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/backend_error.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
@@ -156,7 +157,10 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
                     try {
                       await ref.read(
                           pendingExecutorIdsProvider(orderId).future);
-                    } catch (_) {}
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      AppToast.error(context, humanizeBackendError(e));
+                    }
                   }
 
                   if (executorIds.isEmpty) {
@@ -229,12 +233,9 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
                             ref.invalidate(
                                 pendingExecutorIdsProvider(orderId));
                             AppToast.show(context, _kResponseGoneMessage);
-                          } catch (_) {
+                          } catch (e) {
                             if (!context.mounted) return;
-                            AppToast.show(
-                              context,
-                              'Ошибка. Попробуйте позже',
-                            );
+                            AppToast.show(context, humanizeBackendError(e));
                           }
                         }),
                         onAccept: () => _withLock(() async {
@@ -284,17 +285,11 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
                                 'Заказ уже принят другим исполнителем',
                               );
                             } else {
-                              AppToast.show(
-                                context,
-                                'Ошибка. Попробуйте позже',
-                              );
+                              AppToast.show(context, humanizeBackendError(e));
                             }
-                          } catch (_) {
+                          } catch (e) {
                             if (!context.mounted) return;
-                            AppToast.show(
-                              context,
-                              'Ошибка. Попробуйте позже',
-                            );
+                            AppToast.show(context, humanizeBackendError(e));
                           }
                         }),
                       );

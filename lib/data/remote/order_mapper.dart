@@ -36,7 +36,20 @@ Order? orderFromRecord(RecordModel r, [PocketBase? pb]) {
   final workDoneAt = parsePbDate(r.getStringValue('work_done_by_executor_at'));
   final paymentReceivedAt =
       parsePbDate(r.getStringValue('payment_received_at'));
-  OrderStatus status = _statusFromString(rawStatus);
+  final parsed = _statusFromString(rawStatus);
+  if (parsed == null) {
+    // Бэк ввёл новый статус, которого клиент ещё не знает (refunded,
+    // expired_auto и т.п.). Раньше fallback на OrderStatus.open подкидывал
+    // такие заказы в ленту, юзер тапал «Откликнуться» и сразу получал
+    // 400 от сервера. Лучше тихо пропустить запись — её увидят клиенты
+    // обновлённой версии.
+    if (kDebugMode) {
+      debugPrint(
+          'orderFromRecord: skipping order ${r.id} — unknown status "$rawStatus"');
+    }
+    return null;
+  }
+  OrderStatus status = parsed;
   if (status == OrderStatus.accepted &&
       workDoneAt != null &&
       paymentReceivedAt == null) {
@@ -144,7 +157,12 @@ String? _firstFileUrl(RecordModel? rec, String field, PocketBase? pb) {
   }
 }
 
-OrderStatus _statusFromString(String s) {
+/// Возвращает `null` для статусов, которых клиент не знает. Раньше
+/// возвращали fallback на `OrderStatus.open`, что подкидывало записи
+/// в новом статусе в активную ленту — юзер пытался откликнуться и
+/// сразу получал отказ от сервера. Логика "пропустить запись" живёт
+/// в [orderFromRecord], а здесь — чистая трансляция.
+OrderStatus? _statusFromString(String s) {
   switch (s) {
     case 'open':
       return OrderStatus.open;
@@ -155,14 +173,7 @@ OrderStatus _statusFromString(String s) {
     case 'cancelled':
       return OrderStatus.cancelled;
     default:
-      // Раньше молча возвращали `open` — заказ в новом статусе (refunded и т.п.)
-      // отображался как открытый, появлялся в фиде, на него можно было
-      // откликнуться. Сейчас логируем, fallback оставляем — но в логах видно,
-      // что клиент устарел.
-      if (s.isNotEmpty && kDebugMode) {
-        debugPrint('[order_mapper] unknown order status "$s" — fallback to open');
-      }
-      return OrderStatus.open;
+      return null;
   }
 }
 

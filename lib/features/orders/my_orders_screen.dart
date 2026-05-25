@@ -5,7 +5,9 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/backend_error.dart';
 import '../../core/utils/order_display.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/auth_repository.dart' show authRepositoryProvider;
@@ -264,7 +266,10 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
                     ref.read(myOrdersStreamProvider.future),
                     ref.read(myExecutorOrdersProvider.future),
                   ]);
-                } catch (_) {}
+                } catch (e) {
+                  if (!context.mounted) return;
+                  AppToast.error(context, humanizeBackendError(e));
+                }
               },
               child: isInitialLoading
                   ? const Center(

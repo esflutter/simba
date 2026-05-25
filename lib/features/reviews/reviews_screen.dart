@@ -5,9 +5,11 @@ import 'package:iconsax_plus/iconsax_plus.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/backend_error.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_network_image.dart';
+import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
@@ -204,7 +206,10 @@ class _ReviewsScreenState extends ConsumerState<ReviewsScreen> {
                       ref.invalidate(reviewsForUserProvider(myId));
                       try {
                         await ref.read(reviewsForUserProvider(myId).future);
-                      } catch (_) {}
+                      } catch (e) {
+                        if (!context.mounted) return;
+                        AppToast.error(context, humanizeBackendError(e));
+                      }
                     },
                     child: ListView.builder(
                     physics: const AlwaysScrollableScrollPhysics(),
@@ -452,7 +457,8 @@ class _ReviewCard extends StatelessWidget {
               ),
               SizedBox(width: 4.w),
               Text(
-                DateFormat('dd.MM.yyyy').format(review.createdAt.toLocal()),
+                DateFormat('dd.MM.yyyy', 'ru_RU')
+                    .format(review.createdAt.toLocal()),
                 style: TextStyle(
                   color: Colors.black.withValues(alpha: 0.60),
                   fontSize: 12.sp,

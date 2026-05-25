@@ -9,6 +9,7 @@ import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/backend_error.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/utils/messenger_launcher.dart';
 import '../../core/widgets/app_back_button.dart';
@@ -554,9 +555,12 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                     ref.invalidate(pendingExecutorIdsProvider(safeOrderId));
                     ref.invalidate(orderByIdProvider(safeOrderId));
                     AppToast.show(context, 'Этот отклик уже недоступен');
-                  } catch (_) {
+                  } catch (e) {
+                    // Конкретная причина важнее обезличенного «Ошибка»:
+                    // лимиты, city_mismatch, заказ уже в другом статусе —
+                    // юзер должен понимать что произошло.
                     if (!context.mounted) return;
-                    AppToast.show(context, 'Ошибка. Попробуйте позже');
+                    AppToast.show(context, humanizeBackendError(e));
                   }
                 },
                 onDecline: () async {
@@ -590,9 +594,12 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                     ref.invalidate(pendingExecutorIdsProvider(safeOrderId));
                     ref.invalidate(orderByIdProvider(safeOrderId));
                     AppToast.show(context, 'Этот отклик уже недоступен');
-                  } catch (_) {
+                  } catch (e) {
+                    // Конкретная причина важнее обезличенного «Ошибка»:
+                    // лимиты, city_mismatch, заказ уже в другом статусе —
+                    // юзер должен понимать что произошло.
                     if (!context.mounted) return;
-                    AppToast.show(context, 'Ошибка. Попробуйте позже');
+                    AppToast.show(context, humanizeBackendError(e));
                   }
                 },
               );
@@ -1164,7 +1171,8 @@ class _ReviewItem extends StatelessWidget {
             ),
             SizedBox(width: 4.w),
             Text(
-              DateFormat('dd.MM.yyyy').format(review.createdAt.toLocal()),
+              DateFormat('dd.MM.yyyy', 'ru_RU')
+                  .format(review.createdAt.toLocal()),
               style: TextStyle(
                 color: Colors.black.withValues(alpha: 0.60),
                 fontSize: 12.sp,

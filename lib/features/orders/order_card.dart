@@ -32,7 +32,10 @@ class OrderCard extends StatelessWidget {
       // узнавал «8 утра, не успею» только открыв детали.
       final hasTime = dt.hour != 0 || dt.minute != 0;
       final pattern = hasTime ? 'dd.MM.yyyy HH:mm' : 'dd.MM.yyyy';
-      return DateFormat(pattern).format(dt);
+      // Локаль 'ru_RU': без неё DateFormat подставляет английские месяцы,
+      // и на узких экранах с 'dd MMMM' карточка вылазит. Тут — без месяца,
+      // но единообразие со всеми остальными местами форматирования.
+      return DateFormat(pattern, 'ru_RU').format(dt);
     }
     return order.asap ? 'Как можно быстрее' : 'Не указано';
   }

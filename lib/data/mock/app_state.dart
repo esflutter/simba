@@ -9,6 +9,8 @@ import 'package:pocketbase/pocketbase.dart' show PocketBase;
 
 import '../../core/config/env.dart';
 import '../../features/create_order/order_draft.dart';
+import '../../features/reviews/reviews_providers.dart'
+    show myReviewedOrderIdsProvider;
 import '../local/preferences_store.dart';
 import '../models/models.dart';
 import '../remote/pocketbase_client.dart';
@@ -46,10 +48,26 @@ class AppState {
   /// онбординг не показывается даже после logout.
   final bool onboardingSeen;
 
-  City get selectedCity => MockData.cities.firstWhere(
-        (c) => c.id == selectedCityId,
-        orElse: () => MockData.cities.first,
-      );
+  City get selectedCity {
+    final id = selectedCityId;
+    if (id == null) return MockData.cities.first;
+    for (final c in MockData.cities) {
+      if (c.id == id) return c;
+    }
+    // Сохранённый cityId не нашёлся в локальном справочнике — обычно это
+    // означает рассинхронизацию: либо список миллионников на бэке расширили,
+    // либо юзер выбирал город через DaData и его id отсутствует в моках.
+    // Раньше подменяли первой записью молча; теперь debugPrint, чтобы такие
+    // случаи всплывали в логах, и юзер хотя бы видит «Москву», а не пустой
+    // экран. На уровне UI оборачивать в null/«Не выбран» дороже, чем
+    // полезного эффекта.
+    if (kDebugMode) {
+      debugPrint(
+          '[AppState] selectedCity: id "$id" not in MockData.cities — '
+          'fallback to ${MockData.cities.first.name}');
+    }
+    return MockData.cities.first;
+  }
 
   AppState copyWith({
     Object? user = _appStateSentinel,
@@ -92,8 +110,17 @@ class AppController extends Notifier<AppState> {
     final cityId = p?.cityId;
     final city = cityId == null
         ? MockData.cities.first
-        : MockData.cities.firstWhere((c) => c.id == cityId,
-            orElse: () => MockData.cities.first);
+        : MockData.cities.firstWhere(
+            (c) => c.id == cityId,
+            orElse: () {
+              if (kDebugMode) {
+                debugPrint(
+                    '[AppState.build] saved cityId "$cityId" not in mocks — '
+                    'fallback to ${MockData.cities.first.name}');
+              }
+              return MockData.cities.first;
+            },
+          );
     return AppState(
       user: p?.user,
       role: p?.role ?? UserRole.customer,
@@ -605,6 +632,14 @@ class AppController extends Notifier<AppState> {
     } catch (_) {
       // ok если provider не зарегистрирован в текущем scope (юнит-тесты).
     }
+    // Мок-логаут НЕ вызывает auth_repository.logout(), поэтому
+    // инвалидируем те провайдеры, которые там чистятся, и здесь.
+    // Без этого «по каким заказам я уже оставил отзыв» (не-autoDispose)
+    // переживает logout и при следующем юзере на том же устройстве
+    // показывает кнопку «Оставить отзыв» по заказам прошлой сессии.
+    try {
+      ref.invalidate(myReviewedOrderIdsProvider);
+    } catch (_) {/* ok в тестах */}
   }
 }
 

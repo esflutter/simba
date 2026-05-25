@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +11,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/backend_error.dart';
 import '../../core/utils/order_display.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/city_pill.dart';
@@ -40,11 +43,21 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   /// карте до swipe-down.
   Future<void> Function()? _ordersUnsub;
 
+  /// Тиковый таймер для перерисовки ленты раз в минуту. Без него
+  /// заказы, у которых scheduledAt прошёл (`isExpiredOpen=true`) или
+  /// которым 30+ дней без исполнителя (`isStaleOpenWithoutExecutor`),
+  /// оставались на экране до следующего push-события или ручного
+  /// pull-to-refresh. Юзер тапал, получал 404 от сервера.
+  Timer? _tickTimer;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeOrders());
+    _tickTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _subscribeOrders() async {
@@ -70,6 +83,8 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _tickTimer?.cancel();
+    _tickTimer = null;
     final unsub = _ordersUnsub;
     _ordersUnsub = null;
     if (unsub != null) {
@@ -134,11 +149,20 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     required String? selectedCityId,
     required String? myId,
   }) {
+    // В ключ кэша входит минутный «бакет» текущего времени. Без него
+    // фильтр isExpiredOpen / isStaleOpenWithoutExecutor отдавал бы
+    // прежний результат, даже когда заказ уже должен исчезнуть по
+    // времени (scheduledAt прошёл, или прошло 30 дней без исполнителя).
+    // Юзер видел зомби-заказ, тапал, получал 404 от сервера. Минута —
+    // компромисс: пересчёт раз в минуту дешёвый, а UX-сдвиг меньше
+    // минуты для протухания заказа незаметен.
+    final timeBucket = DateTime.now().millisecondsSinceEpoch ~/ 60000;
     final key = Object.hash(
       identityHashCode(source),
       source.length,
       selectedCityId,
       myId,
+      timeBucket,
     );
     if (_cachedKey == key && _cachedOrders != null) return _cachedOrders!;
     final filtered = source
@@ -475,10 +499,16 @@ class _ListView extends ConsumerWidget {
     Future<void> doRefresh() async {
       ref.invalidate(feedOrdersProvider);
       // Дожидаемся подгрузки нового списка, чтобы спиннер не схлопывался
-      // мгновенно — иначе UX-обман «обновили? точно?».
+      // мгновенно — иначе UX-обман «обновили? точно?». При ошибке —
+      // тост с конкретной причиной (нет сети, сервер 5xx). Раньше
+      // catch (_) {} проглатывал, и юзер видел «обновил»-крутилку,
+      // которая исчезала без сигнала.
       try {
         await ref.read(feedOrdersProvider.future);
-      } catch (_) {}
+      } catch (e) {
+        if (!context.mounted) return;
+        AppToast.error(context, humanizeBackendError(e));
+      }
     }
 
     if (orders.isEmpty) {

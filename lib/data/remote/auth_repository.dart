@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:pocketbase/pocketbase.dart';
@@ -350,17 +351,51 @@ class AuthRepository {
       }
     }
 
+    // Рейтинги и счётчики отзывов: на silent refresh authRefresh может
+    // НЕ вернуть эти поля в record (PB отдаёт только то, что есть в
+    // auth-коллекции, без agregated-полей). Раньше getDoubleValue давал
+    // 0, и рейтинг юзера обнулялся при каждом cold-start, пока не
+    // прилетит обновление. Сохраняем прежнее значение из state, если
+    // сервер вернул 0 при silent refresh (на fresh login доверяем
+    // серверу безусловно — он мог пересчитать после нового отзыва).
+    final prevUser = _ref.read(appControllerProvider).user;
+    double pickRating(double serverVal, double Function(AppUser) prevPick) {
+      if (isFreshLogin) return serverVal;
+      if (serverVal > 0) return serverVal;
+      return prevUser != null ? prevPick(prevUser) : 0;
+    }
+    int pickCount(int serverVal, int Function(AppUser) prevPick) {
+      if (isFreshLogin) return serverVal;
+      if (serverVal > 0) return serverVal;
+      return prevUser != null ? prevPick(prevUser) : 0;
+    }
+    final ratingAsExecutor = pickRating(
+      record.getDoubleValue('rating_as_executor'),
+      (u) => u.ratingAsExecutor,
+    );
+    final ratingAsCustomer = pickRating(
+      record.getDoubleValue('rating_as_customer'),
+      (u) => u.ratingAsCustomer,
+    );
+    final reviewsCountAsExecutor = pickCount(
+      record.getIntValue('reviews_count_as_executor'),
+      (u) => u.reviewsCountAsExecutor,
+    );
+    final reviewsCountAsCustomer = pickCount(
+      record.getIntValue('reviews_count_as_customer'),
+      (u) => u.reviewsCountAsCustomer,
+    );
     final user = AppUser(
       id: record.id,
       name: record.getStringValue('name'),
       phone: phone,
       photoPath: photoUrl,
-      rating: record.getDoubleValue('rating_as_executor'),
-      reviewsCount: record.getIntValue('reviews_count_as_executor'),
-      ratingAsCustomer: record.getDoubleValue('rating_as_customer'),
-      reviewsCountAsCustomer: record.getIntValue('reviews_count_as_customer'),
-      ratingAsExecutor: record.getDoubleValue('rating_as_executor'),
-      reviewsCountAsExecutor: record.getIntValue('reviews_count_as_executor'),
+      rating: ratingAsExecutor,
+      reviewsCount: reviewsCountAsExecutor,
+      ratingAsCustomer: ratingAsCustomer,
+      reviewsCountAsCustomer: reviewsCountAsCustomer,
+      ratingAsExecutor: ratingAsExecutor,
+      reviewsCountAsExecutor: reviewsCountAsExecutor,
       cityId: cityId.isEmpty ? null : cityId,
       hasTools: record.getBoolValue('has_tools'),
       hasTransport: record.getBoolValue('has_transport'),
@@ -538,6 +573,17 @@ class AuthRepository {
     // безвредно само по себе (новый authStore уже валиден), но даёт
     // мизерный шанс на путаницу при отладке.
     _lastSuccessfulRefreshAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+    // Дисковый кэш картинок (cached_network_image) переживает logout.
+    // Без явной чистки фото заказов и аватары предыдущего юзера остаются
+    // в файлах приложения. На общем устройстве это утечка PII —
+    // следующий юзер технически может вытащить их через root/ADB.
+    // CachedNetworkImage.evictFromCache работает с одной картинкой;
+    // для полной очистки нужен DefaultCacheManager.
+    try {
+      // ignore: discarded_futures
+      DefaultCacheManager().emptyCache();
+    } catch (_) {/* не критично — кэш сам очистится по TTL */}
 
     try {
       _ref.invalidate(myOrdersStreamProvider);

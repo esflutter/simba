@@ -61,6 +61,10 @@ dependencies:
   # перезапрашивал картинку на каждый ребилд — на ленте отзывов это
   # давало десятки HTTP-запросов на одно открытие экрана.
   cached_network_image: ^3.4.1
+  # Прямая зависимость для очистки дискового кэша картинок при logout
+  # (DefaultCacheManager.emptyCache). Транзитивно подтягивается через
+  # cached_network_image, но Dart-анализатор требует явного объявления.
+  flutter_cache_manager: ^3.4.1
 
   # Firebase Cloud Messaging — пуш-уведомления для Android и iOS.
   # firebase_core инициализирует SDK (нужен один раз в main), firebase_messaging

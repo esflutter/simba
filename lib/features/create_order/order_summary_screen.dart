@@ -48,10 +48,14 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
     final d = ref.read(orderDraftProvider);
     _priceCtrl = TextEditingController(text: formatRub(d.priceRub));
     _dateCtrl = TextEditingController(
-      text: d.scheduledAt == null ? '' : DateFormat('dd.MM.yyyy').format(d.scheduledAt!),
+      text: d.scheduledAt == null
+          ? ''
+          : DateFormat('dd.MM.yyyy', 'ru_RU').format(d.scheduledAt!),
     );
     _timeCtrl = TextEditingController(
-      text: d.scheduledAt == null ? '' : DateFormat('HH:mm').format(d.scheduledAt!),
+      text: d.scheduledAt == null
+          ? ''
+          : DateFormat('HH:mm', 'ru_RU').format(d.scheduledAt!),
     );
   }
 

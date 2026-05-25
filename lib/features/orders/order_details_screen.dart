@@ -48,14 +48,15 @@ final _hasMyResponseProvider = FutureProvider.autoDispose
     // отдельный запрос не нужен.
     return false;
   }
-  try {
-    final ids = await ref
-        .read(orderResponsesRepositoryProvider)
-        .pendingExecutorIds(args.orderId);
-    return ids.contains(args.executorId);
-  } catch (_) {
-    return false;
-  }
+  // Сетевая ошибка должна пробрасываться наружу через AsyncError, а не
+  // молча превращаться в false. Иначе при флапе сети кнопка «Откликнуться»
+  // снова показывается активной, юзер жмёт повторно — сервер отдаёт
+  // unique-violation. В UI ниже учитываем `.hasError` и блокируем
+  // кнопку, чтобы не подставить юзера.
+  final ids = await ref
+      .read(orderResponsesRepositoryProvider)
+      .pendingExecutorIds(args.orderId);
+  return ids.contains(args.executorId);
 });
 
 /// Статус отклика текущего исполнителя на заказ. Нужен чтобы различать
@@ -382,6 +383,12 @@ class _OrderDetailsBody extends ConsumerWidget {
     final isCheckingMyResponse = needHasResponseCheck &&
         (hasMyResponseAsync?.isLoading ?? false) &&
         !(hasMyResponseAsync?.hasValue ?? false);
+    // Сетевая ошибка проверки отклика. Кнопку активной не показываем —
+    // иначе юзер тапнет и получит 400 unique-violation, если отклик
+    // на самом деле уже создан. Лучше «нечего сделать» с подсказкой.
+    final hasMyResponseCheckFailed = needHasResponseCheck &&
+        (hasMyResponseAsync?.hasError ?? false) &&
+        !(hasMyResponseAsync?.hasValue ?? false);
 
     // Статус отклика — null/pending/accepted/declined/withdrawn. Нужен
     // чтобы отделить «отклик ещё в работе» от «отклик уже отклонён»: во
@@ -573,6 +580,7 @@ class _OrderDetailsBody extends ConsumerWidget {
               myId,
               isForeignCity,
               isCheckingMyResponse,
+              hasMyResponseCheckFailed,
               myResponseDeclined,
             ),
           ),
@@ -591,6 +599,7 @@ class _OrderDetailsBody extends ConsumerWidget {
     String myId,
     bool isForeignCity,
     bool isCheckingMyResponse,
+    bool hasMyResponseCheckFailed,
     bool myResponseDeclined,
   ) {
     // Источник правды по отзывам — `reviewsByOrderProvider`. В live-режиме
@@ -783,6 +792,18 @@ class _OrderDetailsBody extends ConsumerWidget {
         widgets.add(SizedBox(height: 48.h));
         return widgets;
       }
+      if (hasMyResponseCheckFailed) {
+        // Сетевая ошибка проверки. Активную кнопку «Откликнуться»
+        // показывать опасно: вдруг отклик уже создан, и повторный create
+        // упрётся в unique-индекс на сервере (400). Показываем
+        // нейтральный баннер с подсказкой потянуть-обновить.
+        widgets.add(_StatusBanner(
+          color: AppColors.surfaceVariant,
+          textColor: AppColors.textSecondary,
+          label: 'Не удалось проверить отклик. Потяните вниз',
+        ));
+        return widgets;
+      }
       if (hasMyResponse) {
         widgets.add(_StatusBanner(
           color: AppColors.primarySoft,
@@ -790,14 +811,18 @@ class _OrderDetailsBody extends ConsumerWidget {
           label: 'Отклик отправлен',
         ));
       } else if (myResponseDeclined) {
-        // Тот же визуальный баннер, что и для pending: факт «отклик уже
-        // ушёл» для исполнителя важнее факта «его отклонили» (про
-        // отказ ему сообщил отдельный пуш). Повторный отклик невозможен
-        // — серверный unique-индекс не даст создать вторую запись.
+        // Отдельный текст «Заказчик выбрал другого исполнителя» —
+        // даёт честное объяснение, а не маскировка через «Отклик
+        // отправлен». Раньше для declined показывался pending-баннер,
+        // юзер видел противоречивый сигнал (ему уже отказали пушем,
+        // а тут «жду ответа»). Цвет — surfaceVariant, текст —
+        // textSecondary: визуально нейтрально, не «успех», но и не
+        // ошибка. Повторно откликнуться нельзя (серверный
+        // unique-индекс), кнопка вообще не показывается.
         widgets.add(_StatusBanner(
-          color: AppColors.primarySoft,
-          textColor: AppColors.primary,
-          label: 'Отклик отправлен',
+          color: AppColors.surfaceVariant,
+          textColor: AppColors.textSecondary,
+          label: 'Заказчик выбрал другого исполнителя',
         ));
       } else if (order.isExpiredOpen) {
         widgets.add(_StatusBanner(

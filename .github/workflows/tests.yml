@@ -1,0 +1,46 @@
+# Автоматический запуск тестов клиента на каждый PR и push в main.
+#
+# Backend-тесты (`node --test backend/tests/`) живут в отдельной
+# директории `backend/`, не входящей в этот git-репо клиента. Их
+# запуск — локальный или через отдельный CI у бэкенда.
+
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flutter-tests:
+    name: Flutter unit + widget tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install pub deps
+        run: flutter pub get
+
+      - name: Run tests
+        run: flutter test --coverage --reporter expanded
+
+      - name: Upload coverage as artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flutter-coverage
+          path: coverage/lcov.info
+          if-no-files-found: ignore

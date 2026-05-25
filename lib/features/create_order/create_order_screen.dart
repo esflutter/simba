@@ -21,6 +21,7 @@ import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/mock_data.dart';
+import '../../data/models/models.dart' show Category;
 import '../../data/remote/dadata_client.dart';
 import 'order_draft.dart';
 import 'select_address_screen.dart';
@@ -208,18 +209,22 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
         _addressCtrl.text.trim().isNotEmpty &&
         phoneOk;
 
-    // Защита от исчезнувшей категории при рендере: orElse → дефолт, но
-    // отображаем placeholder. categoryId сбрасывается в initState через
-    // postFrameCallback, чтобы не мутировать состояние во время build.
-    final catMatch = draft.categoryId == null
-        ? null
-        : MockData.categories.firstWhere(
-            (c) => c.id == draft.categoryId,
-            orElse: () => MockData.categories.first,
-          );
-    final categoryKnown =
-        catMatch != null && catMatch.id == draft.categoryId;
-    final categoryName = !categoryKnown ? 'Выберите категорию' : catMatch.name;
+    // Защита от исчезнувшей категории при рендере. Простой проход
+    // вместо firstWhere с орёлсе-дефолтом: явно различаем «не нашли»
+    // от «нашли первую попавшуюся» — без визуального риска показать
+    // юзеру категорию, которую он не выбирал. categoryId сбрасывается
+    // в initState через postFrameCallback, чтобы не мутировать
+    // состояние во время build.
+    Category? catMatch;
+    if (draft.categoryId != null) {
+      for (final c in MockData.categories) {
+        if (c.id == draft.categoryId) {
+          catMatch = c;
+          break;
+        }
+      }
+    }
+    final categoryName = catMatch == null ? 'Выберите категорию' : catMatch.name;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -259,7 +264,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                   _Pickable(
                     label: 'Категория работ',
                     value: categoryName,
-                    isPlaceholder: !categoryKnown,
+                    isPlaceholder: catMatch == null,
                     height: 64.h,
                     onTap: () async {
                       await showModalBottomSheet<void>(
