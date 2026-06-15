@@ -187,6 +187,16 @@ class AppController extends Notifier<AppState> {
   String? get pendingCitySync => _pendingCitySync;
   int _citySyncSeq = 0;
 
+  // Город выбран самим пользователем на экране выбора города ДО входа, а не
+  // остался сохранённым от прошлого владельца устройства. Только в этом
+  // случае при свежем входе локальный город можно отправлять на сервер.
+  // Без такого различия на общем устройстве город нового пользователя
+  // молча перетирался городом предыдущего. Флаг живёт только в памяти
+  // (не в prefs) и сбрасывается при входе (после применения) и при выходе.
+  bool _cityChosenPreLogin = false;
+  bool get cityChosenPreLogin => _cityChosenPreLogin;
+  void consumePreLoginCityChoice() => _cityChosenPreLogin = false;
+
   void setCity(String id) {
     final prevCity = state.selectedCityId;
     // Short-circuit: тот же город — не пересоздаём seed моков и не шлём
@@ -194,7 +204,22 @@ class AppController extends Notifier<AppState> {
     // моковую myOrders на дефолтный seed и слал бесполезный запрос.
     if (prevCity == id) return;
 
-    final c = MockData.cities.firstWhere((c) => c.id == id);
+    // orElse: id может прийти с сервера (users.city) или из дип-линка и
+    // отсутствовать во встроенном списке миллионников. Без запасного
+    // варианта firstWhere бросал StateError и валил установку города.
+    // Берём первый город как нейтральный дефолт (центр для seed моков);
+    // selectedCityId всё равно сохраняем как пришёл — отображение
+    // подхватит реальное имя, когда справочник догрузится с сервера.
+    final c = MockData.cities.firstWhere(
+      (c) => c.id == id,
+      orElse: () {
+        if (kDebugMode) {
+          debugPrint('[setCity] id "$id" not in MockData.cities — '
+              'seed по центру ${MockData.cities.first.name}');
+        }
+        return MockData.cities.first;
+      },
+    );
     state = state.copyWith(
       selectedCityId: id,
       orders: Env.hasPocketbase ? const [] : MockData.seedOrders(c.center),
@@ -238,6 +263,12 @@ class AppController extends Notifier<AppState> {
               .then((_) => clearIfLatest())
               // ignore: body_might_complete_normally_catch_error
               .catchError((_) => clearIfLatest());
+        } else {
+          // Авторизованного пользователя нет — значит это выбор города на
+          // экране /city ПЕРЕД входом. Запоминаем, что выбор осознанный,
+          // чтобы при свежем логине отправить его на сервер. См.
+          // auth_repository._consumeAuthEnvelope.
+          _cityChosenPreLogin = true;
         }
       } catch (_) {
         // ref.read may throw in tests without PB override — игнор.
@@ -609,6 +640,11 @@ class AppController extends Notifier<AppState> {
     // logout его уже некуда применять, и блокировать будущий
     // _consumeAuthEnvelope от перезаписи неправильно.
     _pendingCitySync = null;
+    // Сохранённый город остаётся (устройство-локальный флаг), но теряет
+    // статус «осознанного выбора этого пользователя»: для следующего, кто
+    // войдёт на этом устройстве, источником правды будет его серверный
+    // город, а не оставшийся локально.
+    _cityChosenPreLogin = false;
     state = AppState(
       user: null,
       role: UserRole.customer,

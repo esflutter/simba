@@ -70,6 +70,12 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
         '${docs.path}${Platform.pathSeparator}profile_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
       await source.copy(dst.path);
+      // compressAvatar вернул временный JPEG во временной папке — после
+      // копии в documents он больше не нужен. Удаляем, чтобы при каждой
+      // смене аватарки не копился файл-сирота во временном каталоге.
+      try {
+        if (await source.exists()) await source.delete();
+      } catch (_) {/* не критично */}
       // Удаляем предыдущую локальную аватарку, если она была — иначе
       // повторный пик до сабмита плодит файлы в documents.
       final prev = _photoPath;
@@ -103,6 +109,9 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
     final name = _ctrl.text.trim();
     if (name.isEmpty) return;
     final photoPath = _photoPath;
+    // По умолчанию зеркалим локальное значение; после успешной загрузки
+    // заменим на серверную ссылку (см. ниже).
+    String? mirroredPhoto = photoPath;
     setState(() => _isSaving = true);
     try {
       final pb = ref.read(pocketbaseProvider);
@@ -151,7 +160,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
           // withAuthRetry — на случай, если токен истёк ровно между
           // verify и переходом на этот экран (юзер промедлил пару минут
           // на ввод имени).
-          await pb.withAuthRetry(
+          final updated = await pb.withAuthRetry(
             () => pb
                 .collection('users')
                 .update(
@@ -161,6 +170,21 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
                 )
                 .timeout(const Duration(seconds: 10)),
           );
+          // В локальный стейт кладём СЕРВЕРНУЮ ссылку на фото, а не путь к
+          // локальному файлу: иначе если ОС удалит файл, аватарка нового
+          // пользователя показывалась бы дефолтной до первого обновления
+          // сессии. Локальную копию после успешной загрузки удаляем — она
+          // больше не нужна.
+          final uploadedName = updated.getStringValue('photo');
+          if (uploadedName.isNotEmpty) {
+            mirroredPhoto = pb.files.getUrl(updated, uploadedName).toString();
+            if (photoPath != null) {
+              try {
+                final local = File(photoPath);
+                if (await local.exists()) await local.delete();
+              } catch (_) {/* не критично */}
+            }
+          }
         } catch (_) {
           // Сеть/таймаут/серверная ошибка — НЕ переходим дальше, иначе
           // имя сохранится только локально, на бэке останется пустым,
@@ -180,7 +204,7 @@ class _ProfileSetupScreenState extends ConsumerState<ProfileSetupScreen> {
       // продолжают читать state.user без изменений.
       ref.read(appControllerProvider.notifier).completeProfile(
             name: name,
-            photoPath: photoPath,
+            photoPath: mirroredPhoto,
           );
       if (!mounted) return;
       context.go('/auth/role');

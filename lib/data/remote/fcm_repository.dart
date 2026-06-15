@@ -27,6 +27,16 @@ const _kFcmTokenEndpoint = '/api/me/fcm-token';
 class FcmRepository {
   FcmRepository(this._ref);
   final Ref _ref;
+
+  /// Логи FCM-цепочки. Гейтим за режимом отладки: эти сообщения содержат
+  /// id пользователя и тексты ошибок, в release они оседали бы в системном
+  /// логе телефона (видны через ADB/logcat). На время отладки пушей их
+  /// специально оставляли «голыми» (видны в release-сборке); сейчас, когда
+  /// цепочка работает, прячем.
+  void _fcmLog(String msg) {
+    if (kDebugMode) debugPrint(msg);
+  }
+
   StreamSubscription<String>? _tokenRefreshSub;
   // Защита от шторма регистраций при cold-start: splash, feed и my_orders
   // независимо дёргают tryRefreshAuth, и каждый _consumeAuthEnvelope зовёт
@@ -42,6 +52,13 @@ class FcmRepository {
   // (splash, feed, my_orders) реально дёргают три параллельных
   // getToken + три PATCH на /users/:id.
   Future<void>? _inFlight;
+  // Чей именно in-flight сейчас выполняется. Нужен, чтобы при быстрой
+  // смене аккаунта (logout → login другим юзером, пока регистрация
+  // первого ещё в полёте — getToken тянется до ~25 сек на медленной
+  // сети) НЕ отдавать второму юзеру чужую регистрацию. Без привязки к
+  // userId токен второго юзера не попадал на сервер, и он не получал ни
+  // одного пуша до перезапуска приложения.
+  String? _inFlightUserId;
 
   /// Зарегистрировать токен текущего залогиненного пользователя на
   /// сервере. Идемпотентно: повторный вызов с тем же токеном просто
@@ -57,22 +74,32 @@ class FcmRepository {
         DateTime.now().difference(_lastRegisteredAt) < _kRegisterDedupWindow) {
       return;
     }
-    // Single-flight: если параллельный вызов уже регистрирует — ждём его.
+    // Single-flight: ждём параллельную регистрацию ТОЛЬКО если она про
+    // того же пользователя. Если в полёте регистрация другого аккаунта
+    // (быстрая смена юзера на общем устройстве) — запускаем свою, иначе
+    // токен текущего юзера потеряется.
     final inFlight = _inFlight;
-    if (inFlight != null) return inFlight;
+    if (inFlight != null && _inFlightUserId == userId) return inFlight;
     final future = _doRegister(userId);
     _inFlight = future;
+    _inFlightUserId = userId;
     try {
       await future;
     } finally {
-      _inFlight = null;
+      // Снимаем слот только если его не перехватила более поздняя
+      // регистрация (другой юзер). Без проверки identical поздний
+      // login обнулял бы чужой in-flight.
+      if (identical(_inFlight, future)) {
+        _inFlight = null;
+        _inFlightUserId = null;
+      }
     }
   }
 
   Future<void> _doRegister(String userId) async {
     final messaging = FirebaseMessaging.instance;
 
-    debugPrint('[FCM] register start for user=$userId');
+    _fcmLog('[FCM] register start for user=$userId');
 
     // Permission. На iOS обязательно — без alert/badge/sound ничего не
     // покажется. На Android 13+ системный диалог POST_NOTIFICATIONS,
@@ -83,9 +110,9 @@ class FcmRepository {
         badge: true,
         sound: true,
       ).timeout(const Duration(seconds: 10));
-      debugPrint('[FCM] permission status=${settings.authorizationStatus}');
+      _fcmLog('[FCM] permission status=${settings.authorizationStatus}');
     } catch (e) {
-      debugPrint('[FCM] permission request failed: $e');
+      _fcmLog('[FCM] permission request failed: $e');
       // Permission не критичен для регистрации токена — токен можно
       // получить и без него, просто пуши не будут показываться.
     }
@@ -99,13 +126,13 @@ class FcmRepository {
       token = await messaging
           .getToken()
           .timeout(const Duration(seconds: 15));
-      debugPrint('[FCM] getToken returned len=${token?.length ?? 0}');
+      _fcmLog('[FCM] getToken returned len=${token?.length ?? 0}');
     } catch (e) {
-      debugPrint('[FCM] getToken failed: $e');
+      _fcmLog('[FCM] getToken failed: $e');
       return;
     }
     if (token == null || token.isEmpty) {
-      debugPrint('[FCM] token empty — skip save');
+      _fcmLog('[FCM] token empty — skip save');
       return;
     }
 
@@ -133,6 +160,12 @@ class FcmRepository {
     // же после logout) должен зарегистрировать токен заново.
     _lastRegisteredUserId = null;
     _lastRegisteredAt = DateTime.fromMillisecondsSinceEpoch(0);
+    // Сбрасываем in-flight слот: зависшая регистрация прошлого юзера не
+    // должна заблокировать регистрацию следующего. Сам Future отменить
+    // нельзя, но он завершится безвредно (юзер уже вышел), а новый логин
+    // запустит свежую регистрацию.
+    _inFlight = null;
+    _inFlightUserId = null;
 
     if (pb != null && userId != null) {
       try {
@@ -162,22 +195,22 @@ class FcmRepository {
   Future<bool> _saveTokenToServer(String token) async {
     final pb = _ref.read(pocketbaseProvider);
     if (pb == null) {
-      debugPrint('[FCM] save skipped: pb=null (mock mode)');
+      _fcmLog('[FCM] save skipped: pb=null (mock mode)');
       return false;
     }
     final userId = pb.authStore.record?.id;
     if (userId == null) {
-      debugPrint('[FCM] save skipped: authStore.record=null');
+      _fcmLog('[FCM] save skipped: authStore.record=null');
       return false;
     }
     try {
       await pb
           .send(_kFcmTokenEndpoint, method: 'POST', body: {'token': token})
           .timeout(const Duration(seconds: 10));
-      debugPrint('[FCM] token saved for user $userId');
+      _fcmLog('[FCM] token saved for user $userId');
       return true;
     } catch (e) {
-      debugPrint('[FCM] token save failed: $e');
+      _fcmLog('[FCM] token save failed: $e');
       return false;
     }
   }

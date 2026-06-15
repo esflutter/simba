@@ -72,7 +72,10 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
     final time = parseRuTime(_timeCtrl.text);
     DateTime? dt;
     if (date != null) {
-      dt = DateTime(date.year, date.month, date.day, time?.hour ?? 0, time?.minute ?? 0);
+      // Дата без времени = конец дня (23:59), а не полночь: иначе заказ
+      // «на сегодня» без времени попадает в прошлое (00:00 < now), и кнопка
+      // «Создать заказ» молча гаснет без объяснения.
+      dt = DateTime(date.year, date.month, date.day, time?.hour ?? 23, time?.minute ?? 59);
     }
     ref.read(orderDraftProvider.notifier).update(
           scheduledAt: dt,
@@ -111,6 +114,13 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
   bool get _scheduleFullyEntered =>
       parseRuDate(_dateCtrl.text) != null &&
       parseRuTime(_timeCtrl.text) != null;
+
+  /// Введено время, но НЕ дата: без даты время отбрасывается (заказ уйдёт
+  /// «срочным»). Показываем подсказку — иначе ввод теряется молча.
+  /// Автоподстановку даты не делаем: время легко окажется в прошлом.
+  bool get _timeWithoutDate =>
+      parseRuTime(_timeCtrl.text) != null &&
+      parseRuDate(_dateCtrl.text) == null;
 
   @override
   Widget build(BuildContext context) {
@@ -183,6 +193,17 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
                     child: Text(
                       'Дата и время уже прошли',
                       style: AppText.caption(color: AppColors.error)
+                          .copyWith(height: 1.33),
+                    ),
+                  ),
+                ],
+                if (_timeWithoutDate) ...[
+                  SizedBox(height: 4.h),
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16.w),
+                    child: Text(
+                      'Укажите дату, чтобы задать время',
+                      style: AppText.caption(color: AppColors.textSecondary)
                           .copyWith(height: 1.33),
                     ),
                   ),
@@ -321,6 +342,18 @@ class _OrderSummaryScreenState extends ConsumerState<OrderSummaryScreen> {
         AppToast.show(context, 'Адрес не в вашем городе');
         return;
       }
+    }
+    // Перепроверка прошедшего времени в момент тапа. Кнопка дизейблится по
+    // _canPublish, но это состояние из последней перерисовки: если
+    // назначенное время прошло, пока экран был открыт, кнопка осталась бы
+    // активной — и заказ ушёл бы на сервер с временем в прошлом.
+    final scheduled = draft.scheduledAt;
+    if (scheduled != null && scheduled.isBefore(DateTime.now())) {
+      AppToast.show(
+        context,
+        'Указанное время уже прошло. Обновите дату и время.',
+      );
+      return;
     }
     setState(() => _isPublishing = true);
     try {

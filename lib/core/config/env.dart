@@ -26,27 +26,28 @@ class Env {
   static bool get isDev => appEnv == 'dev';
   static bool get hasPocketbase => pocketbaseUrl.isNotEmpty;
 
-  /// Контакты администратора для шторки «Связаться с нами» в профиле.
-  /// Передаются через `--dart-define=SUPPORT_*`. До прихода реальных
-  /// контактов держим placeholder-значения: кнопки всегда активны,
-  /// открывают соответствующий мессенджер с подставленным номером /
-  /// логином. Юзер увидит, что чат пустой — это нормально для preview.
-  ///
-  /// TODO(setup): подменить на реальные значения через `run_prod.bat`
-  /// и CI-конфиг сборки, чтобы перекрыть defaultValue ниже:
+  /// Контакты поддержки для шторки «Связаться с нами» в профиле.
+  /// Передаются при сборке через `--dart-define=SUPPORT_*`. По умолчанию
+  /// ПУСТЫЕ: если реальный контакт не передан (например, забыли в
+  /// prod-сборке), соответствующая кнопка просто не показывается. Раньше
+  /// здесь стояли placeholder-номера (+7 999 123-45-67 и выдуманный логин),
+  /// и они уезжали в боевой APK — обращения уходили случайному человеку.
+  /// Лучше скрыть канал, чем увести пользователя на фейковый номер.
   ///   --dart-define=SUPPORT_WHATSAPP_PHONE=+7XXX...
   ///   --dart-define=SUPPORT_TELEGRAM_USERNAME=...
   ///   --dart-define=SUPPORT_MAX_PHONE=+7XXX...
-  static const String supportWhatsAppPhone = String.fromEnvironment(
-    'SUPPORT_WHATSAPP_PHONE',
-    defaultValue: '+79991234567',
-  );
-  static const String supportTelegramUsername = String.fromEnvironment(
-    'SUPPORT_TELEGRAM_USERNAME',
-    defaultValue: 'SimbAsupport',
-  );
-  static const String supportMaxPhone = String.fromEnvironment(
-    'SUPPORT_MAX_PHONE',
-    defaultValue: '+79991234567',
-  );
+  static const String supportWhatsAppPhone =
+      String.fromEnvironment('SUPPORT_WHATSAPP_PHONE');
+  static const String supportTelegramUsername =
+      String.fromEnvironment('SUPPORT_TELEGRAM_USERNAME');
+  static const String supportMaxPhone =
+      String.fromEnvironment('SUPPORT_MAX_PHONE');
+
+  /// Настроен ли конкретный канал поддержки (контакт непустой). Кнопка
+  /// показывается только при `true`.
+  static bool get hasSupportWhatsApp => supportWhatsAppPhone.isNotEmpty;
+  static bool get hasSupportTelegram => supportTelegramUsername.isNotEmpty;
+  static bool get hasSupportMax => supportMaxPhone.isNotEmpty;
+  static bool get hasAnySupportContact =>
+      hasSupportWhatsApp || hasSupportTelegram || hasSupportMax;
 }

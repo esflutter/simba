@@ -39,6 +39,22 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Канал уведомлений по умолчанию для FCM. Когда приложение в
+             фоне/убито, баннер рисует система Android по данным от FCM, и
+             берёт этот канал. Должен совпадать с каналом, который
+             создаётся в коде (push_handler: 'simba_default'), иначе на
+             Android 8+ часть фоновых пушей уходит в дефолтный системный
+             канал без наших настроек важности/звука. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="simba_default" />
+        <!-- Иконка уведомления. Android для статус-бара использует
+             монохромный силуэт; пока берём launcher-иконку (на старых
+             версиях может рисоваться как белый квадрат — для отдельной
+             монохромной иконки нужен drawable ic_stat_notify). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

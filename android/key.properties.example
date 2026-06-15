@@ -1,0 +1,16 @@
+# Пример настройки релизного ключа подписи. Скопировать в key.properties
+# (тот же каталог android/), заполнить реальными значениями. Файл
+# key.properties НЕ коммитить — он в .gitignore.
+#
+# Создать релизный keystore (один раз, хранить в надёжном месте — потеря
+# ключа = невозможность обновлять приложение в Google Play):
+#
+#   keytool -genkey -v -keystore ~/simba-release.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 -alias simba
+#
+# Затем заполнить:
+
+storeFile=/абсолютный/путь/к/simba-release.jks
+storePassword=ПАРОЛЬ_ОТ_ХРАНИЛИЩА
+keyAlias=simba
+keyPassword=ПАРОЛЬ_ОТ_КЛЮЧА

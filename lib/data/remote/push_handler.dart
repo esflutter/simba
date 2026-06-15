@@ -9,6 +9,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/router/app_router.dart';
 
+/// Лог только в debug. В release не светим в logcat содержимое пуша и
+/// тексты ошибок — там бывают id заказов, маршрут перехода и тип
+/// события. (`[push] no route in payload` печатал весь data-объект.)
+void _pushLog(String msg) {
+  if (kDebugMode) debugPrint(msg);
+}
+
 /// Обработчик push-уведомлений — отображение баннера в foreground и
 /// открытие нужного экрана при тапе.
 ///
@@ -29,6 +36,13 @@ class PushHandler {
   StreamSubscription<RemoteMessage>? _openedSub;
   StreamSubscription<RemoteMessage>? _messageSub;
   bool _initialHandled = false;
+
+  // Глубокая ссылка из пуша, по которому открыли УБИТОЕ приложение. На
+  // холодном старте мы ещё на заставке; если перейти сразу — целевой экран
+  // ляжет ПОВЕРХ заставки, и «назад» вернёт на неё (крутящийся спиннер).
+  // Поэтому откладываем ссылку и применяем её из заставки уже ПОСЛЕ
+  // перехода на главную — тогда стек: главная → заказ, «назад» работает.
+  Map<String, dynamic>? _pendingColdStart;
 
   final FlutterLocalNotificationsPlugin _local = FlutterLocalNotificationsPlugin();
 
@@ -53,7 +67,7 @@ class PushHandler {
         sound: true,
       );
     } catch (e) {
-      debugPrint('[push] setForegroundNotificationPresentationOptions: $e');
+      _pushLog('[push] setForegroundNotificationPresentationOptions: $e');
     }
 
     final messaging = FirebaseMessaging.instance;
@@ -63,13 +77,22 @@ class PushHandler {
       final initial = await messaging.getInitialMessage();
       if (initial != null && !_initialHandled) {
         _initialHandled = true;
-        // Откладываем переход — чтобы GoRouter сначала отработал
-        // первичный redirect (splash → home/auth), и наш push-переход
-        // лёг на правильный стек, а не на /splash.
-        scheduleMicrotask(() => _routeFromMessage(initial));
+        final router = _ref.read(routerProvider);
+        final onSplash =
+            router.routerDelegate.currentConfiguration.uri.path == '/splash';
+        if (onSplash) {
+          // Ещё на заставке — отдаём ссылку ей: она применит её ПОСЛЕ
+          // перехода на главную (стек главная → заказ, «назад» работает).
+          // Раньше тут был scheduleMicrotask с push прямо поверх заставки,
+          // и «назад» с заказа возвращал на крутящийся спиннер заставки.
+          _pendingColdStart = initial.data;
+        } else {
+          // Заставка уже ушла (редкая гонка) — роутим как обычно.
+          scheduleMicrotask(() => _routeFromMessage(initial));
+        }
       }
     } catch (e) {
-      debugPrint('[push] getInitialMessage failed: $e');
+      _pushLog('[push] getInitialMessage failed: $e');
     }
 
     // 2) Тап по системному пушу, пока приложение в фоне.
@@ -78,7 +101,7 @@ class PushHandler {
     _openedSub = FirebaseMessaging.onMessageOpenedApp.listen(
       _routeFromMessage,
       onError: (Object e) {
-        debugPrint('[push] onMessageOpenedApp error: $e');
+        _pushLog('[push] onMessageOpenedApp error: $e');
       },
     );
 
@@ -88,7 +111,7 @@ class PushHandler {
     _messageSub = FirebaseMessaging.onMessage.listen(
       _showForegroundNotification,
       onError: (Object e) {
-        debugPrint('[push] onMessage error: $e');
+        _pushLog('[push] onMessage error: $e');
       },
     );
   }
@@ -98,6 +121,16 @@ class PushHandler {
     _openedSub = null;
     _messageSub?.cancel();
     _messageSub = null;
+  }
+
+  /// Применить отложенную глубокую ссылку холодного старта. Зовётся
+  /// заставкой ПОСЛЕ её перехода на главный экран — тогда целевой экран
+  /// ложится поверх главной, и «назад» ведёт на главную, а не на заставку.
+  /// Если ничего не отложено — ничего не делает.
+  void applyPendingColdStart() {
+    final data = _pendingColdStart;
+    _pendingColdStart = null;
+    if (data != null && data.isNotEmpty) _routeFromData(data);
   }
 
   Future<void> _initLocalNotifications() async {
@@ -140,7 +173,7 @@ class PushHandler {
       final data = (jsonDecode(payload) as Map).cast<String, dynamic>();
       _routeFromData(data);
     } catch (e) {
-      debugPrint('[push] local tap payload parse failed: $e');
+      _pushLog('[push] local tap payload parse failed: $e');
     }
   }
 
@@ -190,7 +223,7 @@ class PushHandler {
         payload: payload,
       );
     } catch (e) {
-      debugPrint('[push] local show failed: $e');
+      _pushLog('[push] local show failed: $e');
     }
   }
 
@@ -200,43 +233,73 @@ class PushHandler {
 
   void _routeFromData(Map<String, dynamic> data) {
     if (data.isEmpty) return;
-    final route = _resolveRoute(data);
-    if (route == null || route.isEmpty) {
-      debugPrint('[push] no route in payload: $data');
+    final target = _resolveRoute(data);
+    if (target == null) {
+      _pushLog('[push] no route in payload: $data');
       return;
     }
     try {
-      _ref.read(routerProvider).push(route);
+      final router = _ref.read(routerProvider);
+      // Текущий маршрут — чтобы не плодить дубликаты при повторном тапе по
+      // пушу, когда нужный экран уже открыт (иначе копии копятся, и «назад»
+      // приходится жать несколько раз).
+      // Сравниваем только ПУТЬ, без query: экран заказа из ленты/«моих»/
+      // истории всегда открыт с ?mode=..., а цель пуша — без него, поэтому
+      // сравнение полного адреса никогда не совпадало и дубликаты копились.
+      final current = router.routerDelegate.currentConfiguration.uri.path;
+      if (current == target.route) return;
+      // Для вложенного экрана откликов сначала кладём в стек экран заказа,
+      // потом сами отклики — иначе при открытии из «холодного» пуша кнопка
+      // «назад» с экрана откликов сразу выкидывала на главный, минуя заказ.
+      // Если мы уже на экране-родителе — повторно его не кладём.
+      if (target.parent != null && current != target.parent) {
+        router.push(target.parent!);
+      }
+      router.push(target.route);
     } catch (e) {
-      debugPrint('[push] navigation failed for $route: $e');
+      _pushLog('[push] navigation failed for ${target.route}: $e');
     }
   }
 
-  /// `data.route` — главный источник правды (сервер кладёт готовую ссылку).
-  /// Fallback по типу — на случай, если сервер не положит route
-  /// (старая нотификация / новый тип / ошибка енквью).
-  String? _resolveRoute(Map<String, dynamic> data) {
-    final explicit = data['route']?.toString();
-    if (explicit != null && explicit.isNotEmpty) return explicit;
-
+  /// Строим маршрут САМИ из `type` + `order_id`, не доверяя сырому
+  /// `data.route` из пуша. Сервер своё поле route кладёт, но push-payload
+  /// приходит снаружи — слепо роутить по строке из него небезопасно
+  /// (теоретически можно увести в неожиданный экран). order_id проверяем
+  /// на формат id PocketBase (15 строчных букв/цифр).
+  _PushTarget? _resolveRoute(Map<String, dynamic> data) {
     final type = data['type']?.toString();
-    final orderId = data['order_id']?.toString();
+    final rawId = data['order_id']?.toString() ?? '';
+    final orderId =
+        RegExp(r'^[a-z0-9]{15}$').hasMatch(rawId) ? rawId : null;
 
     switch (type) {
       case 'response_received':
-        return orderId != null ? '/order/$orderId/responses' : null;
+        // Вложенный экран — достраиваем стек через parent.
+        return orderId == null
+            ? null
+            : _PushTarget('/order/$orderId/responses',
+                parent: '/order/$orderId');
       case 'order_accepted':
       case 'order_cancelled':
       case 'work_done':
       case 'payment_received':
       case 'review_request':
-        return orderId != null ? '/order/$orderId' : null;
+        return orderId == null ? null : _PushTarget('/order/$orderId');
       case 'review_received':
-        return '/profile/reviews';
+        return _PushTarget('/profile/reviews');
       default:
         return null;
     }
   }
+}
+
+/// Маршрут перехода по тапу на пуш. `parent` — экран, который надо
+/// положить в стек ПЕРЕД целевым, чтобы кнопка «назад» работала
+/// (для вложенных экранов вроде откликов на заказ).
+class _PushTarget {
+  const _PushTarget(this.route, {this.parent});
+  final String route;
+  final String? parent;
 }
 
 final pushHandlerProvider = Provider<PushHandler>((ref) {

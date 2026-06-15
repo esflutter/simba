@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/pocketbase_client.dart';
 import '../../data/remote/reviews_repository.dart';
 
 /// Отзывы на указанного юзера. На моках вернёт `state.reviews` фильтрованные
@@ -11,16 +12,11 @@ import '../../data/remote/reviews_repository.dart';
 /// делается свежий запрос, а не показывается stale-список двухчасовой давности.
 final reviewsForUserProvider =
     FutureProvider.autoDispose.family<List<Review>, String>((ref, userId) async {
-  try {
-    return await ref.read(reviewsRepositoryProvider).forUser(userId);
-  } catch (_) {
-    // Fallback на мок-стейт (например, при сетевой ошибке).
-    return ref
-        .read(appControllerProvider)
-        .reviews
-        .where((r) => r.toUserId == userId)
-        .toList();
-  }
+  // Без catch: мок-режим обслуживает сам репозиторий (forUser при pb==null
+  // возвращает state.reviews и не бросает). В live сетевую ошибку отдаём
+  // наверх, чтобы экран отзывов показал «не удалось загрузить» с повтором,
+  // а не «Нет отзывов» и нулевой рейтинг при сбое сети.
+  return ref.read(reviewsRepositoryProvider).forUser(userId);
 });
 
 /// Отзывы по конкретному заказу. Используется на «деталях заказа» для
@@ -29,16 +25,21 @@ final reviewsForUserProvider =
 /// (где `state.reviews` маппером не наполняется).
 final reviewsByOrderProvider = FutureProvider.autoDispose
     .family<List<Review>, String>((ref, orderId) async {
-  try {
-    return await ref.read(reviewsRepositoryProvider).forOrder(orderId);
-  } catch (_) {
-    // Fallback на локальный стейт (мок-режим / сетевая ошибка).
+  // В мок-режиме (нет live PocketBase) локальный стейт — корректный
+  // источник. В live ошибку НЕ глушим пустым списком: иначе экран деталей
+  // решает, что отзыва нет, и на плохой связи снова рисует кнопку
+  // «Оставить отзыв» по уже отрецензированному заказу. Пробрасываем ошибку
+  // наверх — экран трактует её как «состояние неизвестно» и кнопку не
+  // показывает (как и соседний провайдер отзывов на пользователя).
+  final pb = ref.read(pocketbaseProvider);
+  if (pb == null) {
     return ref
         .read(appControllerProvider)
         .reviews
         .where((r) => r.orderId == orderId)
         .toList();
   }
+  return ref.read(reviewsRepositoryProvider).forOrder(orderId);
 });
 
 /// Set order_id'ов, по которым текущий пользователь уже оставил отзыв.

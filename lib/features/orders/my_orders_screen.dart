@@ -7,6 +7,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/backend_error.dart';
 import '../../core/utils/order_display.dart';
+import '../../core/utils/realtime_throttle.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
@@ -40,6 +41,10 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
   /// в build всё равно отбросит не свои заказы.
   Future<void> Function()? _ordersUnsub;
 
+  /// Throttle realtime-событий: первое событие обновляет списки сразу,
+  /// всплеск последующих склеивается в один догоняющий перезапрос.
+  final _ordersThrottle = RealtimeThrottle();
+
   @override
   void initState() {
     super.initState();
@@ -54,8 +59,15 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
     try {
       final unsub = await pb.collection('orders').subscribe('*', (_) {
         if (!mounted) return;
-        ref.invalidate(myOrdersStreamProvider);
-        ref.invalidate(myExecutorOrdersProvider);
+        // Throttle: первое событие обновляет списки сразу (принятый/
+        // отменённый заказ виден в реальном времени), а поток чужих
+        // событий по '*' склеиваем, чтобы не дёргать оба провайдера
+        // десятки раз в секунду.
+        _ordersThrottle.run(() {
+          if (!mounted) return;
+          ref.invalidate(myOrdersStreamProvider);
+          ref.invalidate(myExecutorOrdersProvider);
+        });
       });
       if (!mounted) {
         await unsub();
@@ -68,6 +80,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _ordersThrottle.dispose();
     final unsub = _ordersUnsub;
     _ordersUnsub = null;
     if (unsub != null) {

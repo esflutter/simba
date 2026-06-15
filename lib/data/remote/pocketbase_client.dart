@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/config/env.dart';
 import '../mock/app_state.dart';
+import 'auth_repository.dart' show purgeLocalUserData;
 
 /// Глобальный клиент PocketBase. URL берётся из --dart-define POCKETBASE_URL.
 /// Если URL пустой — клиент не создаётся и репозитории падают на моки.
@@ -227,11 +228,15 @@ Future<void> _refreshTokenSingleFlight(PocketBase pb) {
   _authRefreshInFlight[pb] = fut;
   // Очищаем слот после завершения (успешного или нет), чтобы следующий
   // 401 запустил свежий refresh, а не получал stale Future.
+  // .ignore(): whenComplete возвращает ОТДЕЛЬНЫЙ Future, который при
+  // падении refresh завершается той же ошибкой; без слушателя это
+  // «unhandled async error» (шум в крэш-репортинге, валит строгие тесты).
+  // Сам refresh ждут вызыватели через возвращаемый fut.
   fut.whenComplete(() {
     if (identical(_authRefreshInFlight[pb], fut)) {
       _authRefreshInFlight[pb] = null;
     }
-  });
+  }).ignore();
   return fut;
 }
 
@@ -253,8 +258,14 @@ extension PocketBaseAuthRetry on PocketBase {
       if (code != 401 && code != 403) rethrow;
       try {
         await _refreshTokenSingleFlight(this);
-      } catch (_) {
-        authStore.clear();
+      } catch (e) {
+        // Стираем сессию ТОЛЬКО при реальной ошибке авторизации refresh'а
+        // (просроченный refresh-токен → 401/403). Транспортный сбой
+        // (таймаут/обрыв сети) валидную сессию не трогает — иначе после
+        // фона при моргнувшей сети юзера выкидывало на вход.
+        if (e is ClientException && (e.statusCode == 401 || e.statusCode == 403)) {
+          authStore.clear();
+        }
         rethrow;
       }
       return op();
@@ -294,6 +305,9 @@ Future<T> withPbAuthRetry<T>(Ref ref, Future<T> Function() op) async {
     if (!pb.authStore.isValid) {
       try {
         ref.read(appControllerProvider.notifier).logout();
+        // Полная локальная очистка кэша картинок и провайдеров — иначе
+        // данные прошлого юзера остаются после принудительного выхода.
+        purgeLocalUserData(ref);
       } catch (_) {
         // appControllerProvider может быть не зарегистрирован в тестовом
         // ProviderContainer — это допустимо, главное чтобы исходный

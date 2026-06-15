@@ -21,7 +21,7 @@ import '../../data/models/models.dart';
 import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
 import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
-import '../../data/remote/users_repository.dart' show publicUserProvider;
+import '../../data/remote/users_repository.dart' show usersRepositoryProvider;
 import 'order_details_screen.dart' show orderByIdProvider;
 
 /// Future-провайдер: список id исполнителей с pending-откликом на заказ.
@@ -30,6 +30,17 @@ import 'order_details_screen.dart' show orderByIdProvider;
 final pendingExecutorIdsProvider =
     FutureProvider.autoDispose.family<List<String>, String>((ref, orderId) async {
   return ref.read(orderResponsesRepositoryProvider).pendingExecutorIds(orderId);
+});
+
+/// Публичные профили всех откликнувшихся на заказ — ОДНИМ пакетным
+/// запросом. Раньше каждая карточка тянула профиль отдельным запросом
+/// (N+1). Зависит от [pendingExecutorIdsProvider]: список id → один
+/// запрос профилей. Карточка читает готовый профиль из этого map.
+final respondersProfilesProvider = FutureProvider.autoDispose
+    .family<Map<String, AppUser>, String>((ref, orderId) async {
+  final ids = await ref.watch(pendingExecutorIdsProvider(orderId).future);
+  if (ids.isEmpty) return const {};
+  return ref.read(usersRepositoryProvider).publicProfilesByIds(ids);
 });
 
 /// Сообщение, когда отклик уже не существует (исполнитель отозвал в момент
@@ -182,15 +193,20 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
                       ),
                     );
                   }
-                  // userById даёт мок-данные только для seed-id из MockData;
-                  // для PB-id оно подставило бы demoCurrentUser (Иван Иванов),
-                  // и все исполнители выглядели бы одинаково. Делаем явный
-                  // placeholder по id-шорту. TODO(users-repo): когда появится
-                  // usersRepository.getById — перейти на async с подгрузкой
-                  // реального имени/фото.
-                  final users = executorIds.map(_userForResponder).toList(
-                        growable: false,
-                      );
+                  // Профили всех откликнувшихся тянем ОДНИМ пакетным
+                  // запросом (respondersProfilesProvider) — раньше каждая
+                  // карточка делала свой запрос (N+1: 30 откликов = 30
+                  // запросов + нагрузка на БД). Пока пакет грузится / при
+                  // ошибке — placeholder по id-шорту, который заменится
+                  // реальным именем/фото при следующей перерисовке.
+                  final profiles = ref
+                          .watch(respondersProfilesProvider(orderId))
+                          .asData
+                          ?.value ??
+                      const <String, AppUser>{};
+                  final users = executorIds
+                      .map((id) => profiles[id] ?? _userForResponder(id))
+                      .toList(growable: false);
                   return RefreshIndicator(
                     color: AppColors.primary,
                     onRefresh: doRefresh,
@@ -315,7 +331,7 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
   }
 }
 
-class _ResponseCard extends ConsumerStatefulWidget {
+class _ResponseCard extends StatefulWidget {
   const _ResponseCard({
     required this.user,
     required this.onTap,
@@ -324,10 +340,9 @@ class _ResponseCard extends ConsumerStatefulWidget {
     this.screenBusy = false,
   });
 
-  /// Базовый AppUser (placeholder с id-шортом для PB-юзеров без
-  /// подгруженного публичного профиля). Реальные имя/фото/рейтинг
-  /// подтягиваются через `publicUserProvider` в build — fallback
-  /// на `user` пока запрос грузится / при ошибке.
+  /// Готовый AppUser для карточки: реальный публичный профиль из пакетного
+  /// `respondersProfilesProvider`, либо placeholder с id-шортом, пока пакет
+  /// ещё грузится / при ошибке. Свой запрос карточка НЕ делает.
   final AppUser user;
   final VoidCallback onTap;
   final Future<void> Function() onDecline;
@@ -339,10 +354,10 @@ class _ResponseCard extends ConsumerStatefulWidget {
   final bool screenBusy;
 
   @override
-  ConsumerState<_ResponseCard> createState() => _ResponseCardState();
+  State<_ResponseCard> createState() => _ResponseCardState();
 }
 
-class _ResponseCardState extends ConsumerState<_ResponseCard> {
+class _ResponseCardState extends State<_ResponseCard> {
   bool _busy = false;
 
   Future<void> _handleAccept() async {
@@ -367,15 +382,11 @@ class _ResponseCardState extends ConsumerState<_ResponseCard> {
 
   @override
   Widget build(BuildContext context) {
-    // Подтягиваем публичный профиль из PB. Пока запрос грузится / при
-    // ошибке — fallback на переданного `widget.user` (placeholder
-    // «Исполнитель xxxxxx», ★ 0,0). Это устраняет «нулевую» карточку
-    // отклика, которую заказчик видел до фикса.
-    final publicAsync = ref.watch(publicUserProvider(widget.user.id));
-    final user = publicAsync.maybeWhen(
-      data: (u) => u ?? widget.user,
-      orElse: () => widget.user,
-    );
+    // Профиль уже подтянут пакетно на уровне списка и передан готовым —
+    // карточка свой запрос НЕ делает (раньше тут был ref.watch профиля
+    // каждого исполнителя — тот самый N+1). `user` — либо реальный
+    // публичный профиль, либо placeholder «Исполнитель xxxxxx», ★ 0,0.
+    final user = widget.user;
     return AppCard(
       padding: EdgeInsets.zero,
       child: Column(

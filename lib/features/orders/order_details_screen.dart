@@ -68,13 +68,13 @@ final _hasMyResponseProvider = FutureProvider.autoDispose
 final _myResponseStatusProvider = FutureProvider.autoDispose
     .family<String?, ({String orderId, String executorId})>((ref, args) async {
   if (args.executorId.isEmpty || args.executorId == 'me') return null;
-  try {
-    return await ref
-        .read(orderResponsesRepositoryProvider)
-        .myResponseStatus(args.orderId, args.executorId);
-  } catch (_) {
-    return null;
-  }
+  // Без blanket-catch: ошибку отдаём наверх, чтобы кнопка повторного
+  // отклика блокировалась при неизвестном статусе (а не показывалась
+  // отклонённому исполнителю при сбое сети). 404 «отклика нет» репозиторий
+  // уже сам приводит к null.
+  return ref
+      .read(orderResponsesRepositoryProvider)
+      .myResponseStatus(args.orderId, args.executorId);
 });
 
 class OrderDetailsScreen extends ConsumerStatefulWidget {
@@ -374,22 +374,6 @@ class _OrderDetailsBody extends ConsumerWidget {
               orElse: () => hasMyResponseFromOrder,
             ) ??
             hasMyResponseFromOrder);
-    // Пока проверка отклика грузится в первый раз и у нас нет даже
-    // ранее закэшированного значения — мы НЕ знаем, отвечал ли уже
-    // исполнитель. В этот момент нельзя показывать активную кнопку
-    // «Откликнуться», иначе при открытии экрана с уже отправленным
-    // откликом кнопка кратко моргает синей и потом превращается в
-    // серый баннер «Отклик отправлен».
-    final isCheckingMyResponse = needHasResponseCheck &&
-        (hasMyResponseAsync?.isLoading ?? false) &&
-        !(hasMyResponseAsync?.hasValue ?? false);
-    // Сетевая ошибка проверки отклика. Кнопку активной не показываем —
-    // иначе юзер тапнет и получит 400 unique-violation, если отклик
-    // на самом деле уже создан. Лучше «нечего сделать» с подсказкой.
-    final hasMyResponseCheckFailed = needHasResponseCheck &&
-        (hasMyResponseAsync?.hasError ?? false) &&
-        !(hasMyResponseAsync?.hasValue ?? false);
-
     // Статус отклика — null/pending/accepted/declined/withdrawn. Нужен
     // чтобы отделить «отклик ещё в работе» от «отклик уже отклонён»: во
     // втором случае нельзя снова жать «Откликнуться». Запрашиваем только
@@ -406,6 +390,29 @@ class _OrderDetailsBody extends ConsumerWidget {
       orElse: () => null,
     );
     final myResponseDeclined = myResponseStatus == 'declined';
+
+    // Пока грузится ЛЮБАЯ из двух проверок (есть ли активный отклик / какой
+    // у него статус) и нет закэшированного значения — реального состояния
+    // мы не знаем и активную кнопку «Откликнуться» не показываем. Раньше
+    // учитывалась только первая проверка: если статус ещё грузился или упал,
+    // уже отклонённый исполнитель на миг видел активную кнопку и повторным
+    // тапом создавал новый отклик (до серверного лимита в 3 цикла).
+    final respLoading = (hasMyResponseAsync?.isLoading ?? false) &&
+        !(hasMyResponseAsync?.hasValue ?? false);
+    final statusLoading = (myResponseStatusAsync?.isLoading ?? false) &&
+        !(myResponseStatusAsync?.hasValue ?? false);
+    final isCheckingMyResponse =
+        needHasResponseCheck && (respLoading || statusLoading);
+    // Сетевая ошибка любой из проверок — активную кнопку тоже не показываем:
+    // тап дал бы 400 (отклик уже создан) либо дубль для отклонённого. Лучше
+    // нейтральное «не удалось проверить».
+    final respErr = (hasMyResponseAsync?.hasError ?? false) &&
+        !(hasMyResponseAsync?.hasValue ?? false);
+    final statusErr = (myResponseStatusAsync?.hasError ?? false) &&
+        !(myResponseStatusAsync?.hasValue ?? false);
+    final hasMyResponseCheckFailed = needHasResponseCheck &&
+        !isCheckingMyResponse &&
+        (respErr || statusErr);
 
     // City-guard: deep-link мог открыть заказ из чужого города
     // (push-уведомление, history, шаринг). Баннер «Откликаться нельзя»
@@ -484,7 +491,11 @@ class _OrderDetailsBody extends ConsumerWidget {
                   _Field('Комментарий', order.description),
                   SizedBox(height: 16.h),
                 ],
-                _AddressBlock(address: order.address, location: order.location),
+                _AddressBlock(
+                  address: order.address,
+                  location: order.location,
+                  hasValidLocation: order.hasValidLocation,
+                ),
                 if (order.photoPaths.isNotEmpty) ...[
                   SizedBox(height: 16.h),
                   _FieldLabel('Фото'),
@@ -611,15 +622,15 @@ class _OrderDetailsBody extends ConsumerWidget {
     // «Оставить отзыв» не мигнёт на доли секунды при открытии экрана,
     // если на самом деле юзер уже оставлял отзыв.
     final reviewsAsync = ref.watch(reviewsByOrderProvider(order.id));
-    // .select — иначе любая мутация AppState ребилдит _buildActions.
-    final reviewsLocal = ref.watch(
-      appControllerProvider.select((s) => s.reviews),
-    );
     final hasMyReview = reviewsAsync.when(
       data: (list) => list.any((r) => r.fromUserId == myId),
       loading: () => true,
-      error: (_, _) => reviewsLocal
-          .any((r) => r.orderId == order.id && r.fromUserId == myId),
+      // Ошибка бывает только в live (в моке провайдер не бросает).
+      // Трактуем её как «состояние неизвестно»: считаем, что отзыв уже
+      // есть, и кнопку «Оставить отзыв» НЕ показываем. Иначе на плохой
+      // связи она снова появлялась бы по уже отрецензированному заказу, а
+      // повторная отправка молча отбрасывалась бы сервером.
+      error: (_, _) => true,
     );
     final widgets = <Widget>[];
 
@@ -762,8 +773,11 @@ class _OrderDetailsBody extends ConsumerWidget {
           label: 'Отметить работу выполненной',
           onPressed: confirmWork,
         ));
-      } else {
-        // Время ещё не наступило — доступна только отмена.
+      } else if (order.canCancelByCustomer()) {
+        // Отмена доступна, только если время не наступило И ни одна
+        // FSM-метка не выставлена (условие совпадает с серверным). Голый
+        // !isTimeArrived при рассинхроне часов устройства мог показать
+        // «Отменить» на заказе с уже отмеченной работой → тап давал ошибку.
         widgets.add(_CancelOrderButton(
           onTap: () => _confirmCancel(context, ref, order.id),
         ));
@@ -872,7 +886,9 @@ class _OrderDetailsBody extends ConsumerWidget {
         label: 'Отметить оплату полученной',
         onPressed: confirmPaymentReceived,
       ));
-    } else {
+    } else if (order.canCancelByExecutor()) {
+      // Симметрично заказчику: отмена только до наступления времени и до
+      // любой FSM-метки (как на сервере), а не по голому !isTimeArrived.
       widgets.add(_CancelOrderButton(
         onTap: () => _confirmCancelExecutor(
           context,
@@ -1258,9 +1274,18 @@ class _CancelOrderButton extends StatelessWidget {
 }
 
 class _AddressBlock extends StatelessWidget {
-  const _AddressBlock({required this.address, required this.location});
+  const _AddressBlock({
+    required this.address,
+    required this.location,
+    this.hasValidLocation = true,
+  });
   final String address;
   final LatLng location;
+
+  /// Координаты осмысленны (не 0,0 от битой записи). Если нет — прячем
+  /// карту-превью и кнопку маршрута, показываем только текст адреса,
+  /// чтобы не вести пользователя «в океан».
+  final bool hasValidLocation;
 
   /// Открывает адрес в внешней карте. На Android — через системный
   /// `geo:` интент, который показывает стандартный диалог «Открыть в»
@@ -1327,6 +1352,38 @@ class _AddressBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Координаты битые (0,0) — показываем только текст адреса без карты
+    // и маршрута, чтобы не вести в океан. В норме сюда не попадаем:
+    // сервер валидирует координаты при создании заказа.
+    if (!hasValidLocation) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _FieldLabel('Адрес'),
+          SizedBox(height: 12.h),
+          Row(
+            children: [
+              Icon(IconsaxPlusLinear.location,
+                  color: AppColors.primary, size: 18.r),
+              SizedBox(width: 6.w),
+              Expanded(
+                child: Text(
+                  address.isNotEmpty ? address : 'Адрес не указан',
+                  style: TextStyle(
+                    color: AppColors.textPrimary,
+                    fontSize: 13.sp,
+                    fontWeight: FontWeight.w500,
+                    height: 1.60,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1352,7 +1409,6 @@ class _AddressBlock extends StatelessWidget {
                 OpenFreeMapMarker(
                   id: 'order',
                   point: location,
-                  color: AppColors.markerRed,
                 ),
               ],
             ),
@@ -1558,7 +1614,6 @@ class _OrderLocationFullscreenPage extends StatelessWidget {
                 OpenFreeMapMarker(
                   id: 'order',
                   point: location,
-                  color: AppColors.markerRed,
                 ),
               ],
             ),
@@ -1652,7 +1707,16 @@ class _PartyCard extends StatelessWidget {
                   );
                   if (photoPath == null) return fallback;
                   if (photoPath.startsWith('http')) {
-                    return AppNetworkImage(url: photoPath, fallback: fallback);
+                    // width/height обязательны: без них AppNetworkImage
+                    // декодирует фото в полном размере (фото профиля в PB
+                    // бывает ~1024px) в кружок 56px — лишние мегабайты в
+                    // памяти. Локальная ветка ниже уже ограничена.
+                    return AppNetworkImage(
+                      url: photoPath,
+                      width: 56.r,
+                      height: 56.r,
+                      fallback: fallback,
+                    );
                   }
                   return Image.file(
                     File(photoPath),

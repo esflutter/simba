@@ -137,6 +137,14 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
         if (!mounted) return;
         context.push('/auth/sms?phone=${Uri.encodeComponent(phone)}');
       }
+    } catch (e) {
+      // Репозиторий переводит сетевые ошибки в errorCode, но редкое
+      // исключение (битое тело ответа) долетит сюда — без catch оно
+      // молча гасилось бы в finally, и кнопка просто переставала
+      // реагировать без объяснения.
+      if (mounted) {
+        AppToast.show(context, 'Не удалось отправить SMS. Попробуйте ещё раз');
+      }
     } finally {
       if (mounted) setState(() => _isSending = false);
     }

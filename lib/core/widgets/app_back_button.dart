@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
-import 'package:go_router/go_router.dart';
 import '../theme/app_colors.dart';
 
 class AppBackButton extends StatelessWidget {
@@ -24,11 +23,12 @@ class AppBackButton extends StatelessWidget {
         child: InkWell(
           onTap: onTap ??
               () {
-                if (context.canPop()) {
-                  context.pop();
-                } else {
-                  Navigator.of(context).maybePop();
-                }
+                // maybePop уважает PopScope: на экранах с несохранёнными
+                // данными (ввод кода, редактирование профиля) он покажет
+                // диалог подтверждения. Раньше тут был context.pop()
+                // (go_router), который PopScope игнорировал — видимая
+                // стрелка молча стирала введённый код / правки профиля.
+                Navigator.of(context).maybePop();
               },
           child: Center(
             child: Icon(

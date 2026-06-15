@@ -22,6 +22,7 @@ import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart' show Category;
+import '../../data/remote/categories_repository.dart';
 import '../../data/remote/dadata_client.dart';
 import 'order_draft.dart';
 import 'select_address_screen.dart';
@@ -58,9 +59,21 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final draft = ref.read(orderDraftProvider);
-      if (draft.categoryId != null &&
-          !MockData.categories.any((c) => c.id == draft.categoryId)) {
+      // Сбрасываем категорию ТОЛЬКО если серверный каталог уже загружен и
+      // в нём этого id действительно нет (категория удалена). Пока каталог
+      // грузится (cats == null) — не трогаем, иначе стёрли бы валидную
+      // боевую категорию, которой нет во встроенном мок-списке.
+      final cats = ref.read(categoriesProvider).asData?.value;
+      if (cats != null &&
+          draft.categoryId != null &&
+          !cats.any((c) => c.id == draft.categoryId)) {
         ref.read(orderDraftProvider.notifier).update(categoryId: null);
+      }
+      // Заказ «для себя»: поля телефона на экране нет, но в черновике мог
+      // застрять номер от брошенной попытки «для другого» (ушли назад, не
+      // опубликовав). Без очистки чужой телефон тихо уедет в личный заказ.
+      if (!widget.forOther && draft.forOtherPhone != null) {
+        ref.read(orderDraftProvider.notifier).update(clearForOther: true);
       }
     });
   }
@@ -215,9 +228,15 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     // юзеру категорию, которую он не выбирал. categoryId сбрасывается
     // в initState через postFrameCallback, чтобы не мутировать
     // состояние во время build.
+    // Категории берём из СЕРВЕРНОГО каталога (как и экран выбора), с
+    // фолбэком на встроенный список, пока он грузится. Иначе боевые
+    // категории, которых нет в моках, не находились — строка оставалась
+    // «Выберите категорию», а выбор молча стирался.
+    final categories =
+        ref.watch(categoriesProvider).asData?.value ?? MockData.categories;
     Category? catMatch;
     if (draft.categoryId != null) {
-      for (final c in MockData.categories) {
+      for (final c in categories) {
         if (c.id == draft.categoryId) {
           catMatch = c;
           break;
@@ -369,7 +388,7 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                         : Icon(IconsaxPlusLinear.gps,
                             color: AppColors.primary, size: 24.r),
                     compact: true,
-                    onTap: _isLocating ? () {} : _useMyLocation,
+                    onTap: _isLocating ? null : _useMyLocation,
                   ),
                   SizedBox(height: 16.h),
                   _PhotoRow(
@@ -419,7 +438,9 @@ class _Pickable extends StatelessWidget {
 
   final String label;
   final String value;
-  final VoidCallback onTap;
+  // Nullable: при null InkWell становится инертным (нет ripple). Нужно,
+  // чтобы строка «Определяем местоположение…» не отзывалась на тапы.
+  final VoidCallback? onTap;
   final bool isPlaceholder;
   final Widget? leading;
   final bool compact;

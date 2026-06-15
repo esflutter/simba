@@ -539,7 +539,15 @@ class _ReviewAvatar extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       child: (photoUrl == null || photoUrl!.isEmpty)
           ? fallback
-          : AppNetworkImage(url: photoUrl!, fallback: fallback),
+          // width/height передаём явно — иначе AppNetworkImage декодирует
+          // аватар в полном разрешении (часто 512+px) ради кружка 32px и
+          // зря держит память на ленте из десятков отзывов.
+          : AppNetworkImage(
+              url: photoUrl!,
+              fallback: fallback,
+              width: 32.r,
+              height: 32.r,
+            ),
     );
   }
 }

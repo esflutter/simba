@@ -105,12 +105,18 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
   /// Если pop возможен — pop'аем (это смена города из настроек или
   /// дип-линка). Если нет — догоняем следующий шаг онбординга через
   /// `nextOnboardingRoute`; если все шаги пройдены, ведём на главный.
-  void _goAfterCityChosen() {
+  void _goAfterCityChosen(String chosenCityId) {
     if (context.canPop()) {
       context.pop();
       return;
     }
-    final state = ref.read(appControllerProvider);
+    // Город только что выбран. В обеих ветках навигация идёт ДО setCity
+    // (ради refreshListenable), поэтому в state город ещё старый — считаем
+    // следующий шаг по состоянию с УЖЕ применённым городом. Иначе
+    // nextOnboardingRoute вернул бы снова '/city', и первый тап «не
+    // срабатывал» — уводил на тот же экран, дальше вёл только второй.
+    final state =
+        ref.read(appControllerProvider).copyWith(selectedCityId: chosenCityId);
     final next = nextOnboardingRoute(state);
     context.go(next ?? '/home/my');
   }
@@ -298,7 +304,7 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                       // refreshListenable роутера, pop на том
                                       // же кадре пытался бы закрыть уже
                                       // пересчитанный стек и проваливался.
-                                      _goAfterCityChosen();
+                                      _goAfterCityChosen(c.id);
                                       ctrl.setCity(c.id);
                                       return;
                                     }
@@ -360,7 +366,7 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                 // См. порядок «навигация до setCity» в onTap
                                 // списка выше.
                                 if (hasUser) {
-                                  _goAfterCityChosen();
+                                  _goAfterCityChosen(_selectedId!);
                                 } else {
                                   context.go('/auth/phone');
                                 }

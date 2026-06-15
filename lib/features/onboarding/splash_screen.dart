@@ -11,6 +11,7 @@ import '../../core/theme/system_bar_style.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/auth_repository.dart';
+import '../../data/remote/push_handler.dart';
 
 class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
@@ -54,6 +55,11 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
 
   void _go() {
     if (!mounted) return;
+    // Если по тапу на пуш обработчик уже увёл нас с заставки на нужный
+    // экран (deep-link при холодном старте — push_handler через
+    // scheduleMicrotask), НЕ перетираем его переходом на главную: go()
+    // заменяет весь стек, и открытый по ссылке заказ исчез бы.
+    if (GoRouterState.of(context).uri.toString() != '/splash') return;
     final state = ref.read(appControllerProvider);
     final next = nextOnboardingRoute(state);
     if (next != null) {
@@ -62,6 +68,11 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     }
     final tab = state.role == UserRole.customer ? 'my' : 'orders';
     context.go('/home/$tab');
+    // Если приложение открыли тапом по пушу при холодном старте — применяем
+    // отложенную глубокую ссылку ПОВЕРХ главной (стек: главная → заказ),
+    // чтобы «назад» вёл на главную, а не на заставку. Если ничего не
+    // отложено — no-op.
+    ref.read(pushHandlerProvider).applyPendingColdStart();
   }
 
   @override
@@ -84,6 +95,11 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
                 width: double.infinity,
                 height: 244.h,
                 fit: BoxFit.contain,
+                // Декодируем под фактическую высоту, а не полный размер
+                // исходника (~1100px) — иначе на старте в памяти висит
+                // лишний крупный битмап.
+                cacheHeight:
+                    (244.h * MediaQuery.of(context).devicePixelRatio).round(),
               ),
             ),
             SizedBox(height: 26.h),

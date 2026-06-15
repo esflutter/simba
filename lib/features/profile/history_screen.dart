@@ -8,6 +8,7 @@ import 'package:intl/intl.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/order_display.dart';
+import '../../core/utils/realtime_throttle.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
@@ -33,11 +34,20 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
   _Tab? _tab;
   // Юзер сам тапнул по табу — больше не пересчитываем дефолт при ребилдах.
   bool _userPickedTab = false;
+  // Дефолтная вкладка уже вычислена по загруженным данным и зафиксирована.
+  // Без этого флага дефолт пересчитывался на каждом ребилде, и realtime-
+  // событие, поменявшее баланс пустых/непустых списков, перекидывало
+  // активную вкладку под пальцем пользователя.
+  bool _defaultApplied = false;
 
   /// PB realtime-подписка на коллекцию orders. Когда какой-то заказ
   /// переходит в completed/cancelled — он должен мгновенно появиться
   /// в Истории, без pull-to-refresh.
   Future<void> Function()? _ordersUnsub;
+
+  /// Throttle realtime-событий: первое событие обновляет Историю сразу,
+  /// всплеск последующих склеивается в один догоняющий перезапрос.
+  final _ordersThrottle = RealtimeThrottle();
 
   @override
   void initState() {
@@ -53,7 +63,13 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
     try {
       final unsub = await pb.collection('orders').subscribe('*', (_) {
         if (!mounted) return;
-        ref.invalidate(myOrdersStreamProvider);
+        // Throttle: первое событие обновляет Историю сразу (заказ
+        // завершён/отменён — появляется в реальном времени), а поток
+        // чужих событий по '*' склеиваем в один догоняющий запрос.
+        _ordersThrottle.run(() {
+          if (!mounted) return;
+          ref.invalidate(myOrdersStreamProvider);
+        });
       });
       if (!mounted) {
         await unsub();
@@ -66,6 +82,7 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _ordersThrottle.dispose();
     final unsub = _ordersUnsub;
     _ordersUnsub = null;
     if (unsub != null) {
@@ -164,17 +181,20 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
       error: (_, _) => mockExecuted(),
     );
 
-    // _tab пересчитывается из роли и непустых списков, пока юзер сам не
-    // тапнул по табу. После первого тапа фиксируется. Это та же логика,
-    // что и в «Моих заказах».
-    if (!_userPickedTab) {
+    // Дефолтную вкладку вычисляем по роли и непустым спискам и фиксируем
+    // ОДИН раз — как только данные загрузились (не во время спиннера).
+    // После этого она меняется только по тапу пользователя. Раньше дефолт
+    // пересчитывался на каждом ребилде, пока юзер не тапнул, и realtime-
+    // обновление могло перекинуть активную вкладку на ходу.
+    if (!_userPickedTab && !_defaultApplied && !isLoading) {
       _tab = _defaultTab(
         posted: posted ?? const <Order>[],
         executed: executed ?? const <Order>[],
         role: myRole,
       );
+      _defaultApplied = true;
     }
-    final tab = _tab ??= _defaultTab(
+    final tab = _tab ?? _defaultTab(
       posted: posted ?? const <Order>[],
       executed: executed ?? const <Order>[],
       role: myRole,
@@ -295,18 +315,38 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
     );
   }
 
+  /// Дата, по которой заказ попал в историю: момент завершения/отмены, а не
+  /// создания. Берём самую позднюю из меток завершения (заказчик подтвердил
+  /// работу / исполнитель отметил оплату / заказ завершён), для отменённых
+  /// без меток — дату создания как запасной вариант. Раньше история
+  /// сортировалась и группировалась по дате создания, и свежезавершённый
+  /// старый заказ оказывался внизу списка под датой создания.
+  DateTime _historyDate(Order o) {
+    DateTime d = o.createdAt;
+    for (final t in [
+      o.completedAt,
+      o.paymentReceivedAt,
+      o.workConfirmedAt,
+      o.workDoneAt,
+    ]) {
+      if (t != null && t.isAfter(d)) d = t;
+    }
+    return d;
+  }
+
   List<_DateGroup> _groupByDate(List<Order> orders) {
-    final sorted = [...orders]..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    final sorted = [...orders]
+      ..sort((a, b) => _historyDate(b).compareTo(_historyDate(a)));
     final groups = <String, List<Order>>{};
     for (final o in sorted) {
-      // toLocal(): createdAt в БД — UTC; без перевода в локаль ночные
-      // заказы попадали бы в группу «вчера/завтра».
-      final key = DateFormat('yyyy-MM-dd').format(o.createdAt.toLocal());
+      // toLocal(): даты в БД — UTC; без перевода в локаль ночные заказы
+      // попадали бы в группу «вчера/завтра».
+      final key = DateFormat('yyyy-MM-dd').format(_historyDate(o).toLocal());
       groups.putIfAbsent(key, () => []).add(o);
     }
     return groups.entries
         .map((e) => _DateGroup(
-              label: _labelForDate(e.value.first.createdAt.toLocal()),
+              label: _labelForDate(_historyDate(e.value.first).toLocal()),
               orders: e.value,
             ))
         .toList();

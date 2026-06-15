@@ -77,7 +77,7 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
     _startTimer(resetPin: false);
   }
 
-  void _startTimer({bool resetPin = true}) {
+  void _startTimer({bool resetPin = true, bool showResent = true}) {
     _timer?.cancel();
     final target = DateTime.now().add(const Duration(seconds: _timerSeconds));
     setState(() {
@@ -88,7 +88,10 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
       _errorText = null;
       if (resetPin) {
         _pinKey = UniqueKey();
-        _showResent = true;
+        // Баннер «Новый код отправлен» — только когда SMS реально ушла
+        // (live). В mock-режиме showResent=false: код не отправляется,
+        // ложный баннер убрали.
+        _showResent = showResent;
       }
     });
     _timer = Timer.periodic(const Duration(seconds: 1), (t) => _tick());
@@ -207,6 +210,11 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
     setState(() => _isVerifying = true);
     try {
       final auth = ref.read(authRepositoryProvider);
+      // Захватываем ДО await: если экран размонтируют (back во время
+      // запроса), обращаться к `ref` после unmount нельзя — бросит
+      // StateError. Эти ссылки app-scoped и переживают unmount виджета.
+      final router = ref.read(routerProvider);
+      final appNotifier = ref.read(appControllerProvider.notifier);
       final result = await auth.verifyOtpDetailed(
         sessionId: _sessionId,
         phone: widget.phone,
@@ -218,9 +226,16 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
       // но застрял на phone-экране. Используем routerProvider напрямую.
       if (!mounted) {
         if (result.ok) {
-          ref
-              .read(routerProvider)
-              .go(postAuthRoute(ref, isNewUser: result.isNewUser));
+          // ref после unmount бросает StateError — используем захваченные
+          // ссылки. Для существующего юзера ставим флаг «онбординг
+          // просмотрен», иначе на следующем cold-start его зациклит между
+          // онбордингом и выбором города (раньше эта ветка была мёртвой:
+          // ref.read падал, флаг не ставился). Точный экран дальше уточнит
+          // redirect-guard роутера по nextOnboardingRoute.
+          if (!result.isNewUser) {
+            await appNotifier.markOnboardingSeen();
+          }
+          router.go(result.isNewUser ? '/auth/profile' : '/home/my');
         }
         return;
       }
@@ -263,6 +278,16 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
         if (!mounted) return;
       }
       context.go(postAuthRoute(ref, isNewUser: result.isNewUser));
+    } catch (e) {
+      // Сетевые ошибки репозиторий уже переводит в result.errorCode, но
+      // редкий случай (битое тело ответа, исключение при разборе) долетит
+      // сюда — без catch ошибка молча проглатывалась бы в finally, и юзер
+      // видел бы «зависшую» кнопку без объяснения.
+      if (!mounted) return;
+      setState(() {
+        _hasError = true;
+        _errorText = 'Не удалось проверить код. Попробуйте ещё раз';
+      });
     } finally {
       if (mounted) setState(() => _isVerifying = false);
     }
@@ -291,7 +316,9 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
         setState(() => _sessionId = result.sessionId);
       }
       if (!mounted) return;
-      _startTimer();
+      // Баннер «Новый код отправлен» показываем только в live-режиме, где
+      // SMS реально ушла. В сборке без бэкенда (mock) код не отправляется.
+      _startTimer(showResent: auth.isLive);
     } finally {
       if (mounted) setState(() => _isResending = false);
     }

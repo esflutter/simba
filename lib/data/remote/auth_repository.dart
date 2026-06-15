@@ -320,21 +320,23 @@ class AuthRepository {
     final ctrl = _ref.read(appControllerProvider.notifier);
     final localCityId = _ref.read(appControllerProvider).selectedCityId;
     final hasLocal = localCityId != null && localCityId.isNotEmpty;
+    // Локальный город отправляем на сервер ТОЛЬКО если пользователь сам
+    // выбрал его на экране /city перед этим входом. Если город просто
+    // остался сохранённым на устройстве (в т.ч. от прошлого владельца) —
+    // источником правды считаем сервер. Раньше любой непустой локальный
+    // город на свежем логине пушился на сервер, и на общем устройстве
+    // серверный город нового пользователя молча заменялся городом
+    // предыдущего владельца.
+    final chosePreLogin = ctrl.cityChosenPreLogin;
     if (ctrl.pendingCitySync == null) {
-      if (!hasLocal && cityId.isNotEmpty) {
-        ctrl.setCity(cityId);
-      } else if (isFreshLogin &&
-          hasLocal &&
-          localCityId != cityId) {
-        // Свежий логин: пушим локальный выбор на сервер
-        // fire-and-forget. Ошибки не критичны — следующий setCity
-        // повторит попытку.
+      if (isFreshLogin && hasLocal && chosePreLogin && localCityId != cityId) {
+        // Пользователь осознанно выбрал город перед входом — он приоритетнее
+        // серверного. Пушим fire-and-forget.
         //
-        // ВАЖНО: unawaited + catchError. Внешний try/catch не ловит
-        // ошибку этого Future — он завершается синхронно ДО того, как
-        // запрос реально выполнится. Без catchError исключение через
-        // 10 сек таймаута всплывает в Zone-handler и в release-сборках
-        // даёт crash-log.
+        // ВАЖНО: unawaited + catchError. Внешний try/catch не ловит ошибку
+        // этого Future — он завершается синхронно ДО реального запроса. Без
+        // catchError исключение по таймауту всплывает в Zone-handler и в
+        // release-сборках даёт crash-log.
         unawaited(pb
             .collection('users')
             .update(record.id, body: {'city': localCityId})
@@ -344,12 +346,18 @@ class AuthRepository {
           // совместимости с типом возвращаемого Future.
           return record;
         }));
-      } else if (!isFreshLogin && cityId.isNotEmpty && cityId != localCityId) {
-        // Silent refresh: сервер обновился (другой девайс?). Принимаем
-        // серверное значение, чтобы оба девайса показывали одно и то же.
+      } else if (cityId.isNotEmpty && cityId != localCityId) {
+        // Во всех остальных случаях сервер — источник правды:
+        //  • свежий вход без явного выбора города (он остался на устройстве)
+        //    — берём серверный, чужой/старый город не трогаем;
+        //  • silent refresh (город сменили на другом устройстве) — тоже.
         ctrl.setCity(cityId);
       }
     }
+    // Выбор города «до входа» применён — снимаем флаг, чтобы последующий
+    // silent refresh не принял оставшийся локальный город за новый
+    // осознанный выбор пользователя.
+    ctrl.consumePreLoginCityChoice();
 
     // Рейтинги и счётчики отзывов: на silent refresh authRefresh может
     // НЕ вернуть эти поля в record (PB отдаёт только то, что есть в
@@ -446,7 +454,7 @@ class AuthRepository {
     // его в auth-флоу нет смысла — авторизация прошла, дальше пусть
     // токен дописывается в фоне. Если упало (нет интернета, permission
     // denied) — следующий запуск приложения попробует снова.
-    debugPrint('[FCM] auth: scheduling registerForCurrentUser');
+    if (kDebugMode) debugPrint('[FCM] auth: scheduling registerForCurrentUser');
     unawaited(_ref.read(fcmRepositoryProvider).registerForCurrentUser());
     return AuthResult(ok: true, isNewUser: isNew, status: 'verified');
   }
@@ -574,45 +582,10 @@ class AuthRepository {
     // мизерный шанс на путаницу при отладке.
     _lastSuccessfulRefreshAt = DateTime.fromMillisecondsSinceEpoch(0);
 
-    // Дисковый кэш картинок (cached_network_image) переживает logout.
-    // Без явной чистки фото заказов и аватары предыдущего юзера остаются
-    // в файлах приложения. На общем устройстве это утечка PII —
-    // следующий юзер технически может вытащить их через root/ADB.
-    // CachedNetworkImage.evictFromCache работает с одной картинкой;
-    // для полной очистки нужен DefaultCacheManager.
-    try {
-      // ignore: discarded_futures
-      DefaultCacheManager().emptyCache();
-    } catch (_) {/* не критично — кэш сам очистится по TTL */}
-
-    try {
-      _ref.invalidate(myOrdersStreamProvider);
-      _ref.invalidate(myExecutorOrdersProvider);
-      _ref.invalidate(feedOrdersProvider);
-      _ref.invalidate(contactPhoneProvider);
-      _ref.invalidate(reviewsForUserProvider);
-      _ref.invalidate(reviewsByOrderProvider);
-      // Кэш «по каким заказам я уже оставил отзыв» сделан НЕ-autoDispose
-      // (одна выборка для обоих табов истории). Без явного invalidate
-      // на logout — после смены пользователя на том же устройстве
-      // кнопка «Оставить отзыв» рисуется/прячется по заказам прошлого
-      // юзера, пока не пройдёт первый запрос свежего списка отзывов.
-      _ref.invalidate(myReviewedOrderIdsProvider);
-      _ref.read(orderDraftProvider.notifier).reset();
-      _ref.invalidate(reviewsRepositoryProvider);
-      _ref.invalidate(ordersRepositoryProvider);
-      _ref.invalidate(orderResponsesRepositoryProvider);
-      _ref.invalidate(usersRepositoryProvider);
-      _ref.invalidate(dadataClientProvider);
-      // Справочники городов и категорий — публичные данные, но за время
-      // сессии админ мог добавить/выключить город или категорию.
-      // Без инвалидации новый юзер на этом устройстве видит старый
-      // список до полного перезапуска приложения.
-      _ref.invalidate(citiesProvider);
-      _ref.invalidate(categoriesProvider);
-    } catch (_) {
-      // ok если провайдер не зарегистрирован в текущем scope.
-    }
+    // Локальная очистка (кэш картинок + инвалидация провайдеров) вынесена
+    // в общую функцию — её зовут и принудительные пути выхода (401), иначе
+    // данные прошлого юзера протекали бы новому на общем устройстве.
+    purgeLocalUserData(_ref);
   }
 
   /// Текущий PB-юзер (или null).
@@ -646,6 +619,7 @@ class AuthRepository {
         final state = _ref.read(appControllerProvider);
         if (state.user != null) {
           _ref.read(appControllerProvider.notifier).logout();
+          purgeLocalUserData(_ref);
         }
       } catch (_) {}
       return false;
@@ -681,6 +655,8 @@ class AuthRepository {
         await Future<void>.delayed(Duration.zero);
         try {
           _ref.read(appControllerProvider.notifier).logout();
+          _lastSuccessfulRefreshAt = DateTime.fromMillisecondsSinceEpoch(0);
+          purgeLocalUserData(_ref);
         } catch (_) {}
       }
       return false;
@@ -693,3 +669,44 @@ class AuthRepository {
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   return AuthRepository(ref.read(pocketbaseProvider), ref);
 });
+
+/// Локальная очистка пользовательских данных — чистит дисковый кэш картинок
+/// и инвалидирует все юзер-специфичные провайдеры. БЕЗ сетевых вызовов,
+/// поэтому безопасно звать и из принудительного выхода (когда сессия уже
+/// мертва по 401). Раньше эта очистка была только в ручном `logout()`, а
+/// принудительные пути ограничивались сбросом мок-состояния — фото и
+/// данные прошлого юзера протекали новому на общем устройстве.
+void purgeLocalUserData(Ref ref) {
+  // Дисковый кэш картинок (фото заказов, аватары) переживает выход. На
+  // общем устройстве это утечка PII — следующий юзер технически может
+  // достать файлы через root/ADB.
+  try {
+    // ignore: discarded_futures
+    DefaultCacheManager().emptyCache();
+  } catch (_) {/* не критично — кэш сам очистится по TTL */}
+
+  try {
+    ref.invalidate(myOrdersStreamProvider);
+    ref.invalidate(myExecutorOrdersProvider);
+    ref.invalidate(feedOrdersProvider);
+    ref.invalidate(contactPhoneProvider);
+    ref.invalidate(reviewsForUserProvider);
+    ref.invalidate(reviewsByOrderProvider);
+    // Кэш «по каким заказам я уже оставил отзыв» — НЕ-autoDispose, без
+    // явного invalidate кнопка «Оставить отзыв» рисуется по заказам
+    // прошлого юзера до первого свежего запроса.
+    ref.invalidate(myReviewedOrderIdsProvider);
+    ref.read(orderDraftProvider.notifier).reset();
+    ref.invalidate(reviewsRepositoryProvider);
+    ref.invalidate(ordersRepositoryProvider);
+    ref.invalidate(orderResponsesRepositoryProvider);
+    ref.invalidate(usersRepositoryProvider);
+    ref.invalidate(dadataClientProvider);
+    // Справочники городов/категорий — публичные, но за сессию могли
+    // обновиться; без инвалидации новый юзер видит старый список.
+    ref.invalidate(citiesProvider);
+    ref.invalidate(categoriesProvider);
+  } catch (_) {
+    // ok если провайдер не зарегистрирован в текущем scope (тесты).
+  }
+}

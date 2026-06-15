@@ -4,6 +4,7 @@ import 'package:flutter_screenutil/flutter_screenutil.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/backend_error.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
@@ -217,6 +218,14 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
         .whereType<String>()
         .toList();
 
+    // Получатель пуст (например, заказ без выбранного исполнителя, а
+    // отзыв пытается оставить заказчик) — серверный create отбил бы это
+    // невнятной ошибкой. Ловим заранее и объясняем по-человечески.
+    if (recipientId.isEmpty) {
+      AppToast.error(context, 'Некому оставить отзыв по этому заказу');
+      return;
+    }
+
     setState(() => _isSubmitting = true);
     try {
       // Сначала идёт live-вызов: если сервер вернёт ошибку (например
@@ -260,14 +269,15 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
       // открыт в стеке — там продолжит висеть старый рейтинг до выхода
       // и повторного входа.
       ref.invalidate(publicUserProvider(recipientId));
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       // Идемпотентность отправки решена в репозитории: повторный create
       // ловит 400/409 на unique-index и возвращает уже созданную запись.
-      // Поэтому здесь оставляем обычное «не удалось» — реальная ошибка
-      // (валидация, сеть до отправки тела, FSM-запрет) показывается без
-      // лишних предположений «возможно прошло».
-      if (context.mounted) AppToast.show(context, 'Не удалось отправить отзыв');
+      // Поэтому сюда долетает РЕАЛЬНАЯ ошибка (валидация, сеть до отправки
+      // тела, FSM-запрет) — показываем её конкретную причину через
+      // humanizeBackendError, а не общий «Не удалось отправить отзыв», по
+      // которому человек не понимал, что именно не так.
+      if (context.mounted) AppToast.show(context, humanizeBackendError(e));
       setState(() => _isSubmitting = false);
       return;
     }

@@ -13,6 +13,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/backend_error.dart';
 import '../../core/utils/order_display.dart';
+import '../../core/utils/realtime_throttle.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/city_pill.dart';
 import '../../core/widgets/openfreemap_view.dart';
@@ -50,13 +51,26 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   /// pull-to-refresh. Юзер тапал, получал 404 от сервера.
   Timer? _tickTimer;
 
+  /// Throttle realtime-событий orders. Первое событие обновляет ленту
+  /// сразу (статусы в реальном времени), всплеск последующих склеивается
+  /// в один догоняющий перезапрос — см. RealtimeThrottle.
+  final _ordersThrottle = RealtimeThrottle();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeOrders());
     _tickTimer = Timer.periodic(const Duration(minutes: 1), (_) {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      // Лента (со списком заказов, где важно протухание по времени)
+      // показывается только исполнителю. В режиме заказчика экран —
+      // статичная заглушка «Готов помочь выключен», там пересчитывать
+      // нечего: пропускаем тик, чтобы не дёргать фильтр/маркеры вхолостую
+      // и не будить виджет, когда вкладка вообще не на экране.
+      final isExecutor =
+          ref.read(appControllerProvider).role == UserRole.executor;
+      if (isExecutor) setState(() {});
     });
   }
 
@@ -69,8 +83,14 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
         if (!mounted) return;
         // Любое изменение заказа — освежаем ленту. Сам фильтр на
         // клиенте отбросит accepted/cancelled, сервер заодно вернёт
-        // актуальный набор. Дешевле, чем фильтровать события вручную.
-        ref.invalidate(feedOrdersProvider);
+        // актуальный набор. Throttle: первое событие применяем СРАЗУ
+        // (заказ ушёл из open — мгновенно исчезает из ленты), а поток
+        // чужих событий на росте аудитории склеиваем, чтобы не дёргать
+        // сеть десятки раз в секунду.
+        _ordersThrottle.run(() {
+          if (!mounted) return;
+          ref.invalidate(feedOrdersProvider);
+        });
       });
       if (!mounted) {
         await unsub();
@@ -85,6 +105,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     WidgetsBinding.instance.removeObserver(this);
     _tickTimer?.cancel();
     _tickTimer = null;
+    _ordersThrottle.dispose();
     final unsub = _ordersUnsub;
     _ordersUnsub = null;
     if (unsub != null) {
@@ -684,14 +705,12 @@ class _MapViewState extends ConsumerState<_MapView> {
 
   @override
   Widget build(BuildContext context) {
-    // Только заказы с валидной геоточкой попадают на карту. Маркеры
-    // окрашиваются по статусу: красный — open, оранжевый — accepted/
-    // awaiting_payment, зелёный — completed, серый — cancelled.
+    // Только заказы с валидной геоточкой попадают на карту (в ленте это
+    // всегда open-заказы). Маркеры одинаковые — пин без окраски по статусу.
     final markers = widget.orders
         .map((o) => OpenFreeMapMarker(
               id: o.id,
               point: o.location,
-              color: _markerColorByStatus(o.status),
             ))
         .toList();
     // Приоритет: пользовательская позиция (если permission выдан) →
@@ -706,26 +725,6 @@ class _MapViewState extends ConsumerState<_MapView> {
       showZoomControls: true,
       onMarkerTap: widget.onMarkerTap,
     );
-  }
-}
-
-Color _markerColorByStatus(OrderStatus s) {
-  // В ленту попадают только OrderStatus.open (см. фильтр выше), поэтому
-  // тут практически всегда возвращается markerRed. Остальные статусы
-  // оставлены ради full coverage enum — если когда-нибудь добавим
-  // показ accepted/completed на карте, цвета уже здесь. До этого
-  // использовались Material.orange/green (несовпадение с палитрой),
-  // теперь — фирменные AppColors.markerOrange / markerGreen.
-  switch (s) {
-    case OrderStatus.open:
-      return AppColors.markerRed;
-    case OrderStatus.accepted:
-    case OrderStatus.awaitingPayment:
-      return AppColors.markerOrange;
-    case OrderStatus.completed:
-      return AppColors.markerGreen;
-    case OrderStatus.cancelled:
-      return AppColors.textTertiary;
   }
 }
 

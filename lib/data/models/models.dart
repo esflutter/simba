@@ -54,7 +54,7 @@ extension PaymentMethodMapping on PaymentMethod {
       case 'cashless_transfer':
         return PaymentMethod.cashlessTransfer;
       default:
-        if (raw != null && raw.isNotEmpty) {
+        if (raw != null && raw.isNotEmpty && kDebugMode) {
           debugPrint('[PaymentMethod] unknown db value "$raw" — fallback to cash');
         }
         return PaymentMethod.cash;
@@ -405,25 +405,11 @@ const Map<String, String> kReviewTagRu = {
 String reviewTagLabel(String slug) => kReviewTagRu[slug] ?? slug;
 
 extension OrderLifecycle on Order {
-  /// Заказ относится к истории: завершён, отменён, либо запланированная
-  /// дата начала уже прошла (наступило указанное время и позже).
-  ///
-  /// NB: для целей UI «у меня в истории» используются per-side флаги
-  /// [isCompletedByCustomer] / [isCompletedByExecutor] — после переезда
-  /// FSM на схему «два независимых флоу»: заказ попадает в историю
-  /// стороны, как только ОНА отметила свою часть, независимо от того,
-  /// отметила ли другая сторона.
-  bool get isHistorical {
-    if (status == OrderStatus.completed || status == OrderStatus.cancelled) {
-      return true;
-    }
-    final s = scheduledAt;
-    if (s != null && s.isBefore(DateTime.now())) return true;
-    return false;
-  }
-
-  /// Заказ активный — обратное к [isHistorical].
-  bool get isActive => !isHistorical;
+  // isHistorical / isActive удалены: после переезда FSM на схему «две
+  // независимые стороны» они нигде не использовались, а их логика
+  // (история по scheduledAt в прошлом) противоречила реальной — история
+  // считается по per-side флагам isCompletedByCustomer/Executor. Держать
+  // мёртвый геттер с устаревшей логикой — ловушка для будущей правки.
 
   /// Просроченный «размещённый» заказ: исполнитель не найден, а назначенная
   /// дата уже прошла. Такие заказы не показываются нигде — автоматически
@@ -461,6 +447,19 @@ extension OrderLifecycle on Order {
     return age.inDays >= 60;
   }
 
+  /// Координаты заказа осмысленны (не дефолтные 0,0 от битой записи).
+  /// PocketBase отдаёт lat/lng как 0 при пустом значении; точка 0,0 лежит
+  /// в Гвинейском заливе — кнопка карты и превью вели бы «в океан».
+  /// Сервер при создании сверяет координаты с границами города, так что
+  /// 0,0 в норме не доходит до клиента — это защита от битой/легаси записи.
+  bool get hasValidLocation {
+    final lat = location.latitude;
+    final lng = location.longitude;
+    if (lat.abs() < 0.5 && lng.abs() < 0.5) return false; // ~ (0,0)
+    if (lat.abs() > 90 || lng.abs() > 180) return false; // невозможные
+    return true;
+  }
+
   /// Наступило ли время начала работы. Для ASAP и заказов без даты —
   /// всегда `true` (по схеме ТЗ «время заказа наступило ИЛИ заказ без даты»).
   /// Используется как gate в UI: до наступления — доступна отмена,
@@ -479,11 +478,8 @@ extension OrderLifecycle on Order {
   /// Исполнитель уже отметил «оплата получена».
   bool get isCompletedByExecutor => paymentReceivedAt != null;
 
-  /// Глобально-завершённый заказ: обе стороны отметили свою часть.
-  /// На бэке этому соответствует статус `completed`. Клиент может
-  /// принимать решение и без статуса — по двум флагам.
-  bool get isFullyCompleted =>
-      isCompletedByCustomer && isCompletedByExecutor;
+  // isFullyCompleted удалён как неиспользуемый — экраны решают по
+  // per-side флагам isCompletedByCustomer / isCompletedByExecutor.
 
   /// Может ли заказчик ещё отменить заказ. По схеме ТЗ:
   /// - в статусе `open` — всегда (исполнитель ещё не выбран);

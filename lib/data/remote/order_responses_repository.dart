@@ -75,9 +75,12 @@ class OrderResponsesRepository {
           )
           .timeout(_pbTimeout));
       return r.getStringValue('status');
-    } catch (_) {
-      // 404 — отклика нет.
-      return null;
+    } on ClientException catch (e) {
+      // 404 — отклика реально нет. Сетевые/5xx НЕ выдаём за «не откликался»
+      // (иначе отклонённому исполнителю при сбое сети показали бы активную
+      // кнопку «Откликнуться»): пробрасываем, UI заблокирует кнопку.
+      if (e.statusCode == 404) return null;
+      rethrow;
     }
   }
 
@@ -95,7 +98,14 @@ class OrderResponsesRepository {
     }
     final pb = _pb!;
     final me = pb.authStore.record;
-    if (me == null) return;
+    if (me == null) {
+      // Токен валиден, но профиль ещё не подгружен (редко — после
+      // обновления сессии без чтения записи). Раньше тут стоял тихий
+      // `return`: UI показывал «Отклик отправлен», а на сервере отклика
+      // не было. Бросаем ошибку — экран поймает её и покажет понятный
+      // тост, а не ложный успех (так же делает создание заказа).
+      throw StateError('Не удалось определить пользователя. Откройте приложение заново.');
+    }
     try {
       await withPbAuthRetry(
           _ref,

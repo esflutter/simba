@@ -117,19 +117,48 @@ class SuggestResult {
 /// `/api/dadata/suggest-address` и `/api/dadata/geolocate-address`. Это
 /// гарантирует, что секретный токен DaData никогда не попадает в APK.
 class DaDataClient {
-  DaDataClient(this._pb, {http.Client? httpClient})
-      : _http = httpClient ?? http.Client(),
-        _ownsHttp = httpClient == null;
+  DaDataClient(this._pb, {http.Client? httpClient}) : _injectedHttp = httpClient;
 
   final PocketBase? _pb;
-  final http.Client _http;
 
-  /// Закрываем `http.Client` только если создавали его сами. Shared
-  /// клиент (из pocketbase_client) принадлежит приложению на весь
-  /// жизненный цикл — закрывать его в dispose нельзя.
-  final bool _ownsHttp;
+  /// Инжектируемый клиент — только для тестов. В обычной работе `null`, и
+  /// запросы идут через [sendWithSharedClient], который сам пересоздаёт
+  /// закрытый общий клиент (типичный сценарий после долгого сна устройства).
+  /// Раньше здесь хранилась ЗАХВАЧЕННАЯ ссылка на `sharedHttpClient`: после
+  /// его сброса в любом другом запросе подсказки/геокодинг молча падали с
+  /// «client already closed» до конца сессии (ошибка маскировалась под «нет
+  /// сети»). Теперь актуальный клиент берётся на каждый вызов.
+  final http.Client? _injectedHttp;
 
   bool get _isLive => _pb != null;
+
+  /// Единая точка похода на PB-прокси: через инжектированный клиент (тесты)
+  /// либо через общий клиент с авто-восстановлением.
+  Future<http.Response> _post(PocketBase pb, String path, Object body) async {
+    Future<http.Response> op(http.Client c) => c
+        .post(
+          Uri.parse('${pb.baseURL}$path'),
+          headers: _headers(pb),
+          body: jsonEncode(body),
+        )
+        .timeout(const Duration(seconds: 8));
+    final injected = _injectedHttp;
+    Future<http.Response> send() =>
+        injected != null ? op(injected) : sendWithSharedClient(op);
+    var resp = await send();
+    // Сессия истекла ровно во время ввода адреса (часто после возврата из
+    // фона): прокси отвечает 401/403. Обновляем токен один раз и повторяем —
+    // иначе подсказки и геокодинг молча отваливались до ручного перелогина,
+    // как и в остальных репозиториях. op() строит заголовки заново, поэтому
+    // повтор уходит уже с новым токеном.
+    if (resp.statusCode == 401 || resp.statusCode == 403) {
+      try {
+        await pb.refreshAuthSingleFlight();
+        resp = await send();
+      } catch (_) {/* refresh не удался — отдаём исходный ответ как есть */}
+    }
+    return resp;
+  }
 
   /// Подсказки по адресу.
   ///
@@ -204,13 +233,7 @@ class DaDataClient {
   ) async {
     final http.Response resp;
     try {
-      resp = await _http
-          .post(
-            Uri.parse('${pb.baseURL}/api/dadata/suggest-address'),
-            headers: _headers(pb),
-            body: jsonEncode(body),
-          )
-          .timeout(const Duration(seconds: 8));
+      resp = await _post(pb, '/api/dadata/suggest-address', body);
     } on TimeoutException {
       return const SuggestResult(suggestions: [], error: 'timeout');
     } catch (_) {
@@ -246,18 +269,12 @@ class DaDataClient {
     if (!_isLive) return null;
     final pb = _pb!;
     try {
-      final resp = await _http
-          .post(
-            Uri.parse('${pb.baseURL}/api/dadata/geolocate-address'),
-            headers: _headers(pb),
-            body: jsonEncode({
-              'lat': point.latitude,
-              'lon': point.longitude,
-              'radius_meters': radiusMeters,
-              'count': count,
-            }),
-          )
-          .timeout(const Duration(seconds: 8));
+      final resp = await _post(pb, '/api/dadata/geolocate-address', {
+        'lat': point.latitude,
+        'lon': point.longitude,
+        'radius_meters': radiusMeters,
+        'count': count,
+      });
       if (resp.statusCode != 200) return null;
       final data = jsonDecode(utf8.decode(resp.bodyBytes));
       final list = (data is Map && data['suggestions'] is List)
@@ -280,7 +297,9 @@ class DaDataClient {
   }
 
   void dispose() {
-    if (_ownsHttp) _http.close();
+    // Нечего закрывать: общий клиент живёт в pocketbase_client и
+    // переиспользуется всем приложением; инжектированный (в тестах)
+    // закрывает тот, кто его создал.
   }
 }
 
@@ -288,11 +307,12 @@ class DaDataClient {
 /// (моки/тесты) — клиент работает в no-op режиме и возвращает пустые
 /// результаты.
 ///
-/// Использует общий `sharedHttpClient` из pocketbase_client — это
-/// переиспользует keep-alive соединение и TLS-сессию с самим PB.
+/// Запросы идут через общий `sendWithSharedClient` из pocketbase_client —
+/// он переиспользует keep-alive соединение и сам пересоздаёт клиент, если
+/// тот закрылся (после долгого сна устройства).
 final dadataClientProvider = Provider<DaDataClient>((ref) {
   final pb = ref.read(pocketbaseProvider);
-  final client = DaDataClient(pb, httpClient: sharedHttpClient);
+  final client = DaDataClient(pb);
   ref.onDispose(client.dispose);
   return client;
 });

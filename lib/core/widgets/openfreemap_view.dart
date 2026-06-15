@@ -63,18 +63,17 @@ Future<Directory> _resolveTilesCacheFolder() async {
   return dir;
 }
 
-/// Маркер на OpenFreeMap карте. Цвет зависит от статуса заказа:
-/// красный — открыт, оранжевый — есть отклики/принят, зелёный — завершён.
+/// Маркер на OpenFreeMap карте. Все маркеры рисуются одинаковым пином
+/// (assets/images/icon_map_pin.webp); окраски по статусу нет — раньше тут
+/// было поле color, но при отрисовке оно не применялось (мёртвый код).
 class OpenFreeMapMarker {
   const OpenFreeMapMarker({
     required this.id,
     required this.point,
-    this.color = AppColors.markerRed,
   });
 
   final String id;
   final LatLng point;
-  final Color color;
 }
 
 /// Плавный переход камеры к точке/зуму вместо моментального `move()`.
@@ -90,7 +89,16 @@ class OpenFreeMapMarker {
 /// Контроллер диспозим в `addStatusListener` по `completed`, чтобы не
 /// течь.
 extension AnimatedMapMove on MapController {
-  void animatedMove(
+  /// Возвращает созданный [AnimationController], чтобы ВЫЗЫВАЮЩИЙ владел его
+  /// жизненным циклом: освободил при следующем переезде и в `dispose()`
+  /// экрана. Раньше контроллер самоосвобождался по завершении анимации —
+  /// но если экран закрыть посреди 400-мс переезда, тикер экрана гасится
+  /// (TickerProviderStateMixin), анимация не доходит до конца, и в debug
+  /// летел assertion «ticker was active and disposed», а в release
+  /// контроллер висел до сборки мусора. Теперь единственный владелец —
+  /// State, поэтому двойного освобождения нет. `null`, если камера ещё
+  /// не готова (NoCameraException на первом кадре).
+  AnimationController? animatedMove(
     LatLng dest,
     double destZoom, {
     required TickerProvider vsync,
@@ -102,21 +110,12 @@ extension AnimatedMapMove on MapController {
       startCenter = camera.center;
       startZoom = camera.zoom;
     } catch (_) {
-      // Камера ещё не готова (карта не отрисована) — пропускаем
-      // анимацию, иначе словим NoCameraException на первом кадре.
-      return;
+      return null;
     }
     final AnimationController ctrl =
         AnimationController(duration: duration, vsync: vsync);
     final CurvedAnimation anim =
         CurvedAnimation(parent: ctrl, curve: Curves.easeInOut);
-    bool disposed = false;
-    void disposeOnce() {
-      if (disposed) return;
-      disposed = true;
-      anim.dispose();
-      ctrl.dispose();
-    }
     ctrl.addListener(() {
       final double t = anim.value;
       move(
@@ -129,17 +128,8 @@ extension AnimatedMapMove on MapController {
         startZoom + (destZoom - startZoom) * t,
       );
     });
-    anim.addStatusListener((AnimationStatus s) {
-      // completed/dismissed — нормальное завершение; обработка обоих важна
-      // потому что при быстрых повторных тапах кнопок зума предыдущая
-      // анимация прерывается «dismissed» и без этого хука контроллер
-      // оставался бы в памяти до GC.
-      if (s == AnimationStatus.completed ||
-          s == AnimationStatus.dismissed) {
-        disposeOnce();
-      }
-    });
     ctrl.forward();
+    return ctrl;
   }
 }
 
@@ -237,6 +227,19 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
   /// пользователя. Раньше подписка жила всё время, что съедало батарею
   /// у активных исполнителей, оставивших приложение свёрнутым.
   bool _wasStreamingBeforePause = false;
+
+  /// Активный контроллер плавного переезда камеры. Храним, чтобы освободить
+  /// его при следующем переезде и при закрытии экрана — иначе закрытие во
+  /// время анимации оставляло «живой» контроллер на погашенном тикере.
+  AnimationController? _moveCtrl;
+
+  /// Запустить плавный переезд камеры, освободив предыдущий (если ещё жив).
+  void _animateCamera(LatLng dest, double zoom, {Duration? duration}) {
+    _moveCtrl?.dispose();
+    _moveCtrl = duration == null
+        ? _controller.animatedMove(dest, zoom, vsync: this)
+        : _controller.animatedMove(dest, zoom, vsync: this, duration: duration);
+  }
 
   MapController get _controller =>
       widget.mapController ?? _internalController;
@@ -372,11 +375,7 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         try {
-          _controller.animatedMove(
-            newCenter,
-            widget.initialZoom,
-            vsync: this,
-          );
+          _animateCamera(newCenter, widget.initialZoom);
         } catch (_) {/* карта ещё не готова */}
       });
     }
@@ -386,6 +385,10 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _positionSub?.cancel();
+    // Освобождаем контроллер активного переезда — иначе закрытие карты во
+    // время анимации оставляет его на погашенном тикере.
+    _moveCtrl?.dispose();
+    _moveCtrl = null;
     // Внутренний MapController нужно явно диспозить — иначе flutter_map
     // держит ссылки на стримы движений камеры, и каждое открытие
     // карты (feed, выбор адреса, детали) утекает в RAM. Внешний
@@ -434,7 +437,7 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
     target ??= await _waitForFix();
     if (target == null || !mounted) return;
     try {
-      _controller.animatedMove(target, 15, vsync: this);
+      _animateCamera(target, 15);
     } catch (_) {/* карта не готова */}
     // Колбэк — после того, как фактическая координата определена, чтобы
     // родителю можно было передать её (например, для реверс-геокода).
@@ -463,10 +466,9 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
       // Анимация вместо мгновенного `move` — без неё зум выглядит как
       // прыжок, теряется ощущение масштаба. 250 мс — компромисс между
       // плавностью и отзывчивостью.
-      _controller.animatedMove(
+      _animateCamera(
         _controller.camera.center,
         next,
-        vsync: this,
         duration: const Duration(milliseconds: 250),
       );
     } catch (_) {/* карта ещё не готова */}

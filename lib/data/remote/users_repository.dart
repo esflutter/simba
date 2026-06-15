@@ -120,6 +120,62 @@ class UsersRepository {
       return null;
     }
   }
+
+  /// Пакетно тянет публичные профили по списку id — ОДНИМ запросом с
+  /// фильтром `id="a" || id="b" || ...`, вместо отдельного запроса на
+  /// каждого. Используется на экране откликов: раньше каждая карточка
+  /// тянула свой профиль (N+1, 30 откликов = 30 запросов и нагрузка на БД).
+  /// Возвращает map id→AppUser; отсутствующие id просто не попадают в map.
+  Future<Map<String, AppUser>> publicProfilesByIds(List<String> ids) async {
+    final pb = _pb;
+    if (pb == null || ids.isEmpty) return const {};
+    // Валидируем id (формат записи PocketBase — 15 строчных букв/цифр),
+    // чтобы не пустить мусор в строку фильтра. Дубликаты убираем.
+    final safe = ids
+        .where((id) => RegExp(r'^[a-z0-9]{15}$').hasMatch(id))
+        .toSet()
+        .toList();
+    if (safe.isEmpty) return const {};
+    final filter = safe.map((id) => 'id="$id"').join(' || ');
+    try {
+      final records = await pb.withAuthRetry(
+        () => pb
+            .collection('users')
+            .getFullList(filter: filter)
+            .timeout(const Duration(seconds: 10)),
+      );
+      final result = <String, AppUser>{};
+      for (final r in records) {
+        final photoRaw = r.get<dynamic>('photo');
+        String? photoUrl;
+        if (photoRaw is String && photoRaw.isNotEmpty) {
+          photoUrl = pb.files.getUrl(r, photoRaw).toString();
+        } else if (photoRaw is List && photoRaw.isNotEmpty) {
+          final first = photoRaw.first;
+          if (first is String && first.isNotEmpty) {
+            photoUrl = pb.files.getUrl(r, first).toString();
+          }
+        }
+        result[r.id] = AppUser(
+          id: r.id,
+          name: r.getStringValue('name'),
+          phone: '',
+          photoPath: photoUrl,
+          rating: r.getDoubleValue('rating_as_executor'),
+          reviewsCount: r.getIntValue('reviews_count_as_executor'),
+          ratingAsCustomer: r.getDoubleValue('rating_as_customer'),
+          reviewsCountAsCustomer: r.getIntValue('reviews_count_as_customer'),
+          ratingAsExecutor: r.getDoubleValue('rating_as_executor'),
+          reviewsCountAsExecutor: r.getIntValue('reviews_count_as_executor'),
+          hasTools: r.getBoolValue('has_tools'),
+          hasTransport: r.getBoolValue('has_transport'),
+        );
+      }
+      return result;
+    } catch (_) {
+      return const {};
+    }
+  }
 }
 
 class ContactPhone {

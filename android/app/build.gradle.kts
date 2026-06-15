@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -6,6 +9,18 @@ plugins {
     // Google services — подхватывает google-services.json (в этом же модуле,
     // android/app/google-services.json) и инжектит Firebase-настройки в сборку.
     id("com.google.gms.google-services")
+}
+
+// Релизный ключ подписи читаем из android/key.properties (вне git).
+// Файл с реальным keystore хранится у владельца проекта, не коммитится.
+// Если файла нет — собираем debug-ключом (как раньше), чтобы локальная
+// разработка и тестовые APK не требовали настройки. Перед публикацией в
+// Google Play создать key.properties с путём к keystore и паролями.
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+val hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -35,17 +50,42 @@ android {
         // не поддерживает EncryptedSharedPreferences, а наш токен сессии
         // лежит именно там. 5.0/5.1 — доли процента устройств, отказ
         // оправдан безопасностью.
-        minSdk = 23
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String?
+                keyPassword = keystoreProperties["keyPassword"] as String?
+                storeFile = (keystoreProperties["storeFile"] as String?)?.let { file(it) }
+                storePassword = keystoreProperties["storePassword"] as String?
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Реальный релизный ключ, если настроен key.properties; иначе
+            // debug-ключ (для локальных/тестовых сборок). Google Play
+            // примет только APK/AAB, подписанный настоящим release-ключом.
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+            // R8/минификацию НЕ трогаем явно: Flutter включает её в release
+            // по умолчанию (и так было во всех прежних сборках). Добавляем
+            // только наши keep-правила поверх дефолтных Flutter — чтобы
+            // обфускация не вырезала классы, которые Firebase, FCM и
+            // защищённое хранилище дёргают рефлексией.
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 }

@@ -12,6 +12,7 @@ import '../../core/utils/date_time_formatters.dart' show kPriceMin;
 import '../../core/utils/pb_date.dart';
 import '../mock/app_state.dart';
 import '../models/models.dart';
+import 'auth_repository.dart' show purgeLocalUserData;
 import 'order_mapper.dart';
 import 'pocketbase_client.dart';
 
@@ -45,7 +46,11 @@ class OrdersRepository {
     final auth = pb.authStore.record;
     if (auth == null) return const [];
     final filter = pb.filter(
-      '(customer = {:uid}) || (executor = {:uid} && (status = "accepted" || status = "completed"))',
+      // cancelled включён в ветку исполнителя, чтобы отменённый после
+      // принятия заказ (авто-отмена по неявке, удаление аккаунта заказчика)
+      // не исчезал из его Истории. Активные списки cancelled отсекают на
+      // клиенте, так что в «в работе» он не просочится.
+      '(customer = {:uid}) || (executor = {:uid} && (status = "accepted" || status = "completed" || status = "cancelled"))',
       {'uid': auth.id},
     );
     final records = await _withAuthRetry(() => pb
@@ -118,7 +123,14 @@ class OrdersRepository {
       return _ref
           .read(appControllerProvider)
           .orders
-          .where((o) => o.status == OrderStatus.open && (cityId == null || cityId.isEmpty || o.cityId == cityId))
+          // Заказ без города считаем совпадением: сид-заказы создаются без
+          // cityId, иначе мок-лента всегда пустая (фильтр по точному городу).
+          .where((o) =>
+              o.status == OrderStatus.open &&
+              (cityId == null ||
+                  cityId.isEmpty ||
+                  (o.cityId?.isEmpty ?? true) ||
+                  o.cityId == cityId))
           .toList();
     }
     final pb = _pb!;
@@ -146,37 +158,50 @@ class OrdersRepository {
       resp = await doRequest();
     } catch (e) {
       // В release не пишем `e` — текст ошибки http может содержать URL
-      // с query, который попадает в logcat.
+      // с query, который попадает в logcat. Ошибку пробрасываем наверх,
+      // чтобы лента показала «нет связи / повторить», а не пустой экран
+      // (иначе тост ошибки в pull-to-refresh был недостижим).
       if (kDebugMode) {
         debugPrint('[orders_repository] feed transport error: $e');
       }
-      return const [];
+      rethrow;
     }
     // Auth-flow: токен мог истечь, бэк отдаёт 401. Сначала пытаемся
     // молча обновить токен через общий single-flight — если параллельно
     // лента/мои заказы уже триггерят refresh, тут ждём его результат.
     if (resp.statusCode == 401 || resp.statusCode == 403) {
+      http.Response? retry;
       try {
         await pb.refreshAuthSingleFlight();
-        // Повтор запроса с новым токеном. Сохраняем cap на 1 — больше двух
-        // авторизационных циклов подряд почти всегда означает реальную
-        // проблему авторизации, продолжать перебор нет смысла.
-        final retry = await doRequest();
-        if (retry.statusCode == 200) {
-          return _parseFeedBody(retry.body, pb);
-        }
+        retry = await doRequest();
       } catch (e) {
         if (kDebugMode) {
-          debugPrint('[orders_repository] feed authRefresh failed: $e');
+          debugPrint('[orders_repository] feed refresh/retry failed: $e');
         }
       }
-      pb.authStore.clear();
-      try {
-        _ref.read(appControllerProvider.notifier).logout();
-      } catch (_) {}
-      return const [];
+      if (retry != null && retry.statusCode == 200) {
+        return _parseFeedBody(retry.body, pb);
+      }
+      // Разлогиниваем ТОЛЬКО если токен реально невалиден (как в общей
+      // обёртке withPbAuthRetry). Если refresh прошёл, а повтор упёрся во
+      // временный сбой (таймаут, 5xx, 429 от rate-limit, 403 city_mismatch) —
+      // сессия валидна, НЕ выкидываем юзера и не чистим кэш: отдаём ошибку
+      // наверх, лента покажет «не удалось, повторить».
+      if (!pb.authStore.isValid) {
+        pb.authStore.clear();
+        try {
+          _ref.read(appControllerProvider.notifier).logout();
+          // Полная локальная очистка — иначе фото/данные прошлого юзера
+          // остаются в кэше и провайдерах после принудительного выхода.
+          purgeLocalUserData(_ref);
+        } catch (_) {}
+        return const [];
+      }
+      throw Exception('feed retry failed (${retry?.statusCode ?? 'network'})');
     }
-    if (resp.statusCode != 200) return const [];
+    if (resp.statusCode != 200) {
+      throw Exception('feed http ${resp.statusCode}');
+    }
     return _parseFeedBody(resp.body, pb);
   }
 
@@ -228,13 +253,23 @@ class OrdersRepository {
           .timeout(_pbTimeout));
       // orderFromRecord может вернуть null для битых записей без customer.
       return orderFromRecord(r, pb);
-    } catch (e) {
-      // $e от PB ClientException содержит тело запроса/ответа — в release
-      // не пишем, чтобы не утекало в logcat.
+    } on ClientException catch (e) {
+      // $e от PB содержит тело запроса/ответа — в release не пишем.
       if (kDebugMode) {
-        debugPrint('[orders_repository] get($orderId) failed: $e');
+        debugPrint('[orders_repository] get($orderId) http ${e.statusCode}');
       }
-      return null;
+      // 404 — заказ реально удалён → null (экран покажет «заказ снят»).
+      // Остальное (сеть/5xx) пробрасываем, чтобы экран показал «не удалось
+      // загрузить» с кнопкой повтора, а не врал «заказ не найден» на живой
+      // заказ при плохой сети.
+      if (e.statusCode == 404) return null;
+      rethrow;
+    } catch (e) {
+      // Таймаут/обрыв сети — тоже наверх, не маскируем под «не найден».
+      if (kDebugMode) {
+        debugPrint('[orders_repository] get($orderId) error: $e');
+      }
+      rethrow;
     }
   }
 
@@ -278,7 +313,9 @@ class OrdersRepository {
     final body = <String, dynamic>{
       'customer': me.id,
       'category': draft.categoryId,
-      'city': _ref.read(appControllerProvider).selectedCity.id,
+      // Сырой id города (как на сервере), не резолвленный через встроенный
+      // список с молчаливым фолбэком на Москву.
+      'city': _ref.read(appControllerProvider).selectedCityId,
       'title': draft.title.trim(),
       'description': draft.description.trim(),
       'address': draft.address,
@@ -299,24 +336,39 @@ class OrdersRepository {
     // открывает файл и читает его кусочками во время отправки, не
     // загружая целиком в память. Размер указываем явно — http package
     // ставит правильный Content-Length вместо chunked transfer.
-    final List<http.MultipartFile> files = [];
-    for (final f in photoFiles ?? const <File>[]) {
-      if (!f.existsSync()) continue;
-      final length = await f.length();
-      files.add(http.MultipartFile(
-        'photos',
-        f.openRead(),
-        length,
-        filename: f.path.split(Platform.pathSeparator).last,
-      ));
+    //
+    // ВАЖНО: список файлов пересобираем на КАЖДУЮ попытку. Поток
+    // `f.openRead()` одноразовый, а `_withAuthRetry` при истёкшем токене
+    // (401/403 — типично после возврата из фона) обновляет токен и
+    // повторяет операцию целиком. Если переиспользовать уже прочитанные
+    // потоки, повтор детерминированно падает («поток уже прослушан»), и
+    // создание заказа С ФОТО не проходит — пользователю приходится жать
+    // «Опубликовать» заново. Замыкание открывает свежие потоки на каждый
+    // вызов.
+    Future<List<http.MultipartFile>> buildFiles() async {
+      final List<http.MultipartFile> files = [];
+      for (final f in photoFiles ?? const <File>[]) {
+        if (!f.existsSync()) continue;
+        final length = await f.length();
+        files.add(http.MultipartFile(
+          'photos',
+          f.openRead(),
+          length,
+          filename: f.path.split(Platform.pathSeparator).last,
+        ));
+      }
+      return files;
     }
     try {
       // upload фото может быть тяжелее обычного create — даём чуть больше
       // времени (фото на 8 МБ лимите × 5 шт + multipart-обвязка).
-      final r = await _withAuthRetry(() => pb
-          .collection('orders')
-          .create(body: body, files: files)
-          .timeout(const Duration(seconds: 30)));
+      final r = await _withAuthRetry(() async {
+        final files = await buildFiles();
+        return pb
+            .collection('orders')
+            .create(body: body, files: files)
+            .timeout(const Duration(seconds: 30));
+      });
       final created = orderFromRecord(r, pb);
       if (created == null) {
         // Не должно случиться: мы только что передали `customer` в body
@@ -576,6 +628,11 @@ class OrdersRepository {
         priceRub: price,
         status: OrderStatus.open,
         createdAt: createdAt,
+        // Свежесть в ленте считается от relisted_at (заказ приняли и вернули
+        // в работу), иначе от created — как и серверная чистка старых заказов.
+        // Без этого давно созданный, но недавно вернувшийся заказ старше 60
+        // дней пропадал из ленты. Сервер отдаёт relisted_at в ответе фида.
+        relistedAt: parsePbDate(m['relisted_at']?.toString()),
         scheduledAt: parsePbDate(m['scheduled_at']?.toString()),
         asap: m['asap'] == true,
         executorId: (executorIdRaw == null || executorIdRaw.isEmpty)
@@ -622,8 +679,12 @@ final myExecutorOrdersProvider = FutureProvider<List<Order>>((ref) async {
 /// addReview, setRole, executorActive, …) триггерила бы новый HTTP-запрос
 /// в `/api/orders/feed` — HTTP-флуд и дёрганая лента.
 final feedOrdersProvider = FutureProvider<List<Order>>((ref) async {
+  // Сырой сохранённый id города (как пришёл с сервера), НЕ резолвленный
+  // через встроенный список (тот при незнакомом id молча подставляет
+  // Москву). Иначе у жителя города вне встроенных 16 клиент слал бы чужой
+  // город → 403 и полностью сломанные лента/создание без релиза.
   final cityId = ref.watch(
-    appControllerProvider.select((s) => s.selectedCity.id),
+    appControllerProvider.select((s) => s.selectedCityId),
   );
   // Лента — это все open-заказы города. Никаких радиусов больше нет:
   // в UI слайдера «расстояние» не было, дефолтный 5-км круг скрывал

@@ -239,6 +239,19 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
   }
 
   void _pickSuggestion(AddressSuggestion s) {
+    // Подсказка без координат (новостройка и т.п.): НЕ затираем уже
+    // выбранную на карте точку/адрес — иначе кнопка «Выбрать» молча гаснет
+    // (canSubmit требует _selectedPoint), и сделанный выбор теряется без
+    // объяснения. Закрываем список и просим уточнить дом / выбрать на карте.
+    if (s.point == null) {
+      setState(() {
+        _showSuggestions = false;
+        _suggestions = const [];
+      });
+      FocusScope.of(context).unfocus();
+      AppToast.show(context, 'Уточните дом или выберите точку на карте');
+      return;
+    }
     setState(() {
       _selectedAddress = s.value;
       _selectedPoint = s.point;
@@ -248,9 +261,7 @@ class _SelectAddressScreenState extends ConsumerState<SelectAddressScreen> {
       _suggestions = const [];
     });
     FocusScope.of(context).unfocus();
-    if (s.point != null) {
-      _mapController.move(s.point!, 16);
-    }
+    _mapController.move(s.point!, 16);
   }
 
   Future<void> _onMapTap(LatLng point) async {
@@ -552,7 +563,6 @@ class _MapWithCenterPin extends StatelessWidget {
               OpenFreeMapMarker(
                 id: 'selected',
                 point: marker!,
-                color: AppColors.primary,
               ),
             ],
     );

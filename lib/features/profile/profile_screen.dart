@@ -189,12 +189,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   label: 'Отзывы',
                   onTap: () => context.push('/profile/reviews'),
                 ),
-                SizedBox(height: 8.h),
-                _MenuItem(
-                  iconAsset: 'assets/images/icon_support.webp',
-                  label: 'Связаться с нами',
-                  onTap: () => _showContactSheet(context),
-                ),
+                // Пункт показываем только если настроен хотя бы один канал
+                // поддержки. Без контактов кнопка раньше открывала шторку с
+                // фейковыми номерами — лучше вообще не показывать.
+                if (Env.hasAnySupportContact) ...[
+                  SizedBox(height: 8.h),
+                  _MenuItem(
+                    iconAsset: 'assets/images/icon_support.webp',
+                    label: 'Связаться с нами',
+                    onTap: () => _showContactSheet(context),
+                  ),
+                ],
                 // ── Debug-кнопка отправки тестового пуша ──
                 // Видна только в сборке с SHOW_DESIGN_TOGGLES=true.
                 // Удобно для разработки: нажал — сам получил пуш на
@@ -842,45 +847,54 @@ class _SupportSheet extends StatelessWidget {
               SizedBox(height: 16.h),
               Container(height: 1, color: AppColors.divider),
               SizedBox(height: 22.h),
-              Row(
-                children: [
-                  _SupportMessenger(
-                    label: 'WhatsApp',
-                    asset: 'assets/images/icon_whatsapp.webp',
-                    onTap: () => _open(
-                      context,
-                      () => MessengerLauncher.openWhatsApp(
-                        Env.supportWhatsAppPhone,
+              // Показываем только настроенные каналы (непустой контакт).
+              // Разделители 28.w ставим между присутствующими кнопками.
+              Builder(builder: (context) {
+                final items = <Widget>[
+                  if (Env.hasSupportWhatsApp)
+                    _SupportMessenger(
+                      label: 'WhatsApp',
+                      asset: 'assets/images/icon_whatsapp.webp',
+                      onTap: () => _open(
+                        context,
+                        () => MessengerLauncher.openWhatsApp(
+                          Env.supportWhatsAppPhone,
+                        ),
+                        'WhatsApp',
                       ),
-                      'WhatsApp',
                     ),
-                  ),
-                  SizedBox(width: 28.w),
-                  _SupportMessenger(
-                    label: 'Telegram',
-                    asset: 'assets/images/icon_telegram.webp',
-                    onTap: () => _open(
-                      context,
-                      () => MessengerLauncher.openTelegram(
-                        username: Env.supportTelegramUsername,
+                  if (Env.hasSupportTelegram)
+                    _SupportMessenger(
+                      label: 'Telegram',
+                      asset: 'assets/images/icon_telegram.webp',
+                      onTap: () => _open(
+                        context,
+                        () => MessengerLauncher.openTelegram(
+                          username: Env.supportTelegramUsername,
+                        ),
+                        'Telegram',
                       ),
-                      'Telegram',
                     ),
-                  ),
-                  SizedBox(width: 28.w),
-                  _SupportMessenger(
-                    label: 'MAX',
-                    asset: 'assets/images/icon_max.webp',
-                    onTap: () => _open(
-                      context,
-                      () => MessengerLauncher.openMax(
-                        phone: Env.supportMaxPhone,
+                  if (Env.hasSupportMax)
+                    _SupportMessenger(
+                      label: 'MAX',
+                      asset: 'assets/images/icon_max.webp',
+                      onTap: () => _open(
+                        context,
+                        () => MessengerLauncher.openMax(
+                          phone: Env.supportMaxPhone,
+                        ),
+                        'MAX',
                       ),
-                      'MAX',
                     ),
-                  ),
-                ],
-              ),
+                ];
+                final row = <Widget>[];
+                for (var i = 0; i < items.length; i++) {
+                  if (i > 0) row.add(SizedBox(width: 28.w));
+                  row.add(items[i]);
+                }
+                return Row(children: row);
+              }),
               SizedBox(height: 16.h),
             ],
           ),

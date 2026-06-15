@@ -49,11 +49,23 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       ProfileScreen(),
     ];
 
-    return Scaffold(
-      body: IndexedStack(index: _index, children: screens),
-      bottomNavigationBar: BottomTabBar(
-        index: _index,
-        onChanged: (i) => context.go('/home/${_tabNames[i]}'),
+    return PopScope(
+      // На первой вкладке (лента) системная «Назад» выходит из приложения —
+      // это штатно. На остальных вкладках «Назад» не выходит, а возвращает
+      // на первую: переключение вкладок идёт через go() (замена маршрута),
+      // без истории, поэтому сами вкладки «назад» не отыгрывают, и без этого
+      // перехвата «Назад» с любой вкладки закрывала приложение.
+      canPop: _index == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_index != 0) context.go('/home/${_tabNames[0]}');
+      },
+      child: Scaffold(
+        body: IndexedStack(index: _index, children: screens),
+        bottomNavigationBar: BottomTabBar(
+          index: _index,
+          onChanged: (i) => context.go('/home/${_tabNames[i]}'),
+        ),
       ),
     );
   }

@@ -90,6 +90,26 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
     return ok ?? false;
   }
 
+  /// Удаляет фото, выбранное в этом сеансе экрана, но не сохранённое (выход
+  /// без сохранения). Без этого скопированный в постоянное хранилище файл
+  /// оставался бы сиротой при каждом «выбрал фото → передумал → вышел».
+  /// Серверный URL и исходное фото не трогаем.
+  Future<void> _deleteUnsavedPickedPhoto() async {
+    final picked = _photoPath;
+    if (picked == null ||
+        picked == _initialPhotoPath ||
+        picked.startsWith('http')) {
+      return;
+    }
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      if (picked.startsWith(docs.path)) {
+        final f = File(picked);
+        if (await f.exists()) await f.delete();
+      }
+    } catch (_) {/* не критично */}
+  }
+
   @override
   void dispose() {
     _name.dispose();
@@ -135,6 +155,12 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
         '${docs.path}${Platform.pathSeparator}profile_${DateTime.now().millisecondsSinceEpoch}.jpg',
       );
       await source.copy(dst.path);
+      // compressAvatar вернул временный JPEG во временной папке — после
+      // копии в documents он больше не нужен. Удаляем, чтобы при каждой
+      // смене аватарки не копился файл-сирота во временном каталоге.
+      try {
+        if (await source.exists()) await source.delete();
+      } catch (_) {/* не критично */}
       // Удаляем предыдущую локальную аватарку из documents — иначе при
       // каждой смене фото в этом каталоге остаётся новый файл, а старый
       // навсегда. За год активной смены аватара набегает сотни МБ
@@ -202,7 +228,12 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
   bool get _canSave {
     final user = ref.read(appControllerProvider).user;
     if (user == null) return false;
-    final nameChanged = _name.text.trim() != user.name && _name.text.trim().isNotEmpty;
+    // Имя обязательно для всего условия: иначе можно стереть имя, тронуть
+    // чекбокс «инструмент/транспорт» — и в запрос уйдёт пустое имя (сервер
+    // отклонит невнятной ошибкой, заблокировав и сохранение чекбокса; мок
+    // молча подставит «Без имени»).
+    if (_name.text.trim().isEmpty) return false;
+    final nameChanged = _name.text.trim() != user.name;
     final photoChanged = _photoPath != user.photoPath;
     final toolsChanged = _hasTools != user.hasTools;
     final transportChanged = _hasTransport != user.hasTransport;
@@ -358,6 +389,9 @@ class _EditProfileScreenState extends ConsumerState<EditProfileScreen> {
         if (!mounted) return;
         final discard = await _confirmDiscard();
         if (!discard) return;
+        // Выбранное, но не сохранённое фото удаляем — иначе скопированный
+        // в постоянное хранилище файл остаётся сиротой.
+        await _deleteUnsavedPickedPhoto();
         if (!context.mounted) return;
         if (context.canPop()) context.pop();
       },
