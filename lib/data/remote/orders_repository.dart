@@ -10,6 +10,7 @@ import 'package:pocketbase/pocketbase.dart';
 
 import '../../core/utils/date_time_formatters.dart' show kPriceMin;
 import '../../core/utils/pb_date.dart';
+import '../../core/utils/realtime_throttle.dart';
 import '../mock/app_state.dart';
 import '../models/models.dart';
 import 'auth_repository.dart' show purgeLocalUserData;
@@ -691,4 +692,54 @@ final feedOrdersProvider = FutureProvider<List<Order>>((ref) async {
   // заказы из спальных районов. Бизнес-правило простое — видим то,
   // что в моём городе.
   return ref.read(ordersRepositoryProvider).feed(cityId: cityId);
+});
+
+/// Единая на всё приложение realtime-подписка на изменения заказов.
+/// Раньше лента и «Мои заказы» держали по своей подписке на orders/* — и
+/// каждое событие обрабатывалось дважды, плюс на off-stage вкладках висели
+/// лишние слушатели. Теперь один слушатель на сессию обновляет все три
+/// списка заказов сразу: статусы приходят на любой вкладке, без дублей.
+/// Главный экран watch'ит его, пока пользователь залогинен; при выходе
+/// (экран демонтируется) подписка снимается, при входе — поднимается снова.
+final ordersRealtimeProvider = Provider.autoDispose<void>((ref) {
+  final pb = ref.watch(pocketbaseProvider);
+  if (pb == null) return;
+  final throttle = RealtimeThrottle();
+  var disposed = false;
+  Future<void> Function()? unsub;
+
+  Future<void> start() async {
+    try {
+      final u = await pb.collection('orders').subscribe('*', (_) {
+        if (disposed) return;
+        // Первое событие применяем сразу (статус заказа меняется в реальном
+        // времени), всплеск последующих чужих событий склеиваем.
+        throttle.run(() {
+          if (disposed) return;
+          ref.invalidate(feedOrdersProvider);
+          ref.invalidate(myOrdersStreamProvider);
+          ref.invalidate(myExecutorOrdersProvider);
+        });
+      });
+      if (disposed) {
+        await u();
+        return;
+      }
+      unsub = u;
+    } catch (_) {/* WebSocket недоступен — экраны работают без realtime */}
+  }
+
+  // ignore: discarded_futures
+  start();
+
+  ref.onDispose(() {
+    disposed = true;
+    throttle.dispose();
+    final u = unsub;
+    unsub = null;
+    if (u != null) {
+      // ignore: discarded_futures
+      u();
+    }
+  });
 });

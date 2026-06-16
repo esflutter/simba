@@ -13,7 +13,6 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/backend_error.dart';
 import '../../core/utils/order_display.dart';
-import '../../core/utils/realtime_throttle.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/city_pill.dart';
 import '../../core/widgets/openfreemap_view.dart';
@@ -36,14 +35,6 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     with WidgetsBindingObserver {
   bool _mapMode = false;
 
-  /// PB realtime-подписка на всю коллекцию orders. Когда любой заказ
-  /// меняется (другой заказчик принял исполнителя, заказ отменили,
-  /// статус ушёл из open), сервер шлёт событие — мы инвалидируем фид
-  /// и список перерисовывается без принятого/отменённого заказа.
-  /// Без этого исполнители видели уже-принятые заказы в ленте/на
-  /// карте до swipe-down.
-  Future<void> Function()? _ordersUnsub;
-
   /// Тиковый таймер для перерисовки ленты раз в минуту. Без него
   /// заказы, у которых scheduledAt прошёл (`isExpiredOpen=true`) или
   /// которым 30+ дней без исполнителя (`isStaleOpenWithoutExecutor`),
@@ -51,16 +42,15 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   /// pull-to-refresh. Юзер тапал, получал 404 от сервера.
   Timer? _tickTimer;
 
-  /// Throttle realtime-событий orders. Первое событие обновляет ленту
-  /// сразу (статусы в реальном времени), всплеск последующих склеивается
-  /// в один догоняющий перезапрос — см. RealtimeThrottle.
-  final _ordersThrottle = RealtimeThrottle();
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeOrders());
+    // realtime-подписка на заказы — единая на всё приложение (см.
+    // ordersRealtimeProvider, поднимается на главном экране). Раньше лента
+    // держала свою подписку на orders/*; теперь обновления приходят
+    // централизованно. Тиковый таймер ниже оставляем — он про протухание
+    // заказов по времени, не про realtime.
     _tickTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (!mounted) return;
       // Лента (со списком заказов, где важно протухание по времени)
@@ -74,44 +64,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     });
   }
 
-  Future<void> _subscribeOrders() async {
-    if (!mounted) return;
-    final pb = ref.read(pocketbaseProvider);
-    if (pb == null) return;
-    try {
-      final unsub = await pb.collection('orders').subscribe('*', (_) {
-        if (!mounted) return;
-        // Любое изменение заказа — освежаем ленту. Сам фильтр на
-        // клиенте отбросит accepted/cancelled, сервер заодно вернёт
-        // актуальный набор. Throttle: первое событие применяем СРАЗУ
-        // (заказ ушёл из open — мгновенно исчезает из ленты), а поток
-        // чужих событий на росте аудитории склеиваем, чтобы не дёргать
-        // сеть десятки раз в секунду.
-        _ordersThrottle.run(() {
-          if (!mounted) return;
-          ref.invalidate(feedOrdersProvider);
-        });
-      });
-      if (!mounted) {
-        await unsub();
-        return;
-      }
-      _ordersUnsub = unsub;
-    } catch (_) {/* WebSocket недоступен — ок, лента ручную обновится */}
-  }
-
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _tickTimer?.cancel();
     _tickTimer = null;
-    _ordersThrottle.dispose();
-    final unsub = _ordersUnsub;
-    _ordersUnsub = null;
-    if (unsub != null) {
-      // ignore: discarded_futures
-      unsub();
-    }
     super.dispose();
   }
 
@@ -685,22 +642,50 @@ class _MapViewState extends ConsumerState<_MapView> {
       }
       final pos = await Geolocator.getLastKnownPosition();
       if (pos == null || !mounted) return;
-      // Если фактическое местоположение принадлежит другому
-      // миллионнику (юзер выбрал Новосибирск в city-picker, но
-      // физически в Москве) — переключаем город. Карта тогда
-      // переедет к центру Москвы через didUpdateWidget выше.
-      // Делается только при первом открытии карты в сессии —
-      // повторно не дёргаем, чтобы не перетирать ручной выбор.
       final here = LatLng(pos.latitude, pos.longitude);
+      if (mounted) setState(() => _myLocation = here);
+      // Если фактическая точка попадает в ДРУГОЙ поддерживаемый город — не
+      // меняем молча (как было раньше), а предлагаем сменить попапом.
+      // nearestCityFor вернёт null, когда точка не входит в радиус ни одного
+      // города из списка приложения (область, село, далёкий регион) — тогда
+      // менять не на что, ничего не предлагаем. Решение за пользователем,
+      // спрашиваем один раз за сессию (гард _bootstrapped).
       final detected = MockData.nearestCityFor(here);
-      final currentId =
-          ref.read(appControllerProvider).selectedCityId;
+      final currentId = ref.read(appControllerProvider).selectedCityId;
       if (detected != null && detected.id != currentId) {
-        ref.read(appControllerProvider.notifier).setCity(detected.id);
-        return;
+        await _offerCitySwitch(detected);
       }
-      setState(() => _myLocation = here);
     } catch (_) {/* нет GPS / сервис выключен — оставляем центр города */}
+  }
+
+  /// Попап «вы в другом городе». Показывается только если фактическая точка
+  /// относится к городу из списка приложения и он не совпадает с выбранным.
+  /// Меняем город только по явному согласию пользователя.
+  Future<void> _offerCitySwitch(City detected) async {
+    if (!mounted) return;
+    final switchIt = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Сменить город?'),
+        content: Text(
+          'Похоже, вы сейчас в городе «${detected.name}», а выбран другой. '
+          'Показывать заказы для «${detected.name}»?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Оставить'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Сменить'),
+          ),
+        ],
+      ),
+    );
+    if (switchIt == true && mounted) {
+      ref.read(appControllerProvider.notifier).setCity(detected.id);
+    }
   }
 
   @override

@@ -316,10 +316,51 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
                 loading: () => const Center(
                   child: CircularProgressIndicator(color: AppColors.primary),
                 ),
-                error: (_, _) => Center(
-                  child: Text(
-                    'Не удалось загрузить отклики',
-                    style: AppText.body(color: AppColors.textSecondary),
+                error: (_, _) => RefreshIndicator(
+                  color: AppColors.primary,
+                  onRefresh: () async {
+                    ref.invalidate(pendingExecutorIdsProvider(orderId));
+                    try {
+                      await ref
+                          .read(pendingExecutorIdsProvider(orderId).future);
+                    } catch (_) {/* останемся в error — юзер повторит */}
+                  },
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      SizedBox(height: 120.h),
+                      Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Не удалось загрузить отклики',
+                              style:
+                                  AppText.body(color: AppColors.textSecondary),
+                            ),
+                            SizedBox(height: 16.h),
+                            Material(
+                              color: AppColors.surface,
+                              borderRadius: BorderRadius.circular(10.r),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(10.r),
+                                onTap: () => ref.invalidate(
+                                    pendingExecutorIdsProvider(orderId)),
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(
+                                      horizontal: 24.w, vertical: 12.h),
+                                  child: Text(
+                                    'Повторить',
+                                    style:
+                                        AppText.button(color: AppColors.primary),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ),

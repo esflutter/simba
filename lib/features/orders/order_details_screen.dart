@@ -814,7 +814,10 @@ class _OrderDetailsBody extends ConsumerWidget {
         widgets.add(_StatusBanner(
           color: AppColors.surfaceVariant,
           textColor: AppColors.textSecondary,
-          label: 'Не удалось проверить отклик. Потяните вниз',
+          // Экран деталей заказа не реализует pull-to-refresh, поэтому не
+          // обещаем жест «потяните вниз» (его тут нет). Подсказываем рабочий
+          // способ — переоткрыть заказ.
+          label: 'Не удалось проверить отклик. Откройте заказ заново',
         ));
         return widgets;
       }
@@ -1805,9 +1808,31 @@ class _AsyncPrimaryButtonState extends State<_AsyncPrimaryButton> {
 
   @override
   Widget build(BuildContext context) {
-    return PrimaryButton(
-      label: widget.label,
-      onPressed: _busy ? null : _run,
+    if (!_busy) {
+      return PrimaryButton(label: widget.label, onPressed: _run);
+    }
+    // На время сетевого запроса показываем крутилку вместо текста. Раньше
+    // кнопка просто гасла (onPressed=null) без сигнала «идёт работа», и на
+    // медленной связи это читалось как «зависло» — юзер жал повторно.
+    return SizedBox(
+      width: double.infinity,
+      child: Material(
+        color: AppColors.primary,
+        borderRadius: BorderRadius.circular(16.r),
+        child: SizedBox(
+          height: 50.h,
+          child: Center(
+            child: SizedBox(
+              width: 22.r,
+              height: 22.r,
+              child: const CircularProgressIndicator(
+                color: AppColors.surface,
+                strokeWidth: 2.5,
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }

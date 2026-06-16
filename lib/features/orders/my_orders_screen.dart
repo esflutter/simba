@@ -7,13 +7,11 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/backend_error.dart';
 import '../../core/utils/order_display.dart';
-import '../../core/utils/realtime_throttle.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/auth_repository.dart' show authRepositoryProvider;
 import '../../data/remote/orders_repository.dart';
-import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
 import 'order_card.dart';
 
 enum _MyTab { customer, executor }
@@ -34,59 +32,75 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
   // Юзер тапнул по табу — больше не пересчитываем default при новых данных.
   bool _userPickedTab = false;
 
-  /// PB realtime-подписка на коллекцию orders. Без неё юзер, держащий
-  /// экран открытым, не видел изменений с другой стороны (исполнитель
-  /// отменил, заказчик завершил, авто-крон зачистил протухший заказ)
-  /// до pull-to-refresh. Подписываемся на '*' — клиентский фильтр
-  /// в build всё равно отбросит не свои заказы.
-  Future<void> Function()? _ordersUnsub;
+  // Кэш отфильтрованных списков. build() здесь дёргается на каждый тап по
+  // табу, на каждое realtime-событие (инвалидация провайдеров) и на любое
+  // изменение полей, на которые подписан .select. Без кэша оба .where()
+  // прогонялись бы заново каждый раз. Ключ собран из identity-хэшей
+  // исходных списков, их длин, myId и минутного «бакета» времени.
+  List<Order>? _cachedMine;
+  List<Order>? _cachedAsExecutor;
+  int? _cachedListKey;
 
-  /// Throttle realtime-событий: первое событие обновляет списки сразу,
-  /// всплеск последующих склеивается в один догоняющий перезапрос.
-  final _ordersThrottle = RealtimeThrottle();
+  (List<Order>, List<Order>) _filterLists({
+    required List<Order> myOrders,
+    required List<Order>? remoteExecutor,
+    required List<Order> mockOrders,
+    required String myId,
+  }) {
+    final timeBucket = DateTime.now().millisecondsSinceEpoch ~/ 60000;
+    final key = Object.hash(
+      identityHashCode(myOrders),
+      myOrders.length,
+      identityHashCode(remoteExecutor),
+      remoteExecutor?.length ?? -1,
+      identityHashCode(mockOrders),
+      mockOrders.length,
+      myId,
+      timeBucket,
+    );
+    if (_cachedListKey == key &&
+        _cachedMine != null &&
+        _cachedAsExecutor != null) {
+      return (_cachedMine!, _cachedAsExecutor!);
+    }
+    final mine = myOrders
+        .where((o) =>
+            o.customerId == myId &&
+            !o.isExpiredOpen &&
+            !o.isStaleOpenWithoutExecutor &&
+            o.status != OrderStatus.cancelled &&
+            !o.isCompletedByCustomer)
+        .toList();
+    final asExecutor = (remoteExecutor ??
+            mockOrders
+                .where((o) =>
+                    o.executorId == myId &&
+                    o.status != OrderStatus.cancelled &&
+                    !o.isCompletedByExecutor &&
+                    (o.status == OrderStatus.accepted ||
+                        o.status == OrderStatus.awaitingPayment))
+                .toList())
+        .where((o) => !o.isCompletedByExecutor)
+        .toList();
+    _cachedListKey = key;
+    _cachedMine = mine;
+    _cachedAsExecutor = asExecutor;
+    return (mine, asExecutor);
+  }
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeOrders());
-  }
-
-  Future<void> _subscribeOrders() async {
-    if (!mounted) return;
-    final pb = ref.read(pocketbaseProvider);
-    if (pb == null) return;
-    try {
-      final unsub = await pb.collection('orders').subscribe('*', (_) {
-        if (!mounted) return;
-        // Throttle: первое событие обновляет списки сразу (принятый/
-        // отменённый заказ виден в реальном времени), а поток чужих
-        // событий по '*' склеиваем, чтобы не дёргать оба провайдера
-        // десятки раз в секунду.
-        _ordersThrottle.run(() {
-          if (!mounted) return;
-          ref.invalidate(myOrdersStreamProvider);
-          ref.invalidate(myExecutorOrdersProvider);
-        });
-      });
-      if (!mounted) {
-        await unsub();
-        return;
-      }
-      _ordersUnsub = unsub;
-    } catch (_) {/* WebSocket недоступен — экран продолжит работать без realtime */}
+    // realtime-подписка на заказы — единая на всё приложение (см.
+    // ordersRealtimeProvider, поднимается на главном экране). Раньше этот
+    // экран держал свою подписку на orders/*; теперь обновления статусов
+    // приходят централизованно, без дубля.
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _ordersThrottle.dispose();
-    final unsub = _ordersUnsub;
-    _ordersUnsub = null;
-    if (unsub != null) {
-      // ignore: discarded_futures
-      unsub();
-    }
     super.dispose();
   }
 
@@ -178,30 +192,16 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
     // live-режиме возвращает заказы и customer-, и executor-стороны (один
     // запрос с OR). Без явной проверки customer'а заказы попадали в обе
     // вкладки одновременно.
-    final mine = myOrders
-        .where((o) =>
-            o.customerId == myId &&
-            !o.isExpiredOpen &&
-            // Заказы, провисевшие 30 дней без исполнителя, по продукту
-            // удаляются полностью — прячем их и в «Моих заказах», чтобы
-            // заказчик не видел призрак протухшего заказа.
-            !o.isStaleOpenWithoutExecutor &&
-            o.status != OrderStatus.cancelled &&
-            !o.isCompletedByCustomer)
-        .toList();
-    // asExecutor — заказы, в которых я исполнитель и я ещё не отметил
-    // оплату полученной.
-    final asExecutor = (remoteExecutor ??
-            mockOrders
-                .where((o) =>
-                    o.executorId == myId &&
-                    o.status != OrderStatus.cancelled &&
-                    !o.isCompletedByExecutor &&
-                    (o.status == OrderStatus.accepted ||
-                        o.status == OrderStatus.awaitingPayment))
-                .toList())
-        .where((o) => !o.isCompletedByExecutor)
-        .toList();
+    // Фильтрация вынесена в кэширующий помощник: «мои» (где я заказчик, ещё
+    // не завершён/не отменён) и «как исполнитель» (принятые, оплату не
+    // отметил) пересчитываются только при смене входных данных или раз в
+    // минуту (протухание по времени), а не на каждый ребилд.
+    final (mine, asExecutor) = _filterLists(
+      myOrders: myOrders,
+      remoteExecutor: remoteExecutor,
+      mockOrders: mockOrders,
+      myId: myId,
+    );
 
     // Дефолтная вкладка фиксируется ОДИН раз на основе текущей роли
     // и того, что есть в обоих списках на момент готовности данных.

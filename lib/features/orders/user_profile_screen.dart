@@ -652,15 +652,17 @@ class _CandidateActionBar extends StatefulWidget {
 }
 
 class _CandidateActionBarState extends State<_CandidateActionBar> {
-  bool _busy = false;
+  // Какое действие сейчас выполняется ('accept'/'decline'/null). Нужно,
+  // чтобы показать крутилку именно на нажатой кнопке, а вторую — погасить.
+  String? _busyAction;
 
-  Future<void> _run(Future<void> Function() action) async {
-    if (_busy) return;
-    setState(() => _busy = true);
+  Future<void> _run(String kind, Future<void> Function() action) async {
+    if (_busyAction != null) return;
+    setState(() => _busyAction = kind);
     try {
       await action();
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) setState(() => _busyAction = null);
     }
   }
 
@@ -692,14 +694,20 @@ class _CandidateActionBarState extends State<_CandidateActionBar> {
                 label: 'Принять',
                 background: AppColors.primary,
                 textColor: AppColors.surface,
-                onTap: _busy ? null : () => _run(widget.onAccept),
+                busy: _busyAction == 'accept',
+                onTap: _busyAction != null
+                    ? null
+                    : () => _run('accept', widget.onAccept),
               ),
               SizedBox(height: 8.h),
               _ActionBarButton(
                 label: 'Отклонить',
                 background: AppColors.surfaceVariant,
                 textColor: AppColors.error,
-                onTap: _busy ? null : () => _run(widget.onDecline),
+                busy: _busyAction == 'decline',
+                onTap: _busyAction != null
+                    ? null
+                    : () => _run('decline', widget.onDecline),
               ),
             ],
           ),
@@ -715,17 +723,25 @@ class _ActionBarButton extends StatelessWidget {
     required this.background,
     required this.textColor,
     required this.onTap,
+    this.busy = false,
   });
   final String label;
   final Color background;
   final Color textColor;
   final VoidCallback? onTap;
 
+  /// `true` — по этой кнопке идёт запрос: сохраняем активный цвет и
+  /// показываем крутилку вместо текста.
+  final bool busy;
+
   @override
   Widget build(BuildContext context) {
     final disabled = onTap == null;
+    // Нажатая кнопка (busy) остаётся в активном цвете со спиннером; вторая,
+    // просто отключённая на время запроса, гаснет серым.
+    final active = busy || !disabled;
     return Material(
-      color: disabled ? AppColors.surfaceVariant : background,
+      color: active ? background : AppColors.surfaceVariant,
       borderRadius: BorderRadius.circular(16.r),
       child: InkWell(
         borderRadius: BorderRadius.circular(16.r),
@@ -734,16 +750,25 @@ class _ActionBarButton extends StatelessWidget {
           width: double.infinity,
           height: 50.h,
           child: Center(
-            child: Text(
-              label,
-              style: TextStyle(
-                color: disabled ? AppColors.textTertiary : textColor,
-                fontSize: 17.sp,
-                fontWeight: FontWeight.w600,
-                height: 1.29,
-                letterSpacing: -0.40,
-              ),
-            ),
+            child: busy
+                ? SizedBox(
+                    width: 22.r,
+                    height: 22.r,
+                    child: CircularProgressIndicator(
+                      color: textColor,
+                      strokeWidth: 2.5,
+                    ),
+                  )
+                : Text(
+                    label,
+                    style: TextStyle(
+                      color: disabled ? AppColors.textTertiary : textColor,
+                      fontSize: 17.sp,
+                      fontWeight: FontWeight.w600,
+                      height: 1.29,
+                      letterSpacing: -0.40,
+                    ),
+                  ),
           ),
         ),
       ),

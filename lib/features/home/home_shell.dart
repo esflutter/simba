@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/widgets/bottom_tab_bar.dart';
+import '../../data/remote/orders_repository.dart' show ordersRealtimeProvider;
 import '../create_order/create_service_type_screen.dart';
 import '../orders/feed_screen.dart';
 import '../orders/my_orders_screen.dart';
@@ -42,6 +43,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    // Единая realtime-подписка на заказы на всё время сессии (пока главный
+    // экран жив). Обновляет ленту, «Мои заказы» и список исполнителя на
+    // любой вкладке — вместо двух отдельных подписок в этих экранах.
+    ref.watch(ordersRealtimeProvider);
+
     const screens = <Widget>[
       FeedScreen(),
       CreateServiceTypeScreen(),

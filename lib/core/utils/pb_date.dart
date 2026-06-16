@@ -13,7 +13,11 @@ DateTime? parsePbDate(String? s) {
   if (s == null || s.isEmpty) return null;
   final parsed = DateTime.tryParse(s);
   if (parsed == null) {
-    debugPrint('[parsePbDate] failed to parse "$s"');
+    // Только в debug: в release не пишем в системный лог (единообразно с
+    // остальным кодом — все debugPrint обёрнуты в kDebugMode).
+    if (kDebugMode) {
+      debugPrint('[parsePbDate] failed to parse "$s"');
+    }
     return null;
   }
   return parsed.isUtc ? parsed.toLocal() : parsed;
