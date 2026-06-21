@@ -76,6 +76,18 @@ String? nextOnboardingRoute(AppState state) {
   return null;
 }
 
+/// Обязательные для ВСЕХ (включая гостя) шаги перед использованием
+/// приложения: показ онбординга и выбор города. Вход сюда НЕ входит —
+/// каталог доступен без входа (App Store 5.1.1). Возвращает маршрут
+/// недостающего шага или null, если оба пройдены.
+String? onboardingGateRoute(AppState state) {
+  if (!state.onboardingSeen) return '/onboarding';
+  if (state.selectedCityId == null || state.selectedCityId!.isEmpty) {
+    return '/city';
+  }
+  return null;
+}
+
 /// Куда направить юзера после успешной авторизации.
 /// Новый юзер (только что зарегистрирован) → на profile-setup независимо от
 /// прочего состояния — нужно собрать имя/город перед первым входом.
@@ -99,12 +111,17 @@ GoRouter _buildRouter(Ref ref, Listenable refresh) {
       GoRoute(path: '/splash', builder: (_, _) => const SplashScreen()),
       GoRoute(path: '/onboarding', builder: (_, _) => const OnboardingScreen()),
       GoRoute(path: '/city', builder: (_, _) => const CityPickerScreen()),
-      GoRoute(path: '/auth/phone', builder: (_, _) => const PhoneScreen()),
+      GoRoute(
+        path: '/auth/phone',
+        builder: (_, s) =>
+            PhoneScreen(gate: s.uri.queryParameters['gate'] == '1'),
+      ),
       GoRoute(
         path: '/auth/sms',
         builder: (_, s) => SmsCodeScreen(
           phone: s.uri.queryParameters['phone'] ?? '',
           sessionId: s.uri.queryParameters['session_id'],
+          gate: s.uri.queryParameters['gate'] == '1',
         ),
       ),
       GoRoute(path: '/auth/profile', builder: (_, _) => const ProfileSetupScreen()),
@@ -154,10 +171,36 @@ GoRouter _buildRouter(Ref ref, Listenable refresh) {
     redirect: (context, st) {
       final loc = st.matchedLocation;
       final state = ref.read(appControllerProvider);
-      final next = nextOnboardingRoute(state);
-      const guarded = ['/home', '/create', '/order', '/profile/'];
-      final isGuarded = guarded.any(loc.startsWith);
-      if (isGuarded && next != null) return next;
+
+      // Онбординг и выбор города обязательны для ВСЕХ (включая гостя).
+      if (!state.onboardingSeen) {
+        return (loc == '/onboarding' || loc == '/splash') ? null : '/onboarding';
+      }
+      if (state.selectedCityId == null || state.selectedCityId!.isEmpty) {
+        return (loc == '/city' || loc == '/splash' || loc == '/onboarding')
+            ? null
+            : '/city';
+      }
+
+      final isGuest = state.user == null;
+
+      // Маршруты-действия требуют входа. В обычном UI действия перехватывает
+      // мягкий лист (requireAuth), сюда гость попадает только через deep-link —
+      // уводим его в ленту. Авторизованного без имени — на досборку профиля.
+      // Лента /home/orders и просмотр доступны гостю и здесь НЕ перечислены.
+      const actionPrefixes = [
+        '/create',
+        '/profile/',
+        '/order',
+        '/search',
+        '/home/create',
+        '/home/my',
+        '/home/profile',
+      ];
+      if (actionPrefixes.any(loc.startsWith)) {
+        if (isGuest) return '/home/orders';
+        if (state.user!.name.trim().isEmpty) return '/auth/profile';
+      }
 
       // Защита deep-link маршрутов авторизации. Иначе через intent/URL
       // можно открыть /auth/role или /auth/profile без авторизации и

@@ -368,7 +368,16 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                 if (hasUser) {
                                   _goAfterCityChosen(_selectedId!);
                                 } else {
-                                  context.go('/auth/phone');
+                                  // Гость: после выбора города — в ленту
+                                  // (каталог доступен без входа, App Store
+                                  // 5.1.1), а не на экран входа. Если /city
+                                  // открыт поверх ленты (смена города) — просто
+                                  // закрываем.
+                                  if (context.canPop()) {
+                                    context.pop();
+                                  } else {
+                                    context.go('/home/orders');
+                                  }
                                 }
                                 ctrl.setCity(_selectedId!);
                               }

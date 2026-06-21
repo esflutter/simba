@@ -9,13 +9,19 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/plural_ru.dart' show formatRetryAfter;
 import '../../core/utils/ru_phone_formatter.dart';
+import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_text_field.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/remote/auth_repository.dart';
 
 class PhoneScreen extends ConsumerStatefulWidget {
-  const PhoneScreen({super.key});
+  const PhoneScreen({super.key, this.gate = false});
+
+  /// true — экран открыт как ГЕЙТ действия из гостевого режима, а не как
+  /// обязательный шаг онбординга. Тогда показываем «назад» (вернуться в
+  /// ленту) и после входа возвращаем к действию, а не на /home/my.
+  final bool gate;
 
   @override
   ConsumerState<PhoneScreen> createState() => _PhoneScreenState();
@@ -107,6 +113,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
     setState(() => _isSending = true);
     try {
       final phone = _ctrl.text;
+      final gateParam = widget.gate ? '&gate=1' : '';
       final auth = ref.read(authRepositoryProvider);
       if (auth.isLive) {
         final result = await auth.sendOtpDetailed(phone);
@@ -125,7 +132,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
         final sessionId = result.sessionId ?? '';
         final encPhone = Uri.encodeComponent(phone);
         final encSid = Uri.encodeComponent(sessionId);
-        context.push('/auth/sms?session_id=$encSid&phone=$encPhone');
+        context.push('/auth/sms?session_id=$encSid&phone=$encPhone$gateParam');
         // if (result.status == 'otp_required') {
         //   context.push('/auth/sms?session_id=$encSid&phone=$encPhone');
         // } else {
@@ -135,7 +142,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
         // Mock-режим: бэка нет, переходим сразу на форму ввода — там
         // принимается любой 4-значный код кроме `0000`.
         if (!mounted) return;
-        context.push('/auth/sms?phone=${Uri.encodeComponent(phone)}');
+        context.push('/auth/sms?phone=${Uri.encodeComponent(phone)}$gateParam');
       }
     } catch (e) {
       // Репозиторий переводит сетевые ошибки в errorCode, но редкое
@@ -159,6 +166,16 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              // В режиме гейта (вход вызван действием гостя) экран должен
+              // закрываться назад в ленту — показываем стрелку «назад».
+              if (widget.gate)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(vertical: 4.h),
+                    child: const AppBackButton(),
+                  ),
+                ),
               Expanded(
                 child: SingleChildScrollView(
                   child: Column(

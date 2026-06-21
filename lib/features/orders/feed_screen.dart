@@ -11,6 +11,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/utils/auth_gate.dart';
 import '../../core/utils/backend_error.dart';
 import '../../core/utils/order_display.dart';
 import '../../core/widgets/app_toast.dart';
@@ -167,6 +168,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     final isExecutor = ref.watch(
       appControllerProvider.select((s) => s.role == UserRole.executor),
     );
+    // Гость видит каталог (ленту) независимо от роли; любое действие на этом
+    // экране (переключить режим, открыть карточку) уводит на мягкий вход.
+    final isGuest = ref.watch(
+      appControllerProvider.select((s) => s.user == null),
+    );
     final selectedCity = ref.watch(
       appControllerProvider.select((s) => s.selectedCity),
     );
@@ -204,6 +210,10 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
             title: 'Заказы',
             cityName: selectedCity.name,
             onSwitchRole: () async {
+              // Переключение режима пишет в профиль — действие за входом.
+              if (!requireAuth(context, ref, reason: 'переключить режим')) {
+                return;
+              }
               final goingActive = !isExecutor;
               ref.read(appControllerProvider.notifier).setRole(
                     goingActive ? UserRole.executor : UserRole.customer,
@@ -286,7 +296,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
             showSearch: isExecutor && orders.isNotEmpty,
           ),
           Expanded(
-              child: !isExecutor
+              child: (!isExecutor && !isGuest)
                   ? const _PausedState()
                   : Stack(
                       children: [
@@ -309,8 +319,13 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                             _MapView(
                               orders: orders,
                               center: selectedCity.center,
-                              onMarkerTap: (id) =>
-                                  context.push('/order/$id?mode=feed'),
+                              onMarkerTap: (id) {
+                                if (!requireAuth(context, ref,
+                                    reason: 'посмотреть заказ')) {
+                                  return;
+                                }
+                                context.push('/order/$id?mode=feed');
+                              },
                             ),
                           ],
                         ),
@@ -575,7 +590,13 @@ class _ListView extends ConsumerWidget {
           return OrderCard(
             order: o,
             categoryName: categoryNameOf(o),
-            onTap: () => context.push('/order/${o.id}?mode=feed'),
+            onTap: () {
+              // Гость — на мягкий вход; авторизованный открывает карточку.
+              if (!requireAuth(context, ref, reason: 'посмотреть заказ')) {
+                return;
+              }
+              context.push('/order/${o.id}?mode=feed');
+            },
           );
         },
       ),

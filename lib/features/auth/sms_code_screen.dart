@@ -28,12 +28,17 @@ class SmsCodeScreen extends ConsumerStatefulWidget {
     super.key,
     required this.phone,
     this.sessionId,
+    this.gate = false,
   });
 
   final String phone;
 
   /// session_id из Mobile Authorization. В моках не передаётся.
   final String? sessionId;
+
+  /// true — вход вызван как гейт действия из гостевого режима. После входа
+  /// существующего юзера возвращаем в ленту, а не на /home/my.
+  final bool gate;
 
   @override
   ConsumerState<SmsCodeScreen> createState() => _SmsCodeScreenState();
@@ -235,7 +240,11 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
           if (!result.isNewUser) {
             await appNotifier.markOnboardingSeen();
           }
-          router.go(result.isNewUser ? '/auth/profile' : '/home/my');
+          router.go(
+            result.isNewUser
+                ? '/auth/profile'
+                : (widget.gate ? '/home/orders' : '/home/my'),
+          );
         }
         return;
       }
@@ -277,7 +286,14 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
         await ref.read(appControllerProvider.notifier).markOnboardingSeen();
         if (!mounted) return;
       }
-      context.go(postAuthRoute(ref, isNewUser: result.isNewUser));
+      // Вход из гейта действия (гостевой режим): существующего юзера
+      // возвращаем в ленту, а не на /home/my. Новый юзер всё равно идёт на
+      // досборку профиля через postAuthRoute.
+      if (widget.gate && !result.isNewUser) {
+        context.go('/home/orders');
+      } else {
+        context.go(postAuthRoute(ref, isNewUser: result.isNewUser));
+      }
     } catch (e) {
       // Сетевые ошибки репозиторий уже переводит в result.errorCode, но
       // редкий случай (битое тело ответа, исключение при разборе) долетит

@@ -48,6 +48,11 @@ class AppState {
   /// онбординг не показывается даже после logout.
   final bool onboardingSeen;
 
+  /// Гость — пользователь, который прошёл онбординг и выбрал город, но НЕ
+  /// вошёл. Каталог (лента заказов) ему доступен (App Store 5.1.1), любое
+  /// действие — за входом (см. requireAuth).
+  bool get isGuest => user == null;
+
   City get selectedCity {
     final id = selectedCityId;
     if (id == null) return MockData.cities.first;

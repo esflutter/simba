@@ -61,12 +61,23 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
     // заменяет весь стек, и открытый по ссылке заказ исчез бы.
     if (GoRouterState.of(context).uri.toString() != '/splash') return;
     final state = ref.read(appControllerProvider);
-    final next = nextOnboardingRoute(state);
-    if (next != null) {
-      context.go(next);
+    // Онбординг и город обязательны для всех; вход — нет (каталог доступен
+    // гостю, App Store 5.1.1).
+    final gate = onboardingGateRoute(state);
+    if (gate != null) {
+      context.go(gate);
       return;
     }
-    final tab = state.role == UserRole.customer ? 'my' : 'orders';
+    final user = state.user;
+    // Авторизованный, но имя не заполнено — досборка профиля.
+    if (user != null && user.name.trim().isEmpty) {
+      context.go('/auth/profile');
+      return;
+    }
+    // Гость и исполнитель открываются на ленте, авторизованный заказчик —
+    // на «Мои заказы».
+    final tab =
+        (user != null && state.role == UserRole.customer) ? 'my' : 'orders';
     context.go('/home/$tab');
     // Если приложение открыли тапом по пушу при холодном старте — применяем
     // отложенную глубокую ссылку ПОВЕРХ главной (стек: главная → заказ),
