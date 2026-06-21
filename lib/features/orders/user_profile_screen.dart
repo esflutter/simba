@@ -925,13 +925,19 @@ class _ContactSheet extends StatelessWidget {
                   ),
                   SizedBox(width: 28.w),
                   _Messenger(
-                    label: 'MAX',
-                    asset: 'assets/images/icon_max.webp',
+                    // У MAX нет ссылки/схемы «открыть диалог по номеру»
+                    // (диплинки только на чаты/каналы/ботов, поиск по номеру —
+                    // ручной внутри приложения), поэтому здесь вместо MAX —
+                    // SMS: системное приложение сообщений по номеру. В шторке
+                    // поддержки MAX остаётся (там контакт — username/ссылка).
+                    label: 'SMS',
+                    icon: Icons.sms_rounded,
+                    iconBg: const Color(0xFF34C759),
                     enabled: hasPhone,
                     onTap: () => _open(
                       context,
-                      () => MessengerLauncher.openMax(phone: phone),
-                      'MAX',
+                      () => MessengerLauncher.openSms(phone),
+                      'SMS',
                     ),
                   ),
                 ],
@@ -948,13 +954,21 @@ class _ContactSheet extends StatelessWidget {
 class _Messenger extends StatelessWidget {
   const _Messenger({
     required this.label,
-    required this.asset,
     required this.onTap,
+    this.asset,
+    this.icon,
+    this.iconBg,
     this.enabled = true,
-  });
+  }) : assert(asset != null || icon != null);
 
   final String label;
-  final String asset;
+
+  /// Логотип мессенджера (webp) — для WhatsApp/Telegram/MAX.
+  final String? asset;
+
+  /// Глиф в цветной плитке — для каналов без webp-логотипа (SMS).
+  final IconData? icon;
+  final Color? iconBg;
   final VoidCallback onTap;
 
   /// `false` → иконка приглушена, тап игнорируется. Используется, когда
@@ -964,6 +978,17 @@ class _Messenger extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final Widget glyph = icon != null
+        ? Container(
+            width: 60.r,
+            height: 60.r,
+            decoration: BoxDecoration(
+              color: iconBg ?? AppColors.primary,
+              borderRadius: BorderRadius.circular(16.r),
+            ),
+            child: Icon(icon, color: Colors.white, size: 32.r),
+          )
+        : Image.asset(asset!, width: 60.r, height: 60.r);
     return GestureDetector(
       onTap: enabled ? onTap : null,
       behavior: HitTestBehavior.opaque,
@@ -972,7 +997,7 @@ class _Messenger extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Image.asset(asset, width: 60.r, height: 60.r),
+            glyph,
             SizedBox(height: 5.h),
             Text(
               label,

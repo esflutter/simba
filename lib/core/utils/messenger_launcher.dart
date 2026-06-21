@@ -74,6 +74,16 @@ class MessengerLauncher {
     return _tryAll(candidates);
   }
 
+  /// Открыть системное приложение сообщений (SMS) с подставленным номером.
+  /// Контакт «после мэтча» вместо MAX: у MAX нет ссылки «открыть диалог по
+  /// номеру», а SMS есть на любом телефоне. Ведущий «+» сохраняем
+  /// (международный формат), остальное чистим.
+  static Future<bool> openSms(String phone) async {
+    final cleaned = phone.replaceAll(RegExp(r'[^0-9+]'), '');
+    if (cleaned.replaceAll('+', '').isEmpty) return false;
+    return _tryAll(<String>['sms:$cleaned']);
+  }
+
   /// Перебор кандидатов: первый успешный запуск — выходим.
   /// `canLaunchUrl` важен для пользовательских схем (whatsapp/tg/max) —
   /// они декларированы в AndroidManifest и Info.plist. Для https‑fallback

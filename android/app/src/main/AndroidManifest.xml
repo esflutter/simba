@@ -91,6 +91,17 @@
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="tel"/>
         </intent>
+        <!-- SMS: контакт «после мэтча» вместо MAX открывает приложение
+             сообщений по номеру. Без этой schema на Android 11+ canLaunchUrl
+             для sms: вернёт false и кнопка не сработает. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="sms"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO"/>
+            <data android:scheme="sms"/>
+        </intent>
         <!-- Deeplinks мессенджеров: нужны для canLaunchUrl/launchUrl
              через url_launcher. Без них на Android 11+ canLaunchUrl
              вернёт false, и наш fallback на https-ссылку не сработает. -->
