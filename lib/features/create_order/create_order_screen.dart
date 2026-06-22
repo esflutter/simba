@@ -320,6 +320,16 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                       setState(() {});
                     },
                   ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: EdgeInsets.only(top: 4.h),
+                      child: Text(
+                        '${_titleCtrl.text.length}/50',
+                        style: AppText.caption(color: AppColors.textTertiary),
+                      ),
+                    ),
+                  ),
                   SizedBox(height: 16.h),
                   SizedBox(
                     height: 132.h,
@@ -330,8 +340,22 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
                       minLines: 3,
                       maxLines: 6,
                       inputFormatters: [LengthLimitingTextInputFormatter(500)],
-                      onChanged: (v) =>
-                          ref.read(orderDraftProvider.notifier).update(description: v),
+                      onChanged: (v) {
+                        ref
+                            .read(orderDraftProvider.notifier)
+                            .update(description: v);
+                        setState(() {});
+                      },
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(
+                      padding: EdgeInsets.only(top: 4.h),
+                      child: Text(
+                        '${_descCtrl.text.length}/500',
+                        style: AppText.caption(color: AppColors.textTertiary),
+                      ),
                     ),
                   ),
                   if (widget.forOther) ...[

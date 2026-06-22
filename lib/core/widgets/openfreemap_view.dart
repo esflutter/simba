@@ -251,6 +251,11 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
   /// локального ассета `assets/maps/positron.json`, где у каждого
   /// `text-field` оставлен только `name:ru` с откатом на `name`
   /// (для мест без русского имени — например, мелких сёл за рубежом).
+  /// Декодированный JSON локальной темы карты — кэш на процесс. Тема
+  /// одинакова для всех карт и неизменяема (без сетевых провайдеров),
+  /// поэтому её безопасно разобрать один раз, а не при каждом открытии.
+  static Map<String, dynamic>? _localStyleJson;
+
   Future<Style> _loadLocalizedStyle() async {
     // Под VPN / нестабильным каналом первая попытка StyleReader может
     // упасть (TLS handshake таймаут, DNS-флап). Раньше карта в этом
@@ -289,10 +294,19 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
       throw lastError ?? Exception('map style unreachable');
     }
     try {
-      final String text =
-          await rootBundle.loadString('assets/maps/positron.json');
-      final dynamic parsed = await compute(jsonDecode, text);
-      if (parsed is! Map<String, dynamic>) return original;
+      // Разобранный JSON локальной темы берём из процесс-кэша: при
+      // повторном открытии экрана не грузим ассет и не парсим JSON заново.
+      Map<String, dynamic>? parsed = _localStyleJson;
+      if (parsed == null) {
+        final String text =
+            await rootBundle.loadString('assets/maps/positron.json');
+        final dynamic decoded = await compute(jsonDecode, text);
+        if (decoded is Map<String, dynamic>) {
+          parsed = decoded;
+          _localStyleJson = decoded;
+        }
+      }
+      if (parsed == null) return original;
       final vtr.Theme ruTheme = vtr.ThemeReader().read(parsed);
       return Style(
         name: original.name,

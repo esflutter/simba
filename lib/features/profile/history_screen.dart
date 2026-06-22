@@ -8,13 +8,11 @@ import 'package:intl/intl.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/order_display.dart';
-import '../../core/utils/realtime_throttle.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/orders_repository.dart';
-import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
 import '../orders/order_card.dart';
 
 enum _Tab { posted, executed }
@@ -40,55 +38,20 @@ class _HistoryScreenState extends ConsumerState<HistoryScreen>
   // активную вкладку под пальцем пользователя.
   bool _defaultApplied = false;
 
-  /// PB realtime-подписка на коллекцию orders. Когда какой-то заказ
-  /// переходит в completed/cancelled — он должен мгновенно появиться
-  /// в Истории, без pull-to-refresh.
-  Future<void> Function()? _ordersUnsub;
-
-  /// Throttle realtime-событий: первое событие обновляет Историю сразу,
-  /// всплеск последующих склеивается в один догоняющий перезапрос.
-  final _ordersThrottle = RealtimeThrottle();
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeOrders());
-  }
-
-  Future<void> _subscribeOrders() async {
-    if (!mounted) return;
-    final pb = ref.read(pocketbaseProvider);
-    if (pb == null) return;
-    try {
-      final unsub = await pb.collection('orders').subscribe('*', (_) {
-        if (!mounted) return;
-        // Throttle: первое событие обновляет Историю сразу (заказ
-        // завершён/отменён — появляется в реальном времени), а поток
-        // чужих событий по '*' склеиваем в один догоняющий запрос.
-        _ordersThrottle.run(() {
-          if (!mounted) return;
-          ref.invalidate(myOrdersStreamProvider);
-        });
-      });
-      if (!mounted) {
-        await unsub();
-        return;
-      }
-      _ordersUnsub = unsub;
-    } catch (_) {/* нет WebSocket — История продолжит работать без realtime */}
+    // Своя orders/* подписка убрана: глобальная ordersRealtimeProvider
+    // (живёт на главном экране, под которым в стеке открыта История) уже
+    // инвалидирует myOrders/myExecutor на том же потоке orders/*. Прежняя
+    // экранная подписка дублировала это и дважды дёргала перезапрос
+    // «Моих заказов» на каждое событие в базе.
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _ordersThrottle.dispose();
-    final unsub = _ordersUnsub;
-    _ordersUnsub = null;
-    if (unsub != null) {
-      // ignore: discarded_futures
-      unsub();
-    }
     super.dispose();
   }
 
