@@ -1,10 +1,13 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/config/env.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/plural_ru.dart' show formatRetryAfter;
@@ -31,6 +34,8 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
   final _ctrl = TextEditingController(text: '+7');
   bool _agreed = false;
   bool _isSending = false;
+  late final TapGestureRecognizer _termsTap;
+  late final TapGestureRecognizer _privacyTap;
 
   @override
   void initState() {
@@ -39,6 +44,27 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
     // как часть подложки, попытка туда тапнуть и начать печатать ломает
     // форматирование (формат предполагает, что цифры идут СТРОГО после +7).
     _ctrl.addListener(_clampCursorAfterPrefix);
+    _termsTap = TapGestureRecognizer()..onTap = () => _openDoc('terms.html');
+    _privacyTap = TapGestureRecognizer()
+      ..onTap = () => _openDoc('privacy.html');
+  }
+
+  /// Открыть юридический документ (раздаётся статикой сервера PocketBase
+  /// в pb_public) во внешнем браузере.
+  Future<void> _openDoc(String file) async {
+    final base = Env.pocketbaseUrl.replaceAll(RegExp(r'/+$'), '');
+    if (base.isEmpty) return;
+    try {
+      final ok = await launchUrl(
+        Uri.parse('$base/$file'),
+        mode: LaunchMode.externalApplication,
+      );
+      if (!ok && mounted) {
+        AppToast.show(context, 'Не удалось открыть документ');
+      }
+    } catch (_) {
+      if (mounted) AppToast.show(context, 'Не удалось открыть документ');
+    }
   }
 
   void _clampCursorAfterPrefix() {
@@ -85,6 +111,8 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
   void dispose() {
     _ctrl.removeListener(_clampCursorAfterPrefix);
     _ctrl.dispose();
+    _termsTap.dispose();
+    _privacyTap.dispose();
     super.dispose();
   }
 
@@ -211,12 +239,10 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                 ),
               ),
               SizedBox(height: 12.h),
-              // Чекбокс согласия. Тап работает как по самому квадратику,
-              // так и по тексту рядом — раньше клик мимо квадратика 22×22
-              // игнорировался, и было непонятно, что галочка вообще
-              // переключается. На сами TextSpan'ы ссылок recognizer не
-              // навешен, отдельных переходов на «Условия / Политику» нет,
-              // так что общий GestureDetector конфликтов не вызывает.
+              // Чекбокс согласия. Тап по квадратику или по обычному тексту
+              // рядом переключает галочку; тап по подчёркнутым ссылкам
+              // «Условия» / «Политика» открывает документ — recognizer на
+              // span'е перехватывает тап раньше общего GestureDetector.
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: _isSending
@@ -264,6 +290,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                             const TextSpan(text: 'Согласен(а) с '),
                             TextSpan(
                               text: 'Условиями использования',
+                              recognizer: _termsTap,
                               style: AppText.caption(color: AppColors.primary)
                                   .copyWith(
                                 decoration: TextDecoration.underline,
@@ -273,6 +300,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                             const TextSpan(text: ' и '),
                             TextSpan(
                               text: 'Политикой конфиденциальности',
+                              recognizer: _privacyTap,
                               style: AppText.caption(color: AppColors.primary)
                                   .copyWith(
                                 decoration: TextDecoration.underline,

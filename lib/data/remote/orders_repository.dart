@@ -360,6 +360,22 @@ class OrdersRepository {
       }
       return files;
     }
+    // Перед публикацией синхронизируем серверный users.city с городом
+    // заказа. Смена города отправляется «вслепую» (fire-and-forget PATCH) и
+    // могла не дойти при обрыве сети — тогда серверный city остаётся старым,
+    // и create упирается в city_mismatch. Идемпотентная правка (тот же
+    // город) гарантирует совпадение и убирает тупик «сменил город → создаю».
+    final cityForOrder = _ref.read(appControllerProvider).selectedCityId;
+    if (cityForOrder != null && cityForOrder.isNotEmpty) {
+      try {
+        await _withAuthRetry(() => pb
+            .collection('users')
+            .update(me.id, body: {'city': cityForOrder})
+            .timeout(_pbTimeout));
+      } catch (_) {
+        // Сеть недоступна — сам create ниже вернёт понятную ошибку сети.
+      }
+    }
     try {
       // upload фото может быть тяжелее обычного create — даём чуть больше
       // времени (фото на 8 МБ лимите × 5 шт + multipart-обвязка).

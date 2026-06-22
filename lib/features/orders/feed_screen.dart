@@ -44,6 +44,11 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
   /// pull-to-refresh. Юзер тапал, получал 404 от сервера.
   Timer? _tickTimer;
 
+  /// Счётчик минутных тиков для периодической переотправки координат
+  /// исполнителя (раз в 15 минут), чтобы он не выпадал из push-сегмента
+  /// «заказ рядом» по протуханию last_location_at.
+  int _locationTick = 0;
+
   @override
   void initState() {
     super.initState();
@@ -63,6 +68,15 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
       final isExecutor =
           ref.read(appControllerProvider).role == UserRole.executor;
       if (isExecutor) setState(() {});
+      // Раз в 15 минут, пока «Готов помочь» включён, переотправляем
+      // координаты — иначе last_location_at протухает за 6ч и пуши
+      // «заказ рядом» перестают приходить, хотя тумблер включён.
+      if (++_locationTick >= 15) {
+        _locationTick = 0;
+        ref
+            .read(appControllerProvider.notifier)
+            .refreshExecutorLocationIfActive();
+      }
     });
   }
 
@@ -90,6 +104,9 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     // выпадал из каталога при первом же сворачивании приложения. Ленту выше
     // мы уже освежили — этого гостю достаточно.
     if (ref.read(appControllerProvider).user == null) return;
+    // Вернулись в приложение — если исполнитель активен, сразу освежаем
+    // координаты (last_location_at), чтобы не выпасть из пушей о заказах.
+    ref.read(appControllerProvider.notifier).refreshExecutorLocationIfActive();
     // Проактивно дёргаем refresh-токен: если он истёк пока юзер был
     // в фоне, без этого первый запрос упирался бы в 401 и юзера
     // выкидывало на /auth/phone уже после действия. Теперь — сразу

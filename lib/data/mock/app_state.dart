@@ -355,6 +355,17 @@ class AppController extends Notifier<AppState> {
     _syncExecutorStatus(active);
   }
 
+  /// Переотправить координаты исполнителя, если он сейчас активен («Готов
+  /// помочь» включён). Зовём периодически и при возврате в приложение:
+  /// иначе last_location_at на сервере протухает за location.fresh_ttl_hours
+  /// (деф. 6ч), исполнитель выпадает из push-сегмента new_order_nearby и
+  /// перестаёт получать пуши о заказах рядом, хотя тумблер включён.
+  void refreshExecutorLocationIfActive() {
+    if (state.executorActive) {
+      _syncExecutorStatus(true);
+    }
+  }
+
   /// Шлёт `/api/me/executor-status` на бэк. Fire-and-forget: ошибки лога —
   /// сетевые ошибки не должны блокировать смену роли в UI. Если есть PB —
   /// запрашивает текущие координаты через geolocator (без блокировки UI),
