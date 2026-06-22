@@ -124,15 +124,14 @@ class _OrderDetailsScreenState extends ConsumerState<OrderDetailsScreen> {
         widget.orderId,
         (_) {
           if (!mounted) return;
-          // Сервер сообщил об изменении этого заказа — перечитываем
-          // основной провайдер + смежные. feedOrdersProvider тоже
-          // инвалидируем: если заказ перешёл из open в accepted,
-          // он должен пропасть из ленты у всех исполнителей в
-          // следующее обращение к фиду.
+          // Перечитываем ТОЛЬКО уникальное для этого экрана: саму запись
+          // заказа и счётчик ожидающих откликов. Три списка (лента, мои
+          // заказы, мои как исполнитель) на том же потоке orders/* уже
+          // инвалидирует глобальная подписка ordersRealtimeProvider — она
+          // жива, пока в стеке навигатора лежит главный экран (заказ всегда
+          // открывается через push ПОВЕРХ него). Раньше эти три списка
+          // дёргались дважды на каждое событие (и без троттлинга).
           ref.invalidate(orderByIdProvider(widget.orderId));
-          ref.invalidate(myOrdersStreamProvider);
-          ref.invalidate(myExecutorOrdersProvider);
-          ref.invalidate(feedOrdersProvider);
           ref.invalidate(pendingExecutorIdsProvider(widget.orderId));
         },
       );

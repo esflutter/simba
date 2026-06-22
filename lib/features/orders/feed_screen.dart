@@ -325,6 +325,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                             ),
                             _MapView(
                               orders: orders,
+                              active: _mapMode,
                               center: selectedCity.center,
                               onMarkerTap: (id) {
                                 if (!requireAuth(context, ref,
@@ -679,10 +680,17 @@ class _ListView extends ConsumerWidget {
 class _MapView extends ConsumerStatefulWidget {
   const _MapView({
     required this.orders,
+    required this.active,
     required this.center,
     this.onMarkerTap,
   });
   final List<Order> orders;
+
+  /// Видна ли карта прямо сейчас (активная вкладка IndexedStack). Карта
+  /// остаётся смонтированной и в скрытом состоянии, поэтому build дёргается
+  /// на любой ребилд ленты. При active == false не пересобираем список
+  /// маркеров — переиспользуем последний (состояние карты не теряется).
+  final bool active;
   final LatLng center;
   final ValueChanged<String>? onMarkerTap;
 
@@ -701,6 +709,10 @@ class _MapViewState extends ConsumerState<_MapView> {
   /// мы бы дёргали Geolocator повторно и заново предлагали авто-смену
   /// города, перезатирая ручной выбор пользователя.
   bool _bootstrapped = false;
+
+  /// Последний собранный список маркеров. Пока карта скрыта
+  /// (widget.active == false), не пересобираем его на каждый ребилд ленты.
+  List<OpenFreeMapMarker> _markers = const [];
 
   @override
   void initState() {
@@ -785,12 +797,20 @@ class _MapViewState extends ConsumerState<_MapView> {
   Widget build(BuildContext context) {
     // Только заказы с валидной геоточкой попадают на карту (в ленте это
     // всегда open-заказы). Маркеры одинаковые — пин без окраски по статусу.
-    final markers = widget.orders
-        .map((o) => OpenFreeMapMarker(
-              id: o.id,
-              point: o.location,
-            ))
-        .toList();
+    // Маркеры пересобираем только когда карта видна. При скрытой карте
+    // build всё равно вызывается (IndexedStack держит виджет живым), но
+    // гонять map/toList по всем заказам и пересчитывать ключ слоя смысла
+    // нет. При переключении на карту build приходит с active == true в том
+    // же кадре, поэтому к показу маркеры всегда свежие.
+    if (widget.active) {
+      _markers = widget.orders
+          .map((o) => OpenFreeMapMarker(
+                id: o.id,
+                point: o.location,
+              ))
+          .toList();
+    }
+    final markers = _markers;
     // Приоритет: пользовательская позиция (если permission выдан) →
     // центр выбранного города.
     final initialCenter = _myLocation ?? widget.center;
