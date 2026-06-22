@@ -703,7 +703,14 @@ final feedOrdersProvider = FutureProvider<List<Order>>((ref) async {
 /// (экран демонтируется) подписка снимается, при входе — поднимается снова.
 final ordersRealtimeProvider = Provider.autoDispose<void>((ref) {
   final pb = ref.watch(pocketbaseProvider);
-  if (pb == null) return;
+  // Пересоздаём подписку при смене юзера (гость→вошёл, выход). Без этого SDK
+  // не переавторизует уже открытую анонимную подписку: гость подписался бы
+  // без токена, и после входа realtime молчал бы весь сеанс. Гостю
+  // (userId == null) подписка не нужна — события заказов ему по правилам
+  // коллекции всё равно не приходят; при входе провайдер пересоздастся
+  // (userId сменится) и подпишется уже с токеном.
+  final userId = ref.watch(appControllerProvider.select((s) => s.user?.id));
+  if (pb == null || userId == null) return;
   final throttle = RealtimeThrottle();
   var disposed = false;
   Future<void> Function()? unsub;

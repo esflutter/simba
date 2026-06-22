@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/system_bar_style.dart';
+import '../../data/mock/app_state.dart';
 
 // Размер заголовка «SimbA» на первой странице. Заказчик сравнивал два
 // варианта (32 и 36) и выбрал больший. На страницах 2–5 заголовок всегда
@@ -97,17 +98,18 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen>
     super.dispose();
   }
 
-  void _next() {
+  Future<void> _next() async {
     if (_index < _pages.length - 1) {
       _ctrl.nextPage(duration: const Duration(milliseconds: 308), curve: Curves.easeOut);
     } else {
-      // Раньше тут вызывался markOnboardingSeen — после первого
-      // долистывания страниц онбординг считался «просмотренным».
-      // Но если пользователь не доходил до конца регистрации
-      // (закрывал на экране города/телефона), на следующий запуск
-      // онбординг не показывался, а флоу обрывался посередине.
-      // Теперь флаг «просмотрен» ставится в конце регистрации
-      // (см. role_picker_screen), а здесь просто переходим к городу.
+      // Помечаем онбординг просмотренным ЗДЕСЬ. После онбординга доступен
+      // гостевой каталог без входа (App Store 5.1.1), а редирект требует
+      // флаг onboardingSeen, чтобы пройти на /city и дальше. Гость входа не
+      // проходит, поэтому ставить флаг только в конце регистрации нельзя —
+      // иначе фрешевый пользователь застревал в петле онбординг↔город.
+      // (Метод markOnboardingSeen идемпотентен и переживает logout.)
+      await ref.read(appControllerProvider.notifier).markOnboardingSeen();
+      if (!mounted) return;
       context.go('/city');
     }
   }

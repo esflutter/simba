@@ -83,6 +83,12 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
     ref.invalidate(feedOrdersProvider);
     ref.invalidate(myOrdersStreamProvider);
     ref.invalidate(myExecutorOrdersProvider);
+    // Гость (не вошёл) не имеет сессии — обновлять или терять нечего. Без
+    // этой проверки tryRefreshAuth у гостя вернёт false, и блок ниже увёл бы
+    // его на /auth/phone (без gate, без кнопки «назад»), то есть гость
+    // выпадал из каталога при первом же сворачивании приложения. Ленту выше
+    // мы уже освежили — этого гостю достаточно.
+    if (ref.read(appControllerProvider).user == null) return;
     // Проактивно дёргаем refresh-токен: если он истёк пока юзер был
     // в фоне, без этого первый запрос упирался бы в 401 и юзера
     // выкидывало на /auth/phone уже после действия. Теперь — сразу
@@ -554,7 +560,15 @@ class _ListView extends ConsumerWidget {
                               text: 'создайте заказ самостоятельно',
                               style: TextStyle(color: AppColors.primary),
                               recognizer: TapGestureRecognizer()
-                                ..onTap = () => context.go('/home/create'),
+                                ..onTap = () {
+                                  // Гость — на мягкий вход, как и остальные
+                                  // действия, а не молчаливый отскок роутером.
+                                  if (!requireAuth(context, ref,
+                                      reason: 'создать заказ')) {
+                                    return;
+                                  }
+                                  context.go('/home/create');
+                                },
                             ),
                             const TextSpan(text: '.'),
                           ],
