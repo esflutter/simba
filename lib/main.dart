@@ -31,7 +31,13 @@ final _kSystemBarStyle = simbaSystemBarStyle();
 /// сообщений (например, тихое обновление счётчика непрочитанных).
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp();
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {
+    // На устройствах без сервисов Google (Huawei) initializeApp бросает.
+    // Без try/catch фоновый изолят молча падает. Тихо игнорируем: data-only
+    // обработки в фоне пока нет, баннер рисует сам FCM из notification-поля.
+  }
 }
 
 Future<void> main() async {

@@ -279,14 +279,14 @@ class PushHandler {
             ? null
             : _PushTarget('/order/$orderId/responses',
                 parent: '/order/$orderId');
+      // Все эти типы сервер реально шлёт, и каждый ведёт на экран заказа.
+      // Список держим в точном соответствии с серверными типами (см.
+      // enqueueNotification в main.pb.js), иначе тап уходит в пустоту:
+      // `new_order_nearby` — главный лид исполнителя, `order_completed` —
+      // «Заказ завершён» (раньше его тут не было — тап не открывал ничего).
       case 'order_accepted':
-      case 'order_cancelled':
-      case 'work_done':
-      case 'payment_received':
       case 'review_request':
-      // Эти типы реально шлёт сервер, но раньше их тут не было — тап по
-      // ним не открывал ничего. `new_order_nearby` — главный лид
-      // исполнителя («Новый заказ рядом»), вёл в пустоту.
+      case 'order_completed':
       case 'new_order_nearby':
       case 'order_taken_by_other':
       case 'executor_cancelled':
