@@ -625,7 +625,10 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
 
   Future<void> _callPhone(String phone) async {
     final sanitized = phone.replaceAll(RegExp(r'[^0-9+]'), '');
-    if (sanitized.isEmpty) return;
+    if (sanitized.isEmpty) {
+      if (mounted) AppToast.show(context, 'Номер телефона недоступен');
+      return;
+    }
     final uri = Uri.parse('tel:$sanitized');
     try {
       // canLaunchUrl + проверка результата launchUrl — без них на

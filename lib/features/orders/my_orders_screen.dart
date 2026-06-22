@@ -8,6 +8,7 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/backend_error.dart';
 import '../../core/utils/order_display.dart';
 import '../../core/widgets/app_toast.dart';
+import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/auth_repository.dart' show authRepositoryProvider;
@@ -181,6 +182,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
     final isInitialLoading =
         (asyncMine.isLoading && !asyncMine.hasValue) ||
             (asyncExec.isLoading && !asyncExec.hasValue);
+    final hasError = asyncMine.hasError || asyncExec.hasError;
     final myId = myUserId ?? 'me';
     final myOrders = remoteOrders ?? mockMyOrders;
     // mine — заказы, где Я ЗАКАЗЧИК (customerId == myId). По новой схеме
@@ -287,6 +289,60 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen>
               child: isInitialLoading
                   ? const Center(
                       child: CircularProgressIndicator(color: AppColors.primary),
+                    )
+                  : (hasError && visible.isEmpty)
+                  ? LayoutBuilder(
+                      builder: (context, constraints) => SingleChildScrollView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        child: ConstrainedBox(
+                          constraints:
+                              BoxConstraints(minHeight: constraints.maxHeight),
+                          child: Center(
+                            child: Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 32.w),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.cloud_off_rounded,
+                                      size: 64.r,
+                                      color: AppColors.textSecondary),
+                                  SizedBox(height: 16.h),
+                                  Text(
+                                    'Не удалось загрузить заказы',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: AppColors.textPrimary,
+                                      fontSize: 20.sp,
+                                      fontWeight: FontWeight.w600,
+                                      height: 1.25,
+                                      letterSpacing: -0.45,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4.h),
+                                  Text(
+                                    'Проверьте подключение к интернету и попробуйте снова',
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: AppColors.textSecondary,
+                                      fontSize: 15.sp,
+                                      height: 1.3,
+                                    ),
+                                  ),
+                                  SizedBox(height: 24.h),
+                                  PrimaryButton(
+                                    label: 'Повторить',
+                                    expanded: false,
+                                    onPressed: () {
+                                      ref.invalidate(myOrdersStreamProvider);
+                                      ref.invalidate(myExecutorOrdersProvider);
+                                    },
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     )
                   : visible.isEmpty
                   ? LayoutBuilder(
