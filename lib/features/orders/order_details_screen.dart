@@ -13,6 +13,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/theme/system_bar_style.dart';
+import '../../core/utils/auth_gate.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/utils/backend_error.dart';
 import '../../core/widgets/app_back_button.dart';
@@ -119,6 +120,10 @@ class _OrderDetailsScreenState extends ConsumerState<OrderDetailsScreen> {
     if (!mounted) return;
     final pb = ref.read(pocketbaseProvider);
     if (pb == null) return;
+    // Гость (без валидного токена) realtime не подписывается: коллекция orders
+    // закрыта правилом для анонима, событий он всё равно не получит. Деталь
+    // заказа гость смотрит статично.
+    if (!pb.authStore.isValid) return;
     try {
       final unsub = await pb.collection('orders').subscribe(
         widget.orderId,
@@ -692,6 +697,8 @@ class _OrderDetailsBody extends ConsumerWidget {
     }
 
     Future<void> respond() async {
+      // Гость может смотреть карточку, но откликнуться — только после входа.
+      if (!requireAuth(context, ref, reason: 'откликнуться на заказ')) return;
       try {
         await ref.read(orderResponsesRepositoryProvider).respond(order.id);
         if (!context.mounted) return;
@@ -1662,7 +1669,7 @@ class _Field extends StatelessWidget {
   }
 }
 
-class _PartyCard extends StatelessWidget {
+class _PartyCard extends ConsumerWidget {
   const _PartyCard({
     required this.userId,
     required this.orderId,
@@ -1679,14 +1686,18 @@ class _PartyCard extends StatelessWidget {
   final String? photoUrlFromOrder;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final mockUser = userById(userId);
     final name = (nameFromOrder != null && nameFromOrder!.isNotEmpty)
         ? nameFromOrder!
         : (mockUser?.name ?? 'Без имени');
     final photoPath = photoUrlFromOrder ?? mockUser?.photoPath;
     return InkWell(
-      onTap: () => context.push('/order/$orderId/user/$userId'),
+      onTap: () {
+        // Профиль контрагента — после входа (гость смотрит только карточку).
+        if (!requireAuth(context, ref, reason: 'посмотреть профиль')) return;
+        context.push('/order/$orderId/user/$userId');
+      },
       child: SizedBox(
         height: 64.h,
         child: Padding(

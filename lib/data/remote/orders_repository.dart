@@ -243,8 +243,15 @@ class OrdersRepository {
       }
       return null;
     }
+    final pb = _pb!;
+    // Гость (без валидного токена) не может прочитать заказ через коллекцию
+    // (viewRule требует auth) — берём обезличенную версию через публичную
+    // ручку /api/orders/{id}/public, как и гостевую ленту. Иначе гость видел
+    // список, но не мог открыть карточку.
+    if (!pb.authStore.isValid) {
+      return _getPublicOrder(orderId, pb);
+    }
     try {
-      final pb = _pb!;
       final r = await _withAuthRetry(() => pb
           .collection('orders')
           .getOne(
@@ -269,6 +276,30 @@ class OrdersRepository {
       // Таймаут/обрыв сети — тоже наверх, не маскируем под «не найден».
       if (kDebugMode) {
         debugPrint('[orders_repository] get($orderId) error: $e');
+      }
+      rethrow;
+    }
+  }
+
+  /// Обезличенный одиночный заказ для гостя (просмотр каталога без входа).
+  /// Те же поля, что и в гостевой ленте: без ФИО/фото/точного адреса,
+  /// координаты огрублены. 404 → null («заказ снят»); сеть/5xx → наверх.
+  Future<Order?> _getPublicOrder(String orderId, PocketBase pb) async {
+    try {
+      final resp = await sendWithSharedClient(
+        (c) => c
+            .get(Uri.parse('${pb.baseURL}/api/orders/$orderId/public'))
+            .timeout(const Duration(seconds: 10)),
+      );
+      if (resp.statusCode == 404) return null;
+      if (resp.statusCode != 200) {
+        throw Exception('public order http ${resp.statusCode}');
+      }
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      return _orderFromFeedItem(body['item'], pb);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('[orders_repository] getPublic($orderId) error: $e');
       }
       rethrow;
     }

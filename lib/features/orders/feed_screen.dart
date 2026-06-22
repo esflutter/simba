@@ -345,10 +345,7 @@ class _FeedScreenState extends ConsumerState<FeedScreen>
                               active: _mapMode,
                               center: selectedCity.center,
                               onMarkerTap: (id) {
-                                if (!requireAuth(context, ref,
-                                    reason: 'посмотреть заказ')) {
-                                  return;
-                                }
+                                // Просмотр доступен и гостю (каталог без входа).
                                 context.push('/order/$id?mode=feed');
                               },
                             ),
@@ -681,10 +678,8 @@ class _ListView extends ConsumerWidget {
             order: o,
             categoryName: categoryNameOf(o),
             onTap: () {
-              // Гость — на мягкий вход; авторизованный открывает карточку.
-              if (!requireAuth(context, ref, reason: 'посмотреть заказ')) {
-                return;
-              }
+              // Просмотр заказа доступен и гостю (каталог без входа).
+              // Вход требуется только на действиях внутри карточки.
               context.push('/order/${o.id}?mode=feed');
             },
           );
