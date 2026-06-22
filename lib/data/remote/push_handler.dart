@@ -284,6 +284,12 @@ class PushHandler {
       case 'work_done':
       case 'payment_received':
       case 'review_request':
+      // Эти типы реально шлёт сервер, но раньше их тут не было — тап по
+      // ним не открывал ничего. `new_order_nearby` — главный лид
+      // исполнителя («Новый заказ рядом»), вёл в пустоту.
+      case 'new_order_nearby':
+      case 'order_taken_by_other':
+      case 'executor_cancelled':
         return orderId == null ? null : _PushTarget('/order/$orderId');
       case 'review_received':
         return _PushTarget('/profile/reviews');

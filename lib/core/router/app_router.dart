@@ -39,10 +39,13 @@ final routerProvider = Provider<GoRouter>((ref) {
   // /auth/phone (или /city, /onboarding по ситуации).
   final refresh = ValueNotifier<int>(0);
   ref.listen<AppState>(appControllerProvider, (prev, next) {
+    // Роль («Заказчик/Исполнитель») на маршрутизацию не влияет — её бамп
+    // зря заставлял GoRouter пересчитывать редирект всего стека на каждое
+    // переключение «Готов помочь». Отслеживаем только то, что реально
+    // меняет доступные маршруты: вход/выход, онбординг, выбранный город.
     final changed = prev?.user?.id != next.user?.id ||
         prev?.onboardingSeen != next.onboardingSeen ||
-        prev?.selectedCityId != next.selectedCityId ||
-        prev?.role != next.role;
+        prev?.selectedCityId != next.selectedCityId;
     if (changed) refresh.value++;
   });
   final router = _buildRouter(ref, refresh);
@@ -277,7 +280,10 @@ class _NotFoundPage extends StatelessWidget {
               SizedBox(height: 28.h),
               PrimaryButton(
                 label: 'На главный экран',
-                onPressed: () => context.go('/home/my'),
+                // Лента доступна всем (и гостю, и авторизованному). Раньше
+                // вело на «Мои заказы» — для гостя это закрытая вкладка,
+                // и редирект делал лишний прыжок в ленту.
+                onPressed: () => context.go('/home/orders'),
               ),
             ],
           ),

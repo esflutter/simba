@@ -234,7 +234,13 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
     final canContact = order != null &&
         order.status != OrderStatus.open &&
         order.status != OrderStatus.cancelled &&
-        (order.customerId == userId || order.executorId == userId);
+        (order.customerId == userId || order.executorId == userId) &&
+        // Сервер открывает телефон по завершённому заказу только 14 дней.
+        // Зеркалим это правило, иначе кнопки «Позвонить/Написать» висят
+        // вечно, а после 14 дней тап по ним ничего не даёт (403 contact_locked).
+        !(order.status == OrderStatus.completed &&
+            (order.completedAt == null ||
+                DateTime.now().difference(order.completedAt!).inDays >= 14));
 
     final ratingDistribution = <int, int>{1: 0, 2: 0, 3: 0, 4: 0, 5: 0};
     for (final r in reviews) {

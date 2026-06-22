@@ -68,8 +68,7 @@ class _LoginGateSheet extends StatelessWidget {
               ),
               SizedBox(height: 8.h),
               Text(
-                'Просмотр заказов доступен без входа. Для действий нужен '
-                'вход по номеру телефона.',
+                'Для этого действия нужен вход по номеру телефона.',
                 textAlign: TextAlign.center,
                 style: AppText.body().copyWith(
                   color: Colors.black.withValues(alpha: 0.60),

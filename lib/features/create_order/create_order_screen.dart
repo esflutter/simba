@@ -220,6 +220,11 @@ class _CreateOrderScreenState extends ConsumerState<CreateOrderScreen> {
     final canContinue = draft.categoryId != null &&
         _titleCtrl.text.trim().isNotEmpty &&
         _addressCtrl.text.trim().isNotEmpty &&
+        // Адрес должен быть геокодирован (есть координаты). Без них заказ не
+        // привязан к городу — сервер его отклонит (city-guard), а в ленте он
+        // был бы невидим. Раньше кнопка активировалась по одному тексту
+        // адреса, и юзер упирался в отказ уже на этапе публикации.
+        draft.location != null &&
         phoneOk;
 
     // Защита от исчезнувшей категории при рендере. Простой проход

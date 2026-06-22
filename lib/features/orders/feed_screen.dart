@@ -17,6 +17,7 @@ import '../../core/utils/order_display.dart';
 import '../../core/widgets/app_toast.dart';
 import '../../core/widgets/city_pill.dart';
 import '../../core/widgets/openfreemap_view.dart';
+import '../../core/widgets/primary_button.dart';
 import '../../data/mock/app_state.dart';
 import '../../data/mock/mock_data.dart';
 import '../../data/models/models.dart';
@@ -518,6 +519,63 @@ class _ListView extends ConsumerWidget {
       if (feedAsync.isLoading && !feedAsync.hasValue) {
         return const Center(
           child: CircularProgressIndicator(color: AppColors.primary),
+        );
+      }
+      // Ошибка сети/сервера и при этом нет данных — отдельное состояние с
+      // кнопкой «Повторить». Раньше при сбое лента выглядела как «заказов
+      // нет» (особенно заметно гостю — это его главный экран).
+      if (feedAsync.hasError && !feedAsync.hasValue) {
+        return RefreshIndicator(
+          color: AppColors.primary,
+          onRefresh: doRefresh,
+          child: LayoutBuilder(
+            builder: (context, constraints) => SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Center(
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 32.w),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.cloud_off_rounded,
+                            size: 64.r, color: AppColors.textSecondary),
+                        SizedBox(height: 16.h),
+                        Text(
+                          'Не удалось загрузить заказы',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 20.sp,
+                            fontWeight: FontWeight.w600,
+                            height: 1.25,
+                            letterSpacing: -0.45,
+                          ),
+                        ),
+                        SizedBox(height: 4.h),
+                        Text(
+                          'Проверьте подключение к интернету и попробуйте снова',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 15.sp,
+                            height: 1.3,
+                          ),
+                        ),
+                        SizedBox(height: 24.h),
+                        PrimaryButton(
+                          label: 'Повторить',
+                          expanded: false,
+                          onPressed: () => ref.invalidate(feedOrdersProvider),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
         );
       }
       return RefreshIndicator(
