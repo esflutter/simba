@@ -23,9 +23,22 @@ import '../../data/remote/pocketbase_client.dart';
 // cities (или отдельную view) — сейчас хардкод, потому что seed/миграция
 // такого поля не предоставляет.
 const _millionCityIds = [
-  'msk', 'spb', 'nsk', 'ekb', 'kzn', 'nn', 'krs',
-  'chl', 'sam', 'ufa', 'rnd', 'omk', 'krd', 'vrn',
-  'prm', 'vlg',
+  'msk',
+  'spb',
+  'nsk',
+  'ekb',
+  'kzn',
+  'nn',
+  'krs',
+  'chl',
+  'sam',
+  'ufa',
+  'rnd',
+  'omk',
+  'krd',
+  'vrn',
+  'prm',
+  'vlg',
 ];
 
 class CityPickerScreen extends ConsumerStatefulWidget {
@@ -57,8 +70,8 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
   List<City> _filter(List<City> all) => _query.isEmpty
       ? all
       : all
-          .where((c) => c.name.toLowerCase().contains(_query.toLowerCase()))
-          .toList();
+            .where((c) => c.name.toLowerCase().contains(_query.toLowerCase()))
+            .toList();
 
   @override
   void initState() {
@@ -115,8 +128,9 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
     // следующий шаг по состоянию с УЖЕ применённым городом. Иначе
     // nextOnboardingRoute вернул бы снова '/city', и первый тап «не
     // срабатывал» — уводил на тот же экран, дальше вёл только второй.
-    final state =
-        ref.read(appControllerProvider).copyWith(selectedCityId: chosenCityId);
+    final state = ref
+        .read(appControllerProvider)
+        .copyWith(selectedCityId: chosenCityId);
     final next = nextOnboardingRoute(state);
     context.go(next ?? '/home/my');
   }
@@ -200,7 +214,7 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                               onTap: () {
                                 final hasUser =
                                     ref.read(appControllerProvider).user !=
-                                        null;
+                                    null;
                                 if (hasUser && context.canPop()) {
                                   context.pop();
                                 } else {
@@ -257,89 +271,103 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
 
             // ── Список городов: появляется снизу ──
             Expanded(
-              child: FadeTransition(
-                opacity: _anim,
-                child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0, 0.08),
-                    end: Offset.zero,
-                  ).animate(_anim),
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 0),
-                    child: filtered.isEmpty
-                        ? Padding(
-                            padding: EdgeInsets.only(bottom: 16.h),
-                            child: _NoCityFound(
-                                onRequest: () => _showRequestSheet(context)),
-                          )
-                        : ListView.separated(
-                            padding: EdgeInsets.only(bottom: 16.h),
-                            itemCount: filtered.length,
-                            separatorBuilder: (context, index) =>
-                                SizedBox(height: 8.h),
-                            itemBuilder: (_, i) {
-                              final c = filtered[i];
-                              final selected = c.id == _selectedId;
-                              return Material(
-                                color: selected
-                                    ? AppColors.primarySoft
-                                    : AppColors.surface,
-                                borderRadius: BorderRadius.circular(16.r),
-                                child: InkWell(
+              // Список интерактивен только в режиме поиска. Иначе он, уже
+              // выцветший до прозрачности по `_anim` (opacity 0), оставался в
+              // дереве и ЛОВИЛ тапы: нажатие по «пустому» серому фону попадало
+              // в невидимые строки и переключало город — «список невидимый и
+              // не скрылся». IgnorePointer отключает попадания, пока поиск
+              // свёрнут (и до первого открытия списка, и после выбора города).
+              child: IgnorePointer(
+                ignoring: !_searching,
+                child: FadeTransition(
+                  opacity: _anim,
+                  child: SlideTransition(
+                    position: Tween<Offset>(
+                      begin: const Offset(0, 0.08),
+                      end: Offset.zero,
+                    ).animate(_anim),
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(16.w, 16.h, 16.w, 0),
+                      child: filtered.isEmpty
+                          ? Padding(
+                              padding: EdgeInsets.only(bottom: 16.h),
+                              child: _NoCityFound(
+                                onRequest: () => _showRequestSheet(context),
+                              ),
+                            )
+                          : ListView.separated(
+                              padding: EdgeInsets.only(bottom: 16.h),
+                              itemCount: filtered.length,
+                              separatorBuilder: (context, index) =>
+                                  SizedBox(height: 8.h),
+                              itemBuilder: (_, i) {
+                                final c = filtered[i];
+                                final selected = c.id == _selectedId;
+                                return Material(
+                                  color: selected
+                                      ? AppColors.primarySoft
+                                      : AppColors.surface,
                                   borderRadius: BorderRadius.circular(16.r),
-                                  onTap: () {
-                                    final ctrl = ref
-                                        .read(appControllerProvider.notifier);
-                                    final hasUser = ref
-                                            .read(appControllerProvider)
-                                            .user !=
-                                        null;
-                                    // Режим смены города (юзер уже создан) —
-                                    // сохраняем выбор и сразу возвращаемся.
-                                    // `setCity` сам сбрасывает адресные поля
-                                    // draft'а через `orderDraftProvider.notifier.clearAddress()`
-                                    // — здесь повторный вызов не нужен.
-                                    if (hasUser) {
-                                      // Навигация до setCity: setCity бампает
-                                      // refreshListenable роутера, pop на том
-                                      // же кадре пытался бы закрыть уже
-                                      // пересчитанный стек и проваливался.
-                                      _goAfterCityChosen(c.id);
-                                      ctrl.setCity(c.id);
-                                      return;
-                                    }
-                                    _searchCtrl.text = c.name;
-                                    setState(() => _selectedId = c.id);
-                                    _closeSearch();
-                                  },
-                                  child: SizedBox(
-                                    height: 48.h,
-                                    child: Padding(
-                                      padding: EdgeInsets.symmetric(
-                                          horizontal: 16.w),
-                                      child: Row(
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              c.name,
-                                              style: AppText.body()
-                                                  .copyWith(height: 1.50),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(16.r),
+                                    onTap: () {
+                                      final ctrl = ref.read(
+                                        appControllerProvider.notifier,
+                                      );
+                                      final hasUser =
+                                          ref
+                                              .read(appControllerProvider)
+                                              .user !=
+                                          null;
+                                      // Режим смены города (юзер уже создан) —
+                                      // сохраняем выбор и сразу возвращаемся.
+                                      // `setCity` сам сбрасывает адресные поля
+                                      // draft'а через `orderDraftProvider.notifier.clearAddress()`
+                                      // — здесь повторный вызов не нужен.
+                                      if (hasUser) {
+                                        // Навигация до setCity: setCity бампает
+                                        // refreshListenable роутера, pop на том
+                                        // же кадре пытался бы закрыть уже
+                                        // пересчитанный стек и проваливался.
+                                        _goAfterCityChosen(c.id);
+                                        ctrl.setCity(c.id);
+                                        return;
+                                      }
+                                      _searchCtrl.text = c.name;
+                                      setState(() => _selectedId = c.id);
+                                      _closeSearch();
+                                    },
+                                    child: SizedBox(
+                                      height: 48.h,
+                                      child: Padding(
+                                        padding: EdgeInsets.symmetric(
+                                          horizontal: 16.w,
+                                        ),
+                                        child: Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                c.name,
+                                                style: AppText.body().copyWith(
+                                                  height: 1.50,
+                                                ),
+                                              ),
                                             ),
-                                          ),
-                                          if (selected)
-                                            Icon(
-                                              IconsaxPlusLinear.tick_circle,
-                                              color: AppColors.primary,
-                                              size: 22.r,
-                                            ),
-                                        ],
+                                            if (selected)
+                                              Icon(
+                                                IconsaxPlusLinear.tick_circle,
+                                                color: AppColors.primary,
+                                                size: 22.r,
+                                              ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ),
-                                ),
-                              );
-                            },
-                          ),
+                                );
+                              },
+                            ),
+                    ),
                   ),
                 ),
               ),
@@ -357,11 +385,11 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                         label: 'Далее',
                         onPressed: canContinue
                             ? () {
-                                final ctrl = ref
-                                    .read(appControllerProvider.notifier);
-                                final hasUser = ref
-                                        .read(appControllerProvider)
-                                        .user !=
+                                final ctrl = ref.read(
+                                  appControllerProvider.notifier,
+                                );
+                                final hasUser =
+                                    ref.read(appControllerProvider).user !=
                                     null;
                                 // См. порядок «навигация до setCity» в onTap
                                 // списка выше.
@@ -411,13 +439,20 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
     if (pb != null) {
       unawaited(() async {
         try {
-          await pb.collection('city_requests').create(body: {
-            // schema-имя поля — name (раньше слали city_name → бэк отвергал).
-            'name': submitted.trim(),
-            if (pb.authStore.record?.id.isNotEmpty == true)
-              'user': pb.authStore.record!.id,
-          }).timeout(const Duration(seconds: 10));
-        } catch (_) {/* swallow — заявка некритична для дальнейшего флоу */}
+          await pb
+              .collection('city_requests')
+              .create(
+                body: {
+                  // schema-имя поля — name (раньше слали city_name → бэк отвергал).
+                  'name': submitted.trim(),
+                  if (pb.authStore.record?.id.isNotEmpty == true)
+                    'user': pb.authStore.record!.id,
+                },
+              )
+              .timeout(const Duration(seconds: 10));
+        } catch (_) {
+          /* swallow — заявка некритична для дальнейшего флоу */
+        }
       }());
     }
     // Для пользователей, меняющих город из «Заказов», страница уже открыта в
@@ -437,7 +472,6 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
     AppToast.show(context, 'Заявка отправлена. Спасибо!');
   }
 }
-
 
 class _NoCityFound extends StatelessWidget {
   const _NoCityFound({required this.onRequest});
@@ -503,8 +537,9 @@ class _RequestCitySheet extends StatefulWidget {
 }
 
 class _RequestCitySheetState extends State<_RequestCitySheet> {
-  late final TextEditingController _ctrl =
-      TextEditingController(text: widget.initialName);
+  late final TextEditingController _ctrl = TextEditingController(
+    text: widget.initialName,
+  );
   bool get _enabled => _ctrl.text.trim().isNotEmpty;
 
   @override
@@ -525,36 +560,36 @@ class _RequestCitySheetState extends State<_RequestCitySheet> {
           MediaQuery.viewInsetsOf(context).bottom + 16.h,
         ),
         child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Center(
-            child: Container(
-              width: 36.w,
-              height: 4.h,
-              decoration: BoxDecoration(
-                color: AppColors.divider,
-                borderRadius: BorderRadius.circular(2.r),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36.w,
+                height: 4.h,
+                decoration: BoxDecoration(
+                  color: AppColors.divider,
+                  borderRadius: BorderRadius.circular(2.r),
+                ),
               ),
             ),
-          ),
-          SizedBox(height: 16.h),
-          Text('Заявка на добавление города', style: AppText.h4()),
-          SizedBox(height: 16.h),
-          AppTextField(
-            label: 'Название города',
-            controller: _ctrl,
-            onChanged: (_) => setState(() {}),
-            maxLength: 50,
-            textCapitalization: TextCapitalization.words,
-          ),
-          SizedBox(height: 16.h),
-          PrimaryButton(
-            label: 'Отправить',
-            onPressed: _enabled
-                ? () => Navigator.of(context).pop(_ctrl.text.trim())
-                : null,
-          ),
+            SizedBox(height: 16.h),
+            Text('Заявка на добавление города', style: AppText.h4()),
+            SizedBox(height: 16.h),
+            AppTextField(
+              label: 'Название города',
+              controller: _ctrl,
+              onChanged: (_) => setState(() {}),
+              maxLength: 50,
+              textCapitalization: TextCapitalization.words,
+            ),
+            SizedBox(height: 16.h),
+            PrimaryButton(
+              label: 'Отправить',
+              onPressed: _enabled
+                  ? () => Navigator.of(context).pop(_ctrl.text.trim())
+                  : null,
+            ),
           ],
         ),
       ),
