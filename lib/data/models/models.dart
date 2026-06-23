@@ -162,6 +162,20 @@ class AppUser {
       ? reviewsCountAsCustomer
       : reviewsCountAsExecutor;
 
+  /// Общее число отзывов о человеке — и как об исполнителе, и как о заказчике.
+  int get overallReviewsCount => reviewsCountAsExecutor + reviewsCountAsCustomer;
+
+  /// Единый («общий») рейтинг — среднее по ВСЕМ отзывам сразу (обе роли).
+  /// Показываем его одинаково везде (список откликов, профиль), чтобы у
+  /// человека было одно число, а не разные в зависимости от экрана.
+  double get overallRating {
+    final total = overallReviewsCount;
+    if (total == 0) return 0;
+    return (ratingAsExecutor * reviewsCountAsExecutor +
+            ratingAsCustomer * reviewsCountAsCustomer) /
+        total;
+  }
+
   AppUser copyWith({
     String? name,
     String? phone,

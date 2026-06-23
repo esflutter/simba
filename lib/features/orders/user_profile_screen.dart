@@ -23,7 +23,7 @@ import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
 import '../../data/remote/pocketbase_client.dart' show pocketbaseProvider;
 import '../../data/remote/users_repository.dart';
-import '../reviews/reviews_providers.dart' show reviewsForUserAsRoleProvider;
+import '../reviews/reviews_providers.dart' show reviewsForUserProvider;
 import 'order_details_screen.dart' show orderByIdProvider;
 import 'responses_screen.dart' show pendingExecutorIdsProvider;
 
@@ -91,13 +91,13 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
         if (!mounted) return;
         final rec = e.record;
         if (rec == null) {
-          ref.invalidate(reviewsForUserAsRoleProvider);
+          ref.invalidate(reviewsForUserProvider(targetUserId));
           // И публичный профиль тоже — рейтинг пересчитывается бэк-хуком.
           ref.invalidate(publicUserProvider(targetUserId));
           return;
         }
         if (rec.getStringValue('to_user') == targetUserId) {
-          ref.invalidate(reviewsForUserAsRoleProvider);
+          ref.invalidate(reviewsForUserProvider(targetUserId));
           ref.invalidate(publicUserProvider(targetUserId));
         }
       });
@@ -161,17 +161,11 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
       data: (o) => o ?? orderFromMock,
       orElse: () => orderFromMock,
     );
-    // В какой роли смотрим этого пользователя: заказчик (он автор заказа) —
-    // иначе исполнитель (откликнувшийся / принятый). От роли зависит, какой
-    // рейтинг и какие отзывы показываем, чтобы цифры совпадали и со списком
-    // откликов, и между собой (рейтинг ↔ распределение «звёзд»).
-    final viewedRole = (order != null && order.customerId == userId)
-        ? UserRole.customer
-        : UserRole.executor;
-    // Отзывы о пользователе ИМЕННО в этой роли (live → PB, иначе мок-fallback).
+    // Отзывы — ВСЕ о пользователе (и как об исполнителе, и как о заказчике):
+    // рейтинг у нас единый, общий (см. AppUser.overallRating), поэтому и
+    // список/распределение показываем по всем отзывам сразу.
     // На loading возвращаем null → ниже рендерим спиннер вместо «Нет отзывов».
-    final asyncReviews = ref.watch(
-        reviewsForUserAsRoleProvider((userId: userId, role: viewedRole)));
+    final asyncReviews = ref.watch(reviewsForUserProvider(userId));
     final List<Review>? reviewsOrNull = asyncReviews.when(
       data: (xs) => xs,
       loading: () => null,
@@ -263,10 +257,10 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
     for (final r in reviews) {
       ratingDistribution[r.rating] = (ratingDistribution[r.rating] ?? 0) + 1;
     }
-    // Рейтинг берём из агрегата ПО РОЛИ — он совпадает со списком откликов
-    // (там тоже агрегат по роли исполнителя), а отзывы/распределение ниже
-    // теперь тоже отфильтрованы по этой роли, поэтому всё согласовано.
-    final avgRating = user.ratingFor(viewedRole);
+    // Единый общий рейтинг — тот же агрегат overallRating, что и в списке
+    // откликов, поэтому цифры совпадают точь-в-точь. Распределение «звёзд»
+    // ниже считается по загруженным отзывам (тем же, что формируют агрегат).
+    final avgRating = user.overallRating;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -467,7 +461,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                     )
                   else if (reviews.isEmpty &&
                       isGuest &&
-                      user.reviewsCountFor(viewedRole) > 0)
+                      user.overallReviewsCount > 0)
                     // Гость: список отзывов недоступен (нужен вход), но
                     // агрегированный рейтинг (по роли) показать можем — иначе
                     // отрецензированный пользователь выглядел бы как «Нет отзывов».
@@ -481,7 +475,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               Text(
-                                formatRating(user.ratingFor(viewedRole)),
+                                formatRating(user.overallRating),
                                 style: TextStyle(
                                   color: AppColors.textPrimary,
                                   fontSize: 20.sp,
@@ -496,7 +490,7 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                                   padding:
                                       EdgeInsets.only(right: i == 4 ? 0 : 2.w),
                                   child: Image.asset(
-                                    i < user.ratingFor(viewedRole).round()
+                                    i < user.overallRating.round()
                                         ? 'assets/images/icon_ranking.webp'
                                         : 'assets/images/icon_star_empty.webp',
                                     width: 20.r,
@@ -508,8 +502,8 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                           ),
                           SizedBox(height: 4.h),
                           Text(
-                            '${user.reviewsCountFor(viewedRole)} '
-                            '${pluralReviews(user.reviewsCountFor(viewedRole))}',
+                            '${user.overallReviewsCount} '
+                            '${pluralReviews(user.overallReviewsCount)}',
                             style: TextStyle(
                               color: Colors.black.withValues(alpha: 0.60),
                               fontSize: 13.sp,

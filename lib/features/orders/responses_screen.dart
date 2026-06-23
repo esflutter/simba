@@ -531,7 +531,7 @@ class _ResponseCardState extends State<_ResponseCard> {
                             ),
                             SizedBox(width: 4.w),
                             Text(
-                              formatRating(user.rating),
+                              formatRating(user.overallRating),
                               style: TextStyle(
                                 color: AppColors.textPrimary,
                                 fontSize: 16.sp,
