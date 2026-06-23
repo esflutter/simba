@@ -223,14 +223,15 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen>
                   // Профили всех откликнувшихся тянем ОДНИМ пакетным
                   // запросом (respondersProfilesProvider) — раньше каждая
                   // карточка делала свой запрос (N+1: 30 откликов = 30
-                  // запросов + нагрузка на БД). Пока пакет грузится / при
-                  // ошибке — placeholder по id-шорту, который заменится
-                  // реальным именем/фото при следующей перерисовке.
-                  final profiles = ref
-                          .watch(respondersProfilesProvider(orderId))
-                          .asData
-                          ?.value ??
-                      const <String, AppUser>{};
+                  // запросов + нагрузка на БД).
+                  // .value (а НЕ asData?.value): при pull-to-refresh провайдер
+                  // уходит в loading, но СОХРАНЯЕТ прошлое значение — .value его
+                  // отдаёт, поэтому имена/фото не мигают на долю секунды на
+                  // placeholder «Исполнитель xxxxxx». asData в состоянии reload
+                  // вернул бы null → пустая карта → мигание.
+                  final profiles =
+                      ref.watch(respondersProfilesProvider(orderId)).value ??
+                          const <String, AppUser>{};
                   final users = executorIds
                       .map((id) => profiles[id] ?? _userForResponder(id))
                       .toList(growable: false);

@@ -10,6 +10,18 @@ import '../../data/remote/reviews_repository.dart';
 ///
 /// `autoDispose` — чтобы кэш не жил вечно: при возврате на экран profile
 /// делается свежий запрос, а не показывается stale-список двухчасовой давности.
+/// Отзывы о пользователе С УЧЁТОМ РОЛИ (исполнитель/заказчик в заказе, по
+/// которому оставлен отзыв). Нужен на чужом профиле, чтобы рейтинг (агрегат
+/// по роли), число отзывов и распределение «звёзд» были согласованы между
+/// собой и совпадали со списком откликов. Для своего экрана «Мои отзывы»
+/// по-прежнему используется reviewsForUserProvider (все отзывы).
+final reviewsForUserAsRoleProvider = FutureProvider.autoDispose
+    .family<List<Review>, ({String userId, UserRole role})>((ref, args) async {
+  return ref
+      .read(reviewsRepositoryProvider)
+      .forUser(args.userId, asRole: args.role);
+});
+
 final reviewsForUserProvider =
     FutureProvider.autoDispose.family<List<Review>, String>((ref, userId) async {
   // Без catch: мок-режим обслуживает сам репозиторий (forUser при pb==null

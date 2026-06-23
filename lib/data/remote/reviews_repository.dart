@@ -16,8 +16,16 @@ class ReviewsRepository {
   bool get _isLive => _pb != null;
 
   /// Отзывы, в которых пользователь — получатель.
-  Future<List<Review>> forUser(String userId) async {
+  ///
+  /// [asRole] фильтрует отзывы по роли пользователя В ЗАКАЗЕ, по которому
+  /// оставлен отзыв: `executor` — только отзывы о нём как об исполнителе
+  /// (в заказе он был исполнителем), `customer` — как о заказчике. Это нужно,
+  /// чтобы на карточке профиля рейтинг (берётся из агрегата по роли) совпадал
+  /// со списком отзывов и распределением «звёзд». `null` — все отзывы (свой
+  /// экран «Мои отзывы»).
+  Future<List<Review>> forUser(String userId, {UserRole? asRole}) async {
     if (!_isLive) {
+      // Мок: данных заказа под рукой нет, роль не фильтруем — отдаём все.
       return _ref
           .read(appControllerProvider)
           .reviews
@@ -25,13 +33,16 @@ class ReviewsRepository {
           .toList();
     }
     final pb = _pb!;
+    var filter = 'to_user = {:uid} && visible_after != "" && visible_after <= @now';
+    if (asRole == UserRole.executor) {
+      filter += ' && order_ref.executor = {:uid}';
+    } else if (asRole == UserRole.customer) {
+      filter += ' && order_ref.customer = {:uid}';
+    }
     final records = await withPbAuthRetry(_ref,() => pb
         .collection('reviews')
         .getFullList(
-          filter: pb.filter(
-            'to_user = {:uid} && visible_after != "" && visible_after <= @now',
-            {'uid': userId},
-          ),
+          filter: pb.filter(filter, {'uid': userId}),
           sort: '-created',
           expand: 'from_user',
         )
