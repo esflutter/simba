@@ -199,18 +199,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   label: 'Связаться с нами',
                   onTap: () => _showContactSheet(context),
                 ),
-                SizedBox(height: 8.h),
-                _MenuItem(
-                  icon: IconsaxPlusLinear.document_text,
-                  label: 'Пользовательское соглашение',
-                  onTap: () => context.push('/legal/terms'),
-                ),
-                SizedBox(height: 8.h),
-                _MenuItem(
-                  icon: IconsaxPlusLinear.shield_tick,
-                  label: 'Политика конфиденциальности',
-                  onTap: () => context.push('/legal/privacy'),
-                ),
                 // ── Debug-кнопка отправки тестового пуша ──
                 // Видна только в сборке с SHOW_DESIGN_TOGGLES=true.
                 // Удобно для разработки: нажал — сам получил пуш на
@@ -239,6 +227,25 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   label: 'Удалить аккаунт',
                   onTap: () => _confirmDeleteAccount(context, ref),
                 ),
+                // Документы — обычным текстом-ссылками под кнопкой удаления
+                // (не отдельными пунктами-блоками). Открываются в приложении.
+                SizedBox(height: 20.h),
+                Center(
+                  child: Column(
+                    children: [
+                      _LegalLink(
+                        label: 'Пользовательское соглашение',
+                        onTap: () => context.push('/legal/terms'),
+                      ),
+                      SizedBox(height: 10.h),
+                      _LegalLink(
+                        label: 'Политика конфиденциальности',
+                        onTap: () => context.push('/legal/privacy'),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 8.h),
               ],
             ),
           ),
@@ -639,6 +646,38 @@ class _Avatar extends StatelessWidget {
                   cacheHeight: 300,
                   errorBuilder: (_, _, _) => fallback,
                 ),
+    );
+  }
+}
+
+/// Текстовая ссылка на юридический документ — обычный приглушённый текст с
+/// подчёркиванием (не пункт-блок меню). Тап открывает документ в приложении.
+class _LegalLink extends StatelessWidget {
+  const _LegalLink({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: 2.h),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 13.sp,
+            fontWeight: FontWeight.w400,
+            height: 1.38,
+            decoration: TextDecoration.underline,
+            decorationColor: AppColors.textSecondary,
+          ),
+        ),
+      ),
     );
   }
 }
