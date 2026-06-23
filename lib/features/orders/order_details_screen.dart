@@ -155,6 +155,9 @@ class _OrderDetailsScreenState extends ConsumerState<OrderDetailsScreen> {
     if (!mounted) return;
     final pb = ref.read(pocketbaseProvider);
     if (pb == null) return;
+    // Гостю realtime откликов не нужен — сервер всё равно не пришлёт событий,
+    // а кнопок «принять/отклонить» у него нет. Не открываем лишний сокет.
+    if (!pb.authStore.isValid) return;
     try {
       // PB-rules уже фильтруют события order_responses по правилу
       // «order_ref.customer == auth.id || executor == auth.id». На клиенте

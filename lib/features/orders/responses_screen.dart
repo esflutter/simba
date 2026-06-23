@@ -96,6 +96,8 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
     if (!mounted) return;
     final pb = ref.read(pocketbaseProvider);
     if (pb == null) return;
+    // Экран откликов — только для владельца заказа. Гостю realtime не нужен.
+    if (!pb.authStore.isValid) return;
     try {
       final unsub = await pb.collection('order_responses').subscribe('*', (e) {
         if (!mounted) return;
@@ -145,6 +147,17 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Экран откликов — действие владельца заказа, гостю он не положен (кнопки
+    // к нему ему и не рисуются). Если гость попал сюда по прямой ссылке —
+    // уводим на обычный просмотр заказа, а не показываем пустой список с
+    // «живыми» кнопками, защищёнными только серверными правилами.
+    final pb = ref.watch(pocketbaseProvider);
+    if (pb != null && !pb.authStore.isValid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) context.go('/order/$orderId?mode=feed');
+      });
+      return const SizedBox.shrink();
+    }
     final asyncIds = ref.watch(pendingExecutorIdsProvider(orderId));
 
     return Scaffold(

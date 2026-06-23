@@ -62,6 +62,9 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
     if (!mounted) return;
     final pb = ref.read(pocketbaseProvider);
     if (pb == null) return;
+    // Гостю realtime не нужен: серверные правила всё равно не пришлют ему
+    // ни одного события. Не открываем лишний сокет (как и в деталях заказа).
+    if (!pb.authStore.isValid) return;
     try {
       final unsub = await pb.collection('orders').subscribe(orderId, (_) {
         if (!mounted) return;
@@ -80,6 +83,8 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
     if (!mounted) return;
     final pb = ref.read(pocketbaseProvider);
     if (pb == null) return;
+    // Гостю realtime не нужен (отзывы он и так не читает) — сокет не открываем.
+    if (!pb.authStore.isValid) return;
     final targetUserId = widget.userId;
     try {
       final unsub = await pb.collection('reviews').subscribe('*', (e) {
