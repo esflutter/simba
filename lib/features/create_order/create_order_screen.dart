@@ -507,6 +507,9 @@ class _Pickable extends StatelessWidget {
                     if (label.isNotEmpty)
                       Text(
                         label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
                         style: AppText.caption(
                           color: Colors.black.withValues(alpha: 0.60),
                         ).copyWith(height: 1.33),
@@ -515,6 +518,7 @@ class _Pickable extends StatelessWidget {
                       value,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
+                      softWrap: false,
                       style: AppText.body(
                         color: isPlaceholder ? AppColors.textTertiary : AppColors.textPrimary,
                       ).copyWith(height: 1.50),
@@ -555,11 +559,16 @@ class _PhotoRow extends StatelessWidget {
               children: [
                 Icon(Icons.add_rounded, color: AppColors.primary, size: 22.r),
                 SizedBox(width: 3.w),
-                Text(
-                  'Добавить фото',
-                  style: AppText.bodyLarge(color: AppColors.primary).copyWith(
-                    height: 1.29,
-                    letterSpacing: -0.43,
+                Flexible(
+                  child: Text(
+                    'Добавить фото',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
+                    style: AppText.bodyLarge(color: AppColors.primary).copyWith(
+                      height: 1.29,
+                      letterSpacing: -0.43,
+                    ),
                   ),
                 ),
               ],

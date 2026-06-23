@@ -84,7 +84,13 @@ class _TypeCard extends StatelessWidget {
         children: [
           Image.asset(iconAsset, width: 48.r, height: 48.r),
           SizedBox(height: 16.h),
-          Text(title, style: AppText.h4(color: AppColors.primary)),
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: AppText.h4(color: AppColors.primary),
+          ),
           SizedBox(height: 8.h),
           Text.rich(
             TextSpan(
@@ -105,6 +111,9 @@ class _TypeCard extends StatelessWidget {
                 ),
               ],
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
           ),
         ],
       ),

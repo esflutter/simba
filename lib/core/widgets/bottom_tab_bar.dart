@@ -108,6 +108,9 @@ class _Tab extends StatelessWidget {
             Text(
               label,
               textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
               style: AppText.tab(color: color, weight: FontWeight.w500)
                   .copyWith(height: 1.45, letterSpacing: -0.40),
             ),

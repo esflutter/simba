@@ -579,6 +579,9 @@ class _CheckRow extends StatelessWidget {
                 Expanded(
                   child: Text(
                     label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                     style: TextStyle(
                       color: AppColors.textPrimary,
                       fontSize: 16.sp,
@@ -694,13 +697,18 @@ class _AvatarSheetItem extends StatelessWidget {
             children: [
               Icon(icon, color: color, size: 24.r),
               SizedBox(width: 16.w),
-              Text(
-                label,
-                style: TextStyle(
-                  color: destructive ? AppColors.error : AppColors.textPrimary,
-                  fontSize: 16.sp,
-                  fontWeight: FontWeight.w500,
-                  height: 1.50,
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                  style: TextStyle(
+                    color: destructive ? AppColors.error : AppColors.textPrimary,
+                    fontSize: 16.sp,
+                    fontWeight: FontWeight.w500,
+                    height: 1.50,
+                  ),
                 ),
               ),
             ],
@@ -744,6 +752,9 @@ class _SaveButton extends StatelessWidget {
                   )
                 : Text(
                     'Сохранить',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                     style: TextStyle(
                       color: enabled ? AppColors.surface : const Color(0x4C3C3C43),
                       fontSize: 17.sp,

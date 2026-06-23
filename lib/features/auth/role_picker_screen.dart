@@ -144,7 +144,13 @@ class _RoleCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: AppText.h4(color: AppColors.primary)),
+          Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
+            style: AppText.h4(color: AppColors.primary),
+          ),
           SizedBox(height: 12.h),
           Text.rich(
             TextSpan(

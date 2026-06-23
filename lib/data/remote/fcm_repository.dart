@@ -59,6 +59,22 @@ class FcmRepository {
   // userId токен второго юзера не попадал на сервер, и он не получал ни
   // одного пуша до перезапуска приложения.
   String? _inFlightUserId;
+  // Последний успешно отправленный на сервер токен ЭТОГО устройства. При
+  // выходе из аккаунта сообщаем его серверу, чтобы он погасил строку именно
+  // этого устройства (несколько устройств на аккаунт — остальные продолжают
+  // получать пуши). Если null (приложение перезапускали) — старый протокол
+  // token="" просто чистит legacy-зеркало.
+  String? _lastSentToken;
+
+  // Платформа устройства для строки push_tokens (поле обязательное).
+  String get _platformTag {
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.iOS:
+        return 'ios';
+      default:
+        return 'android';
+    }
+  }
 
   /// Зарегистрировать токен текущего залогиненного пользователя на
   /// сервере. Идемпотентно: повторный вызов с тем же токеном просто
@@ -145,7 +161,27 @@ class FcmRepository {
     // FCM обновляет токен при переустановке/очистке данных/восстановлении
     // из бэкапа. Без подписки сервер останется со старым токеном.
     _tokenRefreshSub?.cancel();
-    _tokenRefreshSub = messaging.onTokenRefresh.listen(_saveTokenToServer);
+    _tokenRefreshSub = messaging.onTokenRefresh.listen(_onTokenRefresh);
+  }
+
+  /// Реакция на смену FCM-токена устройства (ротация). Регистрируем НОВЫЙ
+  /// токен и сразу гасим строку СТАРОГО — иначе у одного устройства осталось
+  /// бы две живые записи, и в окне ротации пуш мог прийти дважды (старый токен
+  /// ещё валиден). Гашение старого сервер не лимитирует (это не регистрация).
+  Future<void> _onTokenRefresh(String newToken) async {
+    final old = _lastSentToken;
+    await _saveTokenToServer(newToken);
+    if (old != null && old.isNotEmpty && old != newToken) {
+      final pb = _ref.read(pocketbaseProvider);
+      if (pb != null) {
+        try {
+          await pb
+              .send(_kFcmTokenEndpoint,
+                  method: 'POST', body: {'token': old, 'remove': true})
+              .timeout(const Duration(seconds: 5));
+        } catch (_) {/* не критично — старый токен умрёт и подчистится сам */}
+      }
+    }
   }
 
   /// Очистить токен текущего пользователя. Вызывается до самого logout —
@@ -171,13 +207,32 @@ class FcmRepository {
       try {
         // 5 секунд: logout не должен залипать на минуту при тормозящей
         // сети. Даже если запрос не дойдёт — следующий логин перезапишет.
+        // Multi-device: сообщаем серверу КОНКРЕТНЫЙ токен этого устройства,
+        // чтобы он погасил только ЕГО строку, не трогая другие устройства
+        // аккаунта. Если токен сессии не сохранён в памяти (после перезапуска
+        // приложения) — берём текущий токен устройства напрямую, чтобы выход
+        // оставался точечным. Пустой токен (старый протокол, чистит лишь
+        // legacy-зеркало) — только если и это не удалось.
+        String? deviceToken = _lastSentToken;
+        if (deviceToken == null) {
+          try {
+            deviceToken = await FirebaseMessaging.instance
+                .getToken()
+                .timeout(const Duration(seconds: 5));
+          } catch (_) {/* токен недоступен — отправим пустой */}
+        }
+        final Map<String, dynamic> clearBody =
+            (deviceToken != null && deviceToken.isNotEmpty)
+                ? {'token': deviceToken, 'remove': true}
+                : {'token': ''};
         await pb
-            .send(_kFcmTokenEndpoint, method: 'POST', body: {'token': ''})
+            .send(_kFcmTokenEndpoint, method: 'POST', body: clearBody)
             .timeout(const Duration(seconds: 5));
       } catch (e) {
         if (kDebugMode) debugPrint('FCM token clear failed: $e');
       }
     }
+    _lastSentToken = null;
 
     // Локально удаляем FCM-токен — следующий getToken() выдаст новый.
     // Без этого старый владелец устройства и новый получили бы пуши
@@ -205,8 +260,11 @@ class FcmRepository {
     }
     try {
       await pb
-          .send(_kFcmTokenEndpoint, method: 'POST', body: {'token': token})
-          .timeout(const Duration(seconds: 10));
+          .send(_kFcmTokenEndpoint, method: 'POST', body: {
+        'token': token,
+        'platform': _platformTag,
+      }).timeout(const Duration(seconds: 10));
+      _lastSentToken = token;
       _fcmLog('[FCM] token saved for user $userId');
       return true;
     } catch (e) {

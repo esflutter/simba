@@ -47,10 +47,15 @@ class PrimaryButton extends StatelessWidget {
                 ),
                 SizedBox(width: 8.w),
               ],
-              Text(
-                label,
-                style: AppText.button(
-                  color: disabled ? AppColors.disabledFg : AppColors.textOnPrimary,
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                  style: AppText.button(
+                    color: disabled ? AppColors.disabledFg : AppColors.textOnPrimary,
+                  ),
                 ),
               ),
             ],
@@ -107,7 +112,15 @@ class SecondaryButton extends StatelessWidget {
                 ),
                 SizedBox(width: 8.w),
               ],
-              Text(label, style: textStyle ?? AppText.button(color: c)),
+              Flexible(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                  style: textStyle ?? AppText.button(color: c),
+                ),
+              ),
             ],
           ),
         ),

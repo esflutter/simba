@@ -847,6 +847,9 @@ class _ActionBarButton extends StatelessWidget {
                   )
                 : Text(
                     label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                     style: TextStyle(
                       color: disabled ? AppColors.textTertiary : textColor,
                       fontSize: 17.sp,
@@ -890,6 +893,9 @@ class _ContactButton extends StatelessWidget {
           child: Center(
             child: Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
               style: TextStyle(
                 color: color,
                 fontSize: 17.sp,
@@ -1087,6 +1093,9 @@ class _Messenger extends StatelessWidget {
             SizedBox(height: 5.h),
             Text(
               label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
               style: TextStyle(
                 color: AppColors.textPrimary,
                 fontSize: 11.sp,
@@ -1413,6 +1422,9 @@ class _ReviewsListState extends State<_ReviewsList> {
                   alignment: Alignment.center,
                   child: Text(
                     'Показать ещё (${total - shown})',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                     style: TextStyle(
                       color: AppColors.primary,
                       fontSize: 15.sp,

@@ -442,6 +442,9 @@ class _Header extends StatelessWidget {
                           EdgeInsets.symmetric(horizontal: 14.w, vertical: 6.h),
                       child: Text(
                         roleCta,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
                         style: TextStyle(
                           color: roleActive
                               ? AppColors.background
@@ -794,11 +797,21 @@ class _MapViewState extends ConsumerState<_MapView> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Оставить'),
+            child: const Text(
+              'Оставить',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Сменить'),
+            child: const Text(
+              'Сменить',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+            ),
           ),
         ],
       ),
@@ -881,14 +894,19 @@ class _ToggleViewButton extends StatelessWidget {
                   height: 20.r,
                 ),
                 SizedBox(width: 6.w),
-                Text(
-                  isMap ? 'Список' : 'Карта',
-                  style: TextStyle(
-                    color: AppColors.background,
-                    fontSize: 14.sp,
-                    fontWeight: FontWeight.w500,
-                    height: 1.43,
-                    letterSpacing: 0.10,
+                Flexible(
+                  child: Text(
+                    isMap ? 'Список' : 'Карта',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
+                    style: TextStyle(
+                      color: AppColors.background,
+                      fontSize: 14.sp,
+                      fontWeight: FontWeight.w500,
+                      height: 1.43,
+                      letterSpacing: 0.10,
+                    ),
                   ),
                 ),
               ],

@@ -230,8 +230,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 // Документы — обычным текстом-ссылками под кнопкой удаления
                 // (не отдельными пунктами-блоками). Открываются в приложении.
                 SizedBox(height: 20.h),
-                Center(
+                Align(
+                  alignment: Alignment.centerLeft,
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       _LegalLink(
                         label: 'Пользовательское соглашение',
@@ -667,7 +669,10 @@ class _LegalLink extends StatelessWidget {
         padding: EdgeInsets.symmetric(vertical: 2.h),
         child: Text(
           label,
-          textAlign: TextAlign.center,
+          textAlign: TextAlign.left,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          softWrap: false,
           style: TextStyle(
             color: AppColors.textSecondary,
             fontSize: 13.sp,
@@ -721,6 +726,9 @@ class _MenuItem extends StatelessWidget {
                 Expanded(
                   child: Text(
                     label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                     style: AppText.body(weight: FontWeight.w500)
                         .copyWith(height: 1.50),
                   ),
@@ -803,6 +811,9 @@ class _LogoutDialogButtonState extends State<_LogoutDialogButton> {
                   )
                 : Text(
                     widget.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                     style: TextStyle(
                       color: widget.textColor,
                       fontSize: 17.sp,
@@ -1005,6 +1016,9 @@ class _SupportMessenger extends StatelessWidget {
           SizedBox(height: 5.h),
           Text(
             label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
             style: TextStyle(
               color: comingSoon ? AppColors.textTertiary : AppColors.textPrimary,
               fontSize: 11.sp,

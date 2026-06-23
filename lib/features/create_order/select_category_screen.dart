@@ -96,7 +96,13 @@ class SelectCategoryScreen extends ConsumerWidget {
                         padding: EdgeInsets.symmetric(horizontal: 20.w),
                         child: Align(
                           alignment: Alignment.centerLeft,
-                          child: Text(c.name, style: AppText.bodyLarge()),
+                          child: Text(
+                            c.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            softWrap: false,
+                            style: AppText.bodyLarge(),
+                          ),
                         ),
                       ),
                     ),

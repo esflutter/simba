@@ -458,6 +458,9 @@ class _Segment extends StatelessWidget {
         child: Center(
           child: Text(
             label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
             style: TextStyle(
               color: active ? AppColors.primary : AppColors.textPrimary,
               fontSize: 13.sp,
@@ -532,6 +535,9 @@ class _EmptyMyOrders extends StatelessWidget {
                     child: Center(
                       child: Text(
                         isCustomer ? 'Создать заказ' : 'Найти заказ',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
                         style: AppText.bodyLarge(
                           color: AppColors.background,
                           weight: FontWeight.w600,

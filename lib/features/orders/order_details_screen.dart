@@ -1178,6 +1178,9 @@ class _DialogActionButton extends StatelessWidget {
             child: Text(
               label,
               textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
               style: TextStyle(
                 color: textColor,
                 fontSize: 17.sp,
@@ -1249,10 +1252,15 @@ class _ResponsesButton extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text(
-                'Смотреть отклики',
-                style: AppText.bodyLarge(color: AppColors.surface, weight: FontWeight.w600)
-                    .copyWith(letterSpacing: -0.40),
+              Flexible(
+                child: Text(
+                  'Смотреть отклики',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  softWrap: false,
+                  style: AppText.bodyLarge(color: AppColors.surface, weight: FontWeight.w600)
+                      .copyWith(letterSpacing: -0.40),
+                ),
               ),
               SizedBox(width: 10.w),
               Container(
@@ -1301,6 +1309,9 @@ class _CancelOrderButton extends StatelessWidget {
           child: Center(
             child: Text(
               'Отменить заказ',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
               style: AppText.bodyLarge(color: AppColors.error, weight: FontWeight.w600)
                   .copyWith(letterSpacing: -0.40),
             ),

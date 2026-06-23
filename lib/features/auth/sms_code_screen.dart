@@ -360,11 +360,21 @@ class _SmsCodeScreenState extends ConsumerState<SmsCodeScreen>
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Остаться'),
+            child: const Text(
+              'Остаться',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Выйти'),
+            child: const Text(
+              'Выйти',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
+            ),
           ),
         ],
       ),

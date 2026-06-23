@@ -625,6 +625,9 @@ class _ResponseAction extends StatelessWidget {
             child: Text(
               label,
               textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
               style: TextStyle(
                 color: disabled ? AppColors.textTertiary : color,
                 fontSize: 17.sp,

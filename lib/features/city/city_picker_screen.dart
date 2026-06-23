@@ -348,6 +348,9 @@ class _CityPickerScreenState extends ConsumerState<CityPickerScreen>
                                             Expanded(
                                               child: Text(
                                                 c.name,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                softWrap: false,
                                                 style: AppText.body().copyWith(
                                                   height: 1.50,
                                                 ),

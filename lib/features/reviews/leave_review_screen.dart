@@ -354,6 +354,9 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
                           // Белый поверх AppColors.primary. Раньше тут
                           // стоял #F5F5F5 (фоновый серый), и текст почти
                           // сливался с синей кнопкой.
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
                           style: TextStyle(
                             color: AppColors.surface,
                             fontSize: 17.sp,
@@ -523,6 +526,9 @@ class _LeaveReviewSheetState extends ConsumerState<_LeaveReviewSheet> {
                         ),
                         child: Text(
                           t,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          softWrap: false,
                           style: AppText.bodySmall(
                             color: selected ? AppColors.surface : AppColors.textPrimary,
                             weight: FontWeight.w500,

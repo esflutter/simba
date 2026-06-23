@@ -439,6 +439,9 @@ class _Segment extends StatelessWidget {
         child: Center(
           child: Text(
             label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            softWrap: false,
             style: TextStyle(
               color: active ? AppColors.primary : AppColors.textPrimary,
               fontSize: 13.sp,

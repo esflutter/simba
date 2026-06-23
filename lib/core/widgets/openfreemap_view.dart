@@ -538,6 +538,9 @@ class _OpenFreeMapViewState extends State<OpenFreeMapView>
                   },
                   child: Text(
                     'Повторить',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                     style: AppText.body(color: AppColors.primary)
                         .copyWith(fontWeight: FontWeight.w600),
                   ),

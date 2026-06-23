@@ -632,6 +632,7 @@ class _SuggestionsList extends StatelessWidget {
                                   s.value,
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
+                                  softWrap: false,
                                   style: AppText.body(),
                                 ),
                               ),

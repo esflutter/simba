@@ -555,6 +555,9 @@ class _OrderCreatedDialog extends StatelessWidget {
                       child: Text(
                         'Ок',
                         textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
                         // Белый текст на синем — нормальный контраст.
                         // Раньше тут стоял background (#F5F5F5) — серый,
                         // плохо читался на синей кнопке.
@@ -611,8 +614,9 @@ class _PaymentMethod extends StatelessWidget {
                 Expanded(
                   child: Text(
                     value,
-                    maxLines: 2,
+                    maxLines: 1,
                     overflow: TextOverflow.ellipsis,
+                    softWrap: false,
                     style: AppText.body(
                       color: isPlaceholder
                           ? Colors.black.withValues(alpha: 0.60)
