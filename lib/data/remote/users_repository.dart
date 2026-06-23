@@ -82,6 +82,12 @@ class UsersRepository {
   Future<AppUser?> publicProfile(String userId) async {
     final pb = _pb;
     if (pb == null) return null;
+    // Гость (без токена) не может читать коллекцию users — её viewRule
+    // требует авторизацию. Берём обезличенный профиль через кастомную
+    // ручку: имя, фото, рейтинги (без телефона и почты).
+    if (!pb.authStore.isValid) {
+      return _publicProfileGuest(userId, pb);
+    }
     try {
       // withAuthRetry — если в момент открытия чужого профиля токен
       // истёк, обёртка молча обновит и повторит запрос. Без неё экран
@@ -115,6 +121,53 @@ class UsersRepository {
         reviewsCountAsExecutor: r.getIntValue('reviews_count_as_executor'),
         hasTools: r.getBoolValue('has_tools'),
         hasTransport: r.getBoolValue('has_transport'),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Публичный профиль заказчика для гостя (просмотр каталога без входа)
+  /// через `GET /api/users/:id/public-profile`. Возвращает тот же безопасный
+  /// набор (имя, фото, рейтинги), что и `publicProfile` для авторизованного,
+  /// но без чтения коллекции users. Сервер отдаёт его только для тех, у кого
+  /// есть открытый заказ. 404/ошибка/сеть → null (экран покажет заглушку).
+  Future<AppUser?> _publicProfileGuest(String userId, PocketBase pb) async {
+    try {
+      final resp = await sendWithSharedClient(
+        (c) => c
+            .get(Uri.parse('${pb.baseURL}/api/users/$userId/public-profile'))
+            .timeout(const Duration(seconds: 10)),
+      );
+      if (resp.statusCode != 200) return null;
+      final body = jsonDecode(resp.body) as Map<String, dynamic>;
+      final m = (body['item'] as Map?)?.cast<String, dynamic>();
+      if (m == null) return null;
+      final photoName = m['photo']?.toString();
+      final id = m['id']?.toString() ?? userId;
+      final photoUrl = (photoName != null && photoName.isNotEmpty)
+          ? pbFileUrl(
+              pb,
+              collection: 'users',
+              recordId: id,
+              filename: photoName,
+            )
+          : null;
+      return AppUser(
+        id: id,
+        name: m['name']?.toString() ?? '',
+        phone: '', // публичный профиль не возвращает телефон
+        photoPath: photoUrl,
+        rating: (m['rating_as_executor'] as num?)?.toDouble() ?? 0,
+        reviewsCount: (m['reviews_count_as_executor'] as num?)?.toInt() ?? 0,
+        ratingAsCustomer: (m['rating_as_customer'] as num?)?.toDouble() ?? 0,
+        reviewsCountAsCustomer:
+            (m['reviews_count_as_customer'] as num?)?.toInt() ?? 0,
+        ratingAsExecutor: (m['rating_as_executor'] as num?)?.toDouble() ?? 0,
+        reviewsCountAsExecutor:
+            (m['reviews_count_as_executor'] as num?)?.toInt() ?? 0,
+        hasTools: m['has_tools'] == true,
+        hasTransport: m['has_transport'] == true,
       );
     } catch (_) {
       return null;

@@ -12,6 +12,7 @@ import '../../core/theme/app_colors.dart';
 import '../../core/utils/backend_error.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/utils/messenger_launcher.dart';
+import '../../core/utils/plural_ru.dart';
 import '../../core/widgets/app_back_button.dart';
 import '../../core/widgets/app_card.dart';
 import '../../core/widgets/app_network_image.dart';
@@ -205,6 +206,13 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
         ? nameFromOrder
         : user.name;
     final displayPhoto = photoFromOrder ?? user.photoPath;
+    // Гость (просмотр каталога без входа) не может загрузить список отзывов —
+    // коллекция reviews требует авторизацию. Чтобы не показывать честно
+    // отрецензированного заказчика как «Нет отзывов», ниже выводим
+    // агрегированный рейтинг (имя+рейтинг приходят из публичной ручки), а
+    // тексты отзывов оставляем за входом.
+    final pbAuth = ref.watch(pocketbaseProvider);
+    final isGuest = pbAuth != null && !pbAuth.authStore.isValid;
     // Источник правды по «является ли этот юзер кандидатом на мой заказ» —
     // pendingExecutorIdsProvider (живой запрос к order_responses). В live
     // маппер не наполняет `order.responses` (избегаем N+1), и проверка через
@@ -445,6 +453,71 @@ class _UserProfileScreenState extends ConsumerState<UserProfileScreen> {
                       padding: EdgeInsets.symmetric(vertical: 64.h),
                       child: const Center(
                         child: CircularProgressIndicator(color: AppColors.primary),
+                      ),
+                    )
+                  else if (reviews.isEmpty &&
+                      isGuest &&
+                      user.reviewsCountAsCustomer > 0)
+                    // Гость: список отзывов недоступен (нужен вход), но
+                    // агрегированный рейтинг заказчика показать можем — иначе
+                    // отрецензированный заказчик выглядел бы как «Нет отзывов».
+                    AppCard(
+                      padding: EdgeInsets.all(12.w),
+                      borderRadius: BorderRadius.circular(10.r),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Text(
+                                formatRating(user.ratingAsCustomer),
+                                style: TextStyle(
+                                  color: AppColors.textPrimary,
+                                  fontSize: 20.sp,
+                                  fontWeight: FontWeight.w700,
+                                  height: 1.20,
+                                ),
+                              ),
+                              SizedBox(width: 4.w),
+                              ...List.generate(
+                                5,
+                                (i) => Padding(
+                                  padding:
+                                      EdgeInsets.only(right: i == 4 ? 0 : 2.w),
+                                  child: Image.asset(
+                                    i < user.ratingAsCustomer.round()
+                                        ? 'assets/images/icon_ranking.webp'
+                                        : 'assets/images/icon_star_empty.webp',
+                                    width: 20.r,
+                                    height: 20.r,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 4.h),
+                          Text(
+                            '${user.reviewsCountAsCustomer} '
+                            '${pluralReviews(user.reviewsCountAsCustomer)}',
+                            style: TextStyle(
+                              color: Colors.black.withValues(alpha: 0.60),
+                              fontSize: 13.sp,
+                              fontWeight: FontWeight.w400,
+                              height: 1.38,
+                            ),
+                          ),
+                          SizedBox(height: 8.h),
+                          Text(
+                            'Тексты отзывов открываются после входа',
+                            style: TextStyle(
+                              color: Colors.black.withValues(alpha: 0.60),
+                              fontSize: 13.sp,
+                              fontWeight: FontWeight.w400,
+                              height: 1.38,
+                            ),
+                          ),
+                        ],
                       ),
                     )
                   else if (reviews.isEmpty)

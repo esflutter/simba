@@ -1694,8 +1694,9 @@ class _PartyCard extends ConsumerWidget {
     final photoPath = photoUrlFromOrder ?? mockUser?.photoPath;
     return InkWell(
       onTap: () {
-        // Профиль контрагента — после входа (гость смотрит только карточку).
-        if (!requireAuth(context, ref, reason: 'посмотреть профиль')) return;
+        // Профиль заказчика открыт и гостю — обезличенная карточка (имя,
+        // фото, рейтинг) без телефона и точного адреса. Действия, которые
+        // требуют входа (звонок, отклик), гейтятся отдельно на своих экранах.
         context.push('/order/$orderId/user/$userId');
       },
       child: SizedBox(
