@@ -189,17 +189,16 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                   label: 'Отзывы',
                   onTap: () => context.push('/profile/reviews'),
                 ),
-                // Пункт показываем только если настроен хотя бы один канал
-                // поддержки. Без контактов кнопка раньше открывала шторку с
-                // фейковыми номерами — лучше вообще не показывать.
-                if (Env.hasAnySupportContact) ...[
-                  SizedBox(height: 8.h),
-                  _MenuItem(
-                    iconAsset: 'assets/images/icon_support.webp',
-                    label: 'Связаться с нами',
-                    onTap: () => _showContactSheet(context),
-                  ),
-                ],
+                // Поддержку показываем всегда. Пока реальные ссылки на
+                // мессенджеры не настроены — в шторке стоят заглушки «скоро»,
+                // и по тапу всплывает «Ссылка скоро появится». Как только
+                // канал пропишут при сборке — он станет рабочим автоматически.
+                SizedBox(height: 8.h),
+                _MenuItem(
+                  iconAsset: 'assets/images/icon_support.webp',
+                  label: 'Связаться с нами',
+                  onTap: () => _showContactSheet(context),
+                ),
                 SizedBox(height: 8.h),
                 _MenuItem(
                   icon: IconsaxPlusLinear.document_text,
@@ -800,6 +799,12 @@ class _SupportSheet extends StatelessWidget {
     }
   }
 
+  /// Заглушка для ещё не подключённого канала: по тапу всплывает плашка,
+  /// шторку не закрываем (тост виден поверх неё — он в корневом overlay).
+  void _comingSoon(BuildContext sheetContext) {
+    AppToast.show(sheetContext, 'Ссылка скоро появится');
+  }
+
   @override
   Widget build(BuildContext context) {
     // Все три кнопки всегда активны. Значения берутся из Env (с
@@ -858,55 +863,69 @@ class _SupportSheet extends StatelessWidget {
               ),
               SizedBox(height: 16.h),
               Container(height: 1, color: AppColors.divider),
-              SizedBox(height: 22.h),
-              // Показываем только настроенные каналы (непустой контакт).
-              // Разделители 28.w ставим между присутствующими кнопками.
-              Builder(builder: (context) {
-                final items = <Widget>[
-                  if (Env.hasSupportWhatsApp)
-                    _SupportMessenger(
-                      label: 'WhatsApp',
-                      asset: 'assets/images/icon_whatsapp.webp',
-                      onTap: () => _open(
-                        context,
-                        () => MessengerLauncher.openWhatsApp(
-                          Env.supportWhatsAppPhone,
-                        ),
-                        'WhatsApp',
-                      ),
-                    ),
-                  if (Env.hasSupportTelegram)
-                    _SupportMessenger(
-                      label: 'Telegram',
-                      asset: 'assets/images/icon_telegram.webp',
-                      onTap: () => _open(
-                        context,
-                        () => MessengerLauncher.openTelegram(
-                          username: Env.supportTelegramUsername,
-                        ),
-                        'Telegram',
-                      ),
-                    ),
-                  if (Env.hasSupportMax)
-                    _SupportMessenger(
-                      label: 'MAX',
-                      asset: 'assets/images/icon_max.webp',
-                      onTap: () => _open(
-                        context,
-                        () => MessengerLauncher.openMax(
-                          phone: Env.supportMaxPhone,
-                        ),
-                        'MAX',
-                      ),
-                    ),
-                ];
-                final row = <Widget>[];
-                for (var i = 0; i < items.length; i++) {
-                  if (i > 0) row.add(SizedBox(width: 28.w));
-                  row.add(items[i]);
-                }
-                return Row(children: row);
-              }),
+              SizedBox(height: 16.h),
+              Text(
+                'Скоро здесь появится связь с поддержкой.',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13.sp,
+                  fontWeight: FontWeight.w400,
+                  height: 1.38,
+                ),
+              ),
+              SizedBox(height: 18.h),
+              // Каналы поддержки. Настроенный (непустой контакт в сборке)
+              // открывает мессенджер; ненастроенный — заглушка «скоро»: по
+              // тапу всплывает «Ссылка скоро появится». Сейчас ссылок нет,
+              // поэтому все три — заглушки.
+              Row(
+                children: [
+                  _SupportMessenger(
+                    label: 'WhatsApp',
+                    asset: 'assets/images/icon_whatsapp.webp',
+                    comingSoon: !Env.hasSupportWhatsApp,
+                    onTap: Env.hasSupportWhatsApp
+                        ? () => _open(
+                              context,
+                              () => MessengerLauncher.openWhatsApp(
+                                Env.supportWhatsAppPhone,
+                              ),
+                              'WhatsApp',
+                            )
+                        : () => _comingSoon(context),
+                  ),
+                  SizedBox(width: 28.w),
+                  _SupportMessenger(
+                    label: 'Telegram',
+                    asset: 'assets/images/icon_telegram.webp',
+                    comingSoon: !Env.hasSupportTelegram,
+                    onTap: Env.hasSupportTelegram
+                        ? () => _open(
+                              context,
+                              () => MessengerLauncher.openTelegram(
+                                username: Env.supportTelegramUsername,
+                              ),
+                              'Telegram',
+                            )
+                        : () => _comingSoon(context),
+                  ),
+                  SizedBox(width: 28.w),
+                  _SupportMessenger(
+                    label: 'MAX',
+                    asset: 'assets/images/icon_max.webp',
+                    comingSoon: !Env.hasSupportMax,
+                    onTap: Env.hasSupportMax
+                        ? () => _open(
+                              context,
+                              () => MessengerLauncher.openMax(
+                                phone: Env.supportMaxPhone,
+                              ),
+                              'MAX',
+                            )
+                        : () => _comingSoon(context),
+                  ),
+                ],
+              ),
               SizedBox(height: 16.h),
             ],
           ),
@@ -921,11 +940,16 @@ class _SupportMessenger extends StatelessWidget {
     required this.label,
     required this.asset,
     required this.onTap,
+    this.comingSoon = false,
   });
 
   final String label;
   final String asset;
   final VoidCallback onTap;
+
+  /// Канал ещё не подключён: иконку приглушаем и подписываем «скоро»,
+  /// чтобы было видно, что это заглушка, а не рабочая кнопка.
+  final bool comingSoon;
 
   @override
   Widget build(BuildContext context) {
@@ -935,17 +959,32 @@ class _SupportMessenger extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Image.asset(asset, width: 60.r, height: 60.r),
+          Opacity(
+            opacity: comingSoon ? 0.4 : 1.0,
+            child: Image.asset(asset, width: 60.r, height: 60.r),
+          ),
           SizedBox(height: 5.h),
           Text(
             label,
             style: TextStyle(
-              color: AppColors.textPrimary,
+              color: comingSoon ? AppColors.textTertiary : AppColors.textPrimary,
               fontSize: 11.sp,
               fontWeight: FontWeight.w600,
               height: 1.18,
             ),
           ),
+          if (comingSoon) ...[
+            SizedBox(height: 2.h),
+            Text(
+              'скоро',
+              style: TextStyle(
+                color: AppColors.textTertiary,
+                fontSize: 10.sp,
+                fontWeight: FontWeight.w400,
+                height: 1.18,
+              ),
+            ),
+          ],
         ],
       ),
     );
