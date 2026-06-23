@@ -20,6 +20,7 @@ import '../../features/create_order/order_summary_screen.dart';
 import '../../features/create_order/select_address_screen.dart';
 import '../../features/create_order/select_category_screen.dart';
 import '../../features/home/home_shell.dart';
+import '../../features/legal/legal_document_screen.dart';
 import '../../features/onboarding/onboarding_screen.dart';
 import '../../features/onboarding/splash_screen.dart';
 import '../../features/orders/order_details_screen.dart';
@@ -167,6 +168,17 @@ GoRouter _buildRouter(Ref ref, Listenable refresh) {
         ],
       ),
       GoRoute(path: '/search', builder: (_, _) => const SearchScreen()),
+      // Юридические документы — доступны и без входа (ссылки с экрана согласия
+      // при регистрации, а также из профиля). Тексты локальные (ассеты),
+      // поэтому НЕ в actionPrefixes — гостю они открыты намеренно.
+      GoRoute(
+        path: '/legal/:doc',
+        builder: (_, s) => LegalDocumentScreen(
+          doc: s.pathParameters['doc'] == 'terms'
+              ? LegalDoc.terms
+              : LegalDoc.privacy,
+        ),
+      ),
       GoRoute(path: '/profile/edit', builder: (_, _) => const EditProfileScreen()),
       GoRoute(path: '/profile/history', builder: (_, _) => const HistoryScreen()),
       GoRoute(path: '/profile/reviews', builder: (_, _) => const ReviewsScreen()),

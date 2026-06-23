@@ -200,6 +200,18 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     onTap: () => _showContactSheet(context),
                   ),
                 ],
+                SizedBox(height: 8.h),
+                _MenuItem(
+                  icon: IconsaxPlusLinear.document_text,
+                  label: 'Пользовательское соглашение',
+                  onTap: () => context.push('/legal/terms'),
+                ),
+                SizedBox(height: 8.h),
+                _MenuItem(
+                  icon: IconsaxPlusLinear.shield_tick,
+                  label: 'Политика конфиденциальности',
+                  onTap: () => context.push('/legal/privacy'),
+                ),
                 // ── Debug-кнопка отправки тестового пуша ──
                 // Видна только в сборке с SHOW_DESIGN_TOGGLES=true.
                 // Удобно для разработки: нажал — сам получил пуш на

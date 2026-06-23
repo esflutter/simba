@@ -5,9 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:go_router/go_router.dart';
 import 'package:iconsax_plus/iconsax_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/config/env.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/plural_ru.dart' show formatRetryAfter;
@@ -36,6 +34,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
   bool _isSending = false;
   late final TapGestureRecognizer _termsTap;
   late final TapGestureRecognizer _privacyTap;
+  late final TapGestureRecognizer _consentTap;
 
   @override
   void initState() {
@@ -44,27 +43,19 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
     // как часть подложки, попытка туда тапнуть и начать печатать ломает
     // форматирование (формат предполагает, что цифры идут СТРОГО после +7).
     _ctrl.addListener(_clampCursorAfterPrefix);
-    _termsTap = TapGestureRecognizer()..onTap = () => _openDoc('terms.html');
+    // Тап по ссылке открывает документ ВНУТРИ приложения (текст лежит в
+    // ассетах — работает офлайн и не зависит от внешнего браузера). Тап по
+    // обычному тексту переключает галочку согласия.
+    _termsTap = TapGestureRecognizer()
+      ..onTap = () => context.push('/legal/terms');
     _privacyTap = TapGestureRecognizer()
-      ..onTap = () => _openDoc('privacy.html');
+      ..onTap = () => context.push('/legal/privacy');
+    _consentTap = TapGestureRecognizer()..onTap = _toggleAgreed;
   }
 
-  /// Открыть юридический документ (раздаётся статикой сервера PocketBase
-  /// в pb_public) во внешнем браузере.
-  Future<void> _openDoc(String file) async {
-    final base = Env.pocketbaseUrl.replaceAll(RegExp(r'/+$'), '');
-    if (base.isEmpty) return;
-    try {
-      final ok = await launchUrl(
-        Uri.parse('$base/$file'),
-        mode: LaunchMode.externalApplication,
-      );
-      if (!ok && mounted) {
-        AppToast.show(context, 'Не удалось открыть документ');
-      }
-    } catch (_) {
-      if (mounted) AppToast.show(context, 'Не удалось открыть документ');
-    }
+  void _toggleAgreed() {
+    if (_isSending) return;
+    setState(() => _agreed = !_agreed);
   }
 
   void _clampCursorAfterPrefix() {
@@ -113,6 +104,7 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
     _ctrl.dispose();
     _termsTap.dispose();
     _privacyTap.dispose();
+    _consentTap.dispose();
     super.dispose();
   }
 
@@ -240,24 +232,23 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
               ),
               SizedBox(height: 12.h),
               // Чекбокс согласия. Тап по квадратику или по обычному тексту
-              // рядом переключает галочку; тап по подчёркнутым ссылкам
-              // «Условия» / «Политика» открывает документ — recognizer на
-              // span'е перехватывает тап раньше общего GestureDetector.
-              GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTap: _isSending
-                    ? null
-                    : () => setState(() => _agreed = !_agreed),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
+              // переключает галочку; тап по подчёркнутым ссылкам открывает
+              // соответствующий документ ВНУТРИ приложения. Важно: общий
+              // GestureDetector на весь ряд убран — он перехватывал тап раньше
+              // ссылок (выигрывал в gesture-арене), из-за чего документы «не
+              // прокликивались». Теперь каждый тап обрабатывает свой recognizer.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: _isSending ? null : _toggleAgreed,
+                    child: Container(
                       margin: EdgeInsets.only(top: 2.h),
                       width: 22.r,
                       height: 22.r,
                       decoration: BoxDecoration(
-                        color:
-                            _agreed ? AppColors.primary : Colors.transparent,
+                        color: _agreed ? AppColors.primary : Colors.transparent,
                         border: Border.all(
                           color: _agreed
                               ? AppColors.primary
@@ -280,39 +271,44 @@ class _PhoneScreenState extends ConsumerState<PhoneScreen> {
                             )
                           : null,
                     ),
-                    SizedBox(width: 12.w),
-                    Expanded(
-                      child: Text.rich(
-                        TextSpan(
-                          style:
-                              AppText.caption(color: AppColors.textSecondary),
-                          children: [
-                            const TextSpan(text: 'Согласен(а) с '),
-                            TextSpan(
-                              text: 'Условиями использования',
-                              recognizer: _termsTap,
-                              style: AppText.caption(color: AppColors.primary)
-                                  .copyWith(
-                                decoration: TextDecoration.underline,
-                                decorationColor: AppColors.primary,
-                              ),
+                  ),
+                  SizedBox(width: 12.w),
+                  Expanded(
+                    child: Text.rich(
+                      TextSpan(
+                        style: AppText.caption(color: AppColors.textSecondary),
+                        children: [
+                          TextSpan(
+                            text: 'Согласен(а) с ',
+                            recognizer: _consentTap,
+                          ),
+                          TextSpan(
+                            text: 'Условиями использования',
+                            recognizer: _termsTap,
+                            style: AppText.caption(color: AppColors.primary)
+                                .copyWith(
+                              decoration: TextDecoration.underline,
+                              decorationColor: AppColors.primary,
                             ),
-                            const TextSpan(text: ' и '),
-                            TextSpan(
-                              text: 'Политикой конфиденциальности',
-                              recognizer: _privacyTap,
-                              style: AppText.caption(color: AppColors.primary)
-                                  .copyWith(
-                                decoration: TextDecoration.underline,
-                                decorationColor: AppColors.primary,
-                              ),
+                          ),
+                          TextSpan(
+                            text: ' и ',
+                            recognizer: _consentTap,
+                          ),
+                          TextSpan(
+                            text: 'Политикой конфиденциальности',
+                            recognizer: _privacyTap,
+                            style: AppText.caption(color: AppColors.primary)
+                                .copyWith(
+                              decoration: TextDecoration.underline,
+                              decorationColor: AppColors.primary,
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
               SizedBox(height: 18.h),
               _PhoneNextButton(
