@@ -71,7 +71,8 @@ class ResponsesScreen extends ConsumerStatefulWidget {
   ConsumerState<ResponsesScreen> createState() => _ResponsesScreenState();
 }
 
-class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
+class _ResponsesScreenState extends ConsumerState<ResponsesScreen>
+    with WidgetsBindingObserver {
   /// Screen-level лок: пока одна карточка обрабатывает accept/decline,
   /// все остальные кнопки на экране заблокированы. Без этого юзер,
   /// пока крутится «Принять» на одной карточке, мог тапнуть «Отклонить»
@@ -89,7 +90,19 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _subscribeResponses());
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // В фоне realtime-сокет отключается и новые отклики теряются. На возврате
+    // в приложение перечитываем список откликов, чтобы он был актуальным.
+    if (state == AppLifecycleState.resumed && mounted) {
+      final pb = ref.read(pocketbaseProvider);
+      if (pb == null || !pb.authStore.isValid) return;
+      ref.invalidate(pendingExecutorIdsProvider(widget.orderId));
+    }
   }
 
   Future<void> _subscribeResponses() async {
@@ -124,6 +137,7 @@ class _ResponsesScreenState extends ConsumerState<ResponsesScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     final unsub = _responsesUnsub;
     _responsesUnsub = null;
     if (unsub != null) {

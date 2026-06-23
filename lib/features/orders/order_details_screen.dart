@@ -89,7 +89,8 @@ class OrderDetailsScreen extends ConsumerStatefulWidget {
   ConsumerState<OrderDetailsScreen> createState() => _OrderDetailsScreenState();
 }
 
-class _OrderDetailsScreenState extends ConsumerState<OrderDetailsScreen> {
+class _OrderDetailsScreenState extends ConsumerState<OrderDetailsScreen>
+    with WidgetsBindingObserver {
   /// PocketBase realtime-подписка на запись заказа. Когда другая сторона
   /// меняет состояние (заказчик принял отклик, исполнитель отметил
   /// «оплата получена» и т.п.) сервер шлёт push по WebSocket, клиент
@@ -108,6 +109,7 @@ class _OrderDetailsScreenState extends ConsumerState<OrderDetailsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // Подписку поднимаем в postFrame, чтобы `ref.read(pocketbaseProvider)`
     // не дёргался до полной готовности дерева провайдеров. На моках pb=null,
     // подписки не будет — это нормально.
@@ -115,6 +117,21 @@ class _OrderDetailsScreenState extends ConsumerState<OrderDetailsScreen> {
       _subscribe();
       _subscribeResponses();
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Пока приложение было в фоне, WebSocket realtime отключался и события
+    // (например, новый отклик) терялись — поэтому, придя по пушу «появился
+    // отклик», заказчик видел счётчик откликов 0 и заказ в старом статусе,
+    // пока вручную не перезаходил. На возврате в приложение перечитываем
+    // заказ и счётчик откликов, чтобы данные были свежими сразу.
+    if (state == AppLifecycleState.resumed && mounted) {
+      final pb = ref.read(pocketbaseProvider);
+      if (pb == null || !pb.authStore.isValid) return;
+      ref.invalidate(orderByIdProvider(widget.orderId));
+      ref.invalidate(pendingExecutorIdsProvider(widget.orderId));
+    }
   }
 
   Future<void> _subscribe() async {
@@ -187,6 +204,7 @@ class _OrderDetailsScreenState extends ConsumerState<OrderDetailsScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     final unsub = _unsubscribe;
     _unsubscribe = null;
     if (unsub != null) {
