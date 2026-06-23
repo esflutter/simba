@@ -25,6 +25,7 @@ import '../../data/mock/app_state.dart';
 import '../../data/models/models.dart';
 import '../../data/remote/order_responses_repository.dart';
 import '../../data/remote/orders_repository.dart';
+import '../../data/remote/cities_repository.dart';
 import '../../data/remote/pocketbase_client.dart';
 import '../reviews/leave_review_screen.dart';
 import '../reviews/reviews_providers.dart';
@@ -359,6 +360,13 @@ class _OrderDetailsBody extends ConsumerWidget {
     final myId = pbUserId ?? stateUserId ?? 'me';
     final isCustomer = order.customerId == myId;
     final isMine = isCustomer;
+    // Детали заказа — не каталог, поэтому к адресу добавляем город.
+    final orderCityName = ref.watch(cityNamesProvider)[order.cityId];
+    final addressWithCity = (orderCityName != null &&
+            orderCityName.isNotEmpty &&
+            order.address.isNotEmpty)
+        ? '$orderCityName, ${order.address}'
+        : order.address;
     // В live `order.responses` может быть пуст (маппер не подгружает),
     // поэтому дополнительно проверяем через async-провайдер ниже.
     final hasMyResponseFromOrder = order.responses.contains(myId);
@@ -499,7 +507,7 @@ class _OrderDetailsBody extends ConsumerWidget {
                   SizedBox(height: 16.h),
                 ],
                 _AddressBlock(
-                  address: order.address,
+                  address: addressWithCity,
                   location: order.location,
                   hasValidLocation: order.hasValidLocation,
                 ),

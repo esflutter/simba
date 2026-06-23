@@ -180,6 +180,9 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                           return OrderCard(
                             order: o,
                             categoryName: categoryNameOf(o),
+                            // Поиск по каталогу — в рамках одного города,
+                            // город в адресе не дублируем.
+                            showCity: false,
                             onTap: () =>
                                 context.push('/order/${o.id}?mode=feed'),
                           );

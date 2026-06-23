@@ -677,6 +677,9 @@ class _ListView extends ConsumerWidget {
           return OrderCard(
             order: o,
             categoryName: categoryNameOf(o),
+            // Каталог: все заказы одного выбранного города — город в адресе
+            // не дублируем.
+            showCity: false,
             onTap: () {
               // Просмотр заказа доступен и гостю (каталог без входа).
               // Вход требуется только на действиях внутри карточки.

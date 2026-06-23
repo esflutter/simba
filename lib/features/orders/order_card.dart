@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_screenutil/flutter_screenutil.dart';
 import 'package:intl/intl.dart';
 
@@ -7,20 +8,27 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/utils/date_time_formatters.dart';
 import '../../core/widgets/app_card.dart';
 import '../../data/models/models.dart';
+import '../../data/remote/cities_repository.dart';
 
-class OrderCard extends StatelessWidget {
+class OrderCard extends ConsumerWidget {
   const OrderCard({
     super.key,
     required this.order,
     required this.categoryName,
     required this.onTap,
     this.showTime = true,
+    this.showCity = true,
   });
 
   final Order order;
   final String categoryName;
   final VoidCallback onTap;
   final bool showTime;
+
+  /// Подставлять ли город к адресу. На каталоге («Заказы» и поиск по нему)
+  /// все заказы одного города — там город не нужен (showCity: false).
+  /// В остальных местах (мои заказы, история) город показываем.
+  final bool showCity;
 
   String get _whenLabel {
     if (order.scheduledAt != null) {
@@ -43,7 +51,13 @@ class OrderCard extends StatelessWidget {
   String get _priceLabel => formatRub(order.priceRub);
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Адрес с городом (кроме каталога). Если адрес пуст — оставляем пусто.
+    final cityName = showCity ? ref.watch(cityNamesProvider)[order.cityId] : null;
+    final addressLabel =
+        (cityName != null && cityName.isNotEmpty && order.address.isNotEmpty)
+            ? '$cityName, ${order.address}'
+            : order.address;
     return AppCard(
       onTap: onTap,
       padding: EdgeInsets.all(16.w),
@@ -82,7 +96,7 @@ class OrderCard extends StatelessWidget {
           ),
           SizedBox(height: 8.h),
           Text(
-            order.address,
+            addressLabel,
             style: AppText.bodySmall(
               color: Colors.black.withValues(alpha: 0.60),
             ).copyWith(height: 1.40),

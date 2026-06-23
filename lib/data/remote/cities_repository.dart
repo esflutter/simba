@@ -49,3 +49,15 @@ final citiesProvider = FutureProvider<List<City>>((ref) async {
     return MockData.cities;
   }
 });
+
+/// Карта «id города → отображаемое имя». Нужна, чтобы подставлять город к
+/// адресу заказа везде, КРОМЕ каталога (на вкладке «Заказы» все заказы одного
+/// выбранного города — дублировать город в каждой карточке незачем).
+/// Пока список городов грузится — отдаём имена из встроенного справочника.
+final cityNamesProvider = Provider<Map<String, String>>((ref) {
+  final list = ref.watch(citiesProvider).maybeWhen(
+        data: (xs) => xs,
+        orElse: () => MockData.cities,
+      );
+  return {for (final c in list) c.id: c.name};
+});
